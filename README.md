@@ -1,0 +1,72 @@
+# 🧠 Agent Chat - 通用智能体框架
+
+基于 DeepSeek + FastAPI + Vue 3 的通用智能体框架，支持 ReAct 模式工具调用。
+
+## 项目结构
+
+```
+├── backend/            # Python FastAPI 后端
+│   ├── config.py       # 配置管理
+│   ├── llm_client.py   # DeepSeek API 封装（可插拔）
+│   ├── main.py         # FastAPI 主应用
+│   └── requirements.txt
+│
+├── frontend/           # Vue 3 前端
+│   ├── src/
+│   │   ├── App.vue     # 聊天界面
+│   │   └── main.js     # 入口
+│   └── package.json
+│
+└── README.md
+```
+
+## 快速开始
+
+### 1. 配置 API Key
+
+```bash
+cd backend
+copy .env.example .env
+```
+
+编辑 `backend/.env`，填入你的 DeepSeek API Key：
+```
+DEEPSEEK_API_KEY=sk-your-actual-api-key
+```
+
+### 2. 启动后端
+
+```bash
+cd backend
+pip install -r requirements.txt
+python main.py
+```
+
+后端运行在 http://localhost:8000
+
+### 3. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端运行在 http://localhost:5173
+
+## API 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/health` | 健康检查 |
+| POST | `/api/chat` | 非流式聊天 |
+| POST | `/api/chat/stream` | 流式聊天（SSE） |
+| GET | `/api/sessions/{id}` | 获取会话历史 |
+| DELETE | `/api/sessions/{id}` | 删除会话 |
+
+## 开发路线
+
+- [x] Phase 1: 聊天界面（DeepSeek + Vue 3）
+- [ ] Phase 2: Agent 工具系统 + 热加载
+- [ ] Phase 3: ReAct 推理循环
+- [ ] Phase 4: 抖音漫剧插件
