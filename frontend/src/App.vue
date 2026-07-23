@@ -254,107 +254,41 @@
 </template>
 
 <script>
-let codeBlockId = 0
+import { marked } from 'marked'
 
-// 简易内联 Markdown 渲染器（不依赖外部库）
+// 配置 marked 以使用自定义代码块样式
+const codeBlockCounter = { count: 0 }
+
+marked.use({
+  renderer: {
+    code({ text, lang }) {
+      const id = 'code-' + (codeBlockCounter.count++)
+      const safeLang = (lang || '').replace(/[<>\"']/g, '')
+      const langLabel = safeLang
+        ? `<div class="code-lang"><span>${safeLang}</span><button class="code-copy-btn" data-code="${id}" title="复制代码"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 1h7a1 1 0 011 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button></div>`
+        : `<div class="code-lang"><span>code</span><button class="code-copy-btn" data-code="${id}" title="复制代码"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 1h7a1 1 0 011 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button></div>`
+      return `<pre class="code-block" data-code-container="${id}">${langLabel}<code id="${id}">${text}</code></pre>`
+    }
+  }
+})
+
+marked.setOptions({
+  gfm: true,
+  breaks: false,
+})
+
 function renderMarkdown(text) {
   if (!text) return ''
-  
-  // 1. 转义 HTML
-  let html = text
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-
-  // 2. 提取并保护代码块 (```...```)
-  const codeBlocks = []
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    const id = 'code-' + (codeBlockId++)
-    const langLabel = lang
-      ? `<div class="code-lang"><span>${lang}</span><button class="code-copy-btn" data-code="${id}" title="复制代码"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 1h7a1 1 0 011 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button></div>`
-      : `<div class="code-lang"><span>code</span><button class="code-copy-btn" data-code="${id}" title="复制代码"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 1h7a1 1 0 011 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button></div>`
-    const placeholder = `\x00CODEBLOCK${codeBlocks.length}\x00`
-    codeBlocks.push(`<div class="code-block-wrapper" data-code-container="${id}">${langLabel}<pre><code id="${id}">${code.trim()}</code></pre></div>`)
-    return placeholder
-  })
-
-  // 3. 提取并保护内联代码 (`...`)
-  const inlineCodes = []
-  html = html.replace(/`([^`]+)`/g, (_, code) => {
-    const placeholder = `\x00INLINE${inlineCodes.length}\x00`
-    inlineCodes.push(`<code>${code}</code>`)
-    return placeholder
-  })
-
-  // 4. 处理标题 (### text)
-  html = html.replace(/^(#{1,6})\s+(.+)$/gm, (_, hashes, title) => {
-    const level = hashes.length
-    return `<h${level}>${title}</h${level}>`
-  })
-
-  // 5. 处理粗体 (**text**)
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  
-  // 6. 处理斜体 (*text*)
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
-
-  // 7. 处理链接 [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-
-  // 8. 处理图片 ![alt](url)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />')
-
-  // 9. 处理行内引用 `> text`
-  html = html.replace(/^>\s+(.+)$/gm, '<blockquote><p>$1</p></blockquote>')
-  // 合并连续的引用
-  html = html.replace(/<\/blockquote>\n<blockquote>/g, '\n')
-
-  // 10. 处理分割线
-  html = html.replace(/^(---|\*\*\*|___)$/gm, '<hr />')
-
-  // 11. 处理有序列表
-  html = html.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>')
-  // 包裹连续的 <li> (无前置标签的情况)
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, (match) => {
-    // 判断是 ol 还是 ul: 如果前面有数字，用 ol
-    return `<ol>${match}</ol>`
-  })
-  // 修正嵌套问题
-  html = html.replace(/<\/ol>\s*<ol>/g, '')
-
-  // 12. 处理无序列表
-  html = html.replace(/^[-*+]\s+(.+)$/gm, '<li>$1</li>')
-
-  // 13. 处理普通段落：连续的非空行合并为 <p>
-  // 先按双换行分割为段落
-  const paragraphs = html.split(/\n\n+/)
-  html = paragraphs.map(p => {
-    p = p.trim()
-    if (!p) return ''
-    // 如果已经是 HTML 块级元素开头，直接返回
-    if (/^<(h[1-6]|ul|ol|li|blockquote|hr|div|pre|table|img)/.test(p)) return p
-    // 替换行内换行为 <br>
-    const inner = p.replace(/\n/g, '<br>')
-    return `<p>${inner}</p>`
-  }).join('\n')
-
-  // 14. 包裹列表项：如果 <li> 没有被 <ol> 或 <ul> 包裹
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
-  // 清理多余的列表标签
-  html = html.replace(/<\/ul>\s*<ul>/g, '')
-
-  // 15. 恢复代码块和行内代码
-  codeBlocks.forEach((block, i) => {
-    html = html.replace(`\x00CODEBLOCK${i}\x00`, block)
-  })
-  inlineCodes.forEach((code, i) => {
-    html = html.replace(`\x00INLINE${i}\x00`, code)
-  })
-
-  // 16. 给表格添加滚动容器（如果有）
-  html = html.replace(/<table>/g, '<div class="table-wrapper"><table>').replace(/<\/table>/g, '</table></div>')
-
-  return html
+  try {
+    // marked v15 默认异步，需强制同步模式才能在 v-html 中使用
+    let html = marked.parse(text, { async: false })
+    html = String(html || '')
+    html = html.replace(/<table>/g, '<div class="table-wrapper"><table>').replace(/<\/table>/g, '</table></div>')
+    return html
+  } catch (e) {
+    console.error('Markdown render error:', e, 'Text:', text.substring(0, 200))
+    return text
+  }
 }
 
 export default {
@@ -482,6 +416,7 @@ export default {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        let sseData = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -489,24 +424,32 @@ export default {
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
           for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed) continue
-            if (trimmed.startsWith('data:')) {
-              let data = trimmed.slice(5).trim()
-              // 跳过 "done" 事件的 session_id JSON 数据
-              try {
-                const parsed = JSON.parse(data)
-                if (parsed.session_id) {
-                  if (!this.currentSessionId) this.currentSessionId = parsed.session_id
-                  continue
+            const cleanLine = line.replace(/\r$/, '')
+            if (cleanLine === '') {
+              // 空行：一个 SSE 事件结束，处理已收集的数据
+              if (sseData) {
+                try {
+                  const parsed = JSON.parse(sseData)
+                  if (parsed.session_id) {
+                    if (!this.currentSessionId) this.currentSessionId = parsed.session_id
+                    sseData = ''
+                    continue
+                  }
+                } catch {}
+                const lastMsg = this.messages[this.messages.length - 1]
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  lastMsg.content += sseData
+                  this.$nextTick(() => this.scrollToBottom())
                 }
-              } catch {}
-              const lastMsg = this.messages[this.messages.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.content += data
-                this.$nextTick(() => this.scrollToBottom())
+                sseData = ''
               }
+            } else if (cleanLine.startsWith('data:')) {
+              // 累加多行 data（保留换行符）
+              if (sseData) sseData += '\n'
+              // slice(5) 去掉 "data:"，再去掉 SSE 规范中可选的一个空格
+              sseData += cleanLine.slice(5).replace(/^ /, '')
             }
+            // 忽略 event: 等其他字段
           }
         }
         const lastMsg = this.messages[this.messages.length - 1]
@@ -786,33 +729,32 @@ body {
   border: 1px solid #fecaca;
 }
 
-/* Code Block Wrapper */
-.code-block-wrapper {
+/* Code Block (single-layer: <pre> only) */
+.markdown-body pre.code-block {
   margin: 16px 0; border-radius: 12px; overflow: hidden;
   border: 1px solid #1e293b; background: #1e293b;
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  padding: 0;
 }
-.code-lang {
+.markdown-body pre.code-block .code-lang {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 16px; background: #0f172a; border-bottom: 1px solid #334155;
 }
-.code-lang span {
+.markdown-body pre.code-block .code-lang span {
   font-size: 11px; color: #94a3b8; text-transform: uppercase;
   letter-spacing: 0.8px; font-family: 'JetBrains Mono', 'Fira Code', monospace;
   display: flex; align-items: center; gap: 6px;
 }
-.code-lang span::before {
+.markdown-body pre.code-block .code-lang span::before {
   content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.5);
 }
-.code-block-wrapper pre {
-  margin: 0; padding: 16px 20px; overflow-x: auto;
-  background: #1e293b;
-}
-.code-block-wrapper pre code {
+.markdown-body pre.code-block > code {
+  display: block;
+  padding: 16px 20px; overflow-x: auto;
   font-size: 13.5px; line-height: 1.75; color: #e2e8f0;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-  background: none; border: none; padding: 0;
+  background: none; border: none;
 }
 .code-copy-btn {
   background: rgba(148,163,184,0.12); border: none; color: #94a3b8; cursor: pointer;
@@ -822,12 +764,12 @@ body {
 .code-copy-btn:hover { background: rgba(148,163,184,0.25); color: #e2e8f0; }
 
 /* Plain pre (when no lang specified) */
-.markdown-body pre {
+.markdown-body pre:not(.code-block) {
   background: #1e293b; border: 1px solid #334155; border-radius: 12px;
   padding: 16px 20px; margin: 16px 0; overflow-x: auto;
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
 }
-.markdown-body pre code {
+.markdown-body pre:not(.code-block) code {
   background: none; color: #e2e8f0; font-size: 13.5px; line-height: 1.75;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   padding: 0; border: none;
