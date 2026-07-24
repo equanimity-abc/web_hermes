@@ -61,31 +61,9 @@
             <path d="M14 16h20M14 24h20M14 32h14" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
           </svg>
           <h1 class="welcome-title">web_hermes</h1>
-          <!-- 模式下拉菜单 -->
-          <div class="mode-dropdown" ref="modeDropdown">
-            <div class="mode-dropdown-trigger" @click="showDropdown = !showDropdown">
-              <span class="mode-dropdown-label">{{ currentMode === 'chat' ? '💬 Chat' : '🤖 Agent' }}</span>
-              <svg class="mode-dropdown-arrow" :class="{ open: showDropdown }" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <transition name="dropdown-fade">
-              <div class="mode-dropdown-menu" v-if="showDropdown">
-                <div class="mode-dropdown-item" :class="{ active: currentMode === 'chat' }" @click="selectMode('chat')">💬 Chat</div>
-                <div class="mode-dropdown-item" :class="{ active: currentMode === 'agent' }" @click="selectMode('agent')">🤖 Agent</div>
-              </div>
-            </transition>
-          </div>
         </div>
 
-        <!-- Chat 子模式 -->
-        <div v-if="currentMode === 'chat'" class="mode-switcher">
-          <button class="mode-btn" :class="{ active: chatSubMode === 'quick' }" @click="chatSubMode = 'quick'">⚡ 快速模式</button>
-          <button class="mode-btn" :class="{ active: chatSubMode === 'expert' }" @click="chatSubMode = 'expert'">🧠 专家模式</button>
-          <button class="mode-btn" :class="{ active: chatSubMode === 'vision' }" @click="chatSubMode = 'vision'">👁️ 识图模式</button>
-        </div>
-        <!-- Agent 提示 -->
-        <div v-if="currentMode === 'agent'" class="agent-hint">
+        <div class="agent-hint">
           <p>🤖 Agent 模式已开启，我将作为智能助手逐步拆解任务、调用工具并执行操作</p>
         </div>
 
@@ -103,24 +81,7 @@
                 rows="1"
               ></textarea>
             </div>
-            <div class="input-actions" :class="{ 'agent-mode': currentMode === 'agent' }">
-              <div class="input-toggles" v-if="currentMode === 'chat'">
-                <button class="toggle-btn" :class="{ active: deepThink }" @click="deepThink = !deepThink" title="深度思考">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.5 1.5M10 10l1.5 1.5M2.5 11.5L4 10M10 4l1.5-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    <circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.2"/>
-                  </svg>
-                  <span>深度思考</span>
-                </button>
-                <button class="toggle-btn" :class="{ active: webSearch }" @click="webSearch = !webSearch" title="联网搜索">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2"/>
-                    <path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.2"/>
-                    <path d="M3 4c0 1.66 1.79 3 4 3s4-1.34 4-3M3 10c0-1.66 1.79-3 4-3s4 1.34 4 3" stroke="currentColor" stroke-width="1" opacity="0.5"/>
-                  </svg>
-                  <span>联网搜索</span>
-                </button>
-              </div>
+            <div class="input-actions">
               <button class="btn-send" :class="{ 'has-content': userInput.trim() }" :disabled="!userInput.trim()" @click="sendMessage">
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                   <path d="M9 16V4M4 9l5-5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -218,24 +179,7 @@
               rows="1"
             ></textarea>
           </div>
-          <div class="input-actions" :class="{ 'agent-mode': currentMode === 'agent' }">
-            <div class="input-toggles" v-if="currentMode === 'chat'">
-              <button class="toggle-btn" :class="{ active: deepThink }" @click="deepThink = !deepThink" title="深度思考">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.5 1.5M10 10l1.5 1.5M2.5 11.5L4 10M10 4l1.5-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  <circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.2"/>
-                </svg>
-                <span>深度思考</span>
-              </button>
-              <button class="toggle-btn" :class="{ active: webSearch }" @click="webSearch = !webSearch" title="联网搜索">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M3 4c0 1.66 1.79 3 4 3s4-1.34 4-3M3 10c0-1.66 1.79-3 4-3s4 1.34 4 3" stroke="currentColor" stroke-width="1" opacity="0.5"/>
-                </svg>
-                <span>联网搜索</span>
-              </button>
-            </div>
+          <div class="input-actions">
             <button class="btn-send" :class="{ 'has-content': userInput.trim() }" :disabled="!userInput.trim() || isLoading" @click="sendMessage">
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <path d="M9 16V4M4 9l5-5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -300,12 +244,6 @@ export default {
       userInput: '',
       isLoading: false,
       sessionList: [],
-      currentMode: 'chat',
-      chatSubMode: 'quick',
-
-      showDropdown: false,
-      deepThink: false,
-      webSearch: false,
       sidebarWidth: 325,
       copyToast: '',
     }
@@ -319,8 +257,6 @@ export default {
   },
   mounted() {
     this.updateSessionList()
-    // 全局点击关闭下拉菜单
-    document.addEventListener('click', this.handleClickOutside)
     // 委托点击：复制代码块
     this.$el.addEventListener('click', (e) => {
       const btn = e.target.closest('.code-copy-btn')
@@ -528,19 +464,6 @@ export default {
       const el = this.$refs.messagesContainer
       if (el) el.scrollTop = el.scrollHeight
     },
-    selectMode(mode) {
-      this.currentMode = mode
-      this.showDropdown = false
-    },
-    closeDropdown() {
-      this.showDropdown = false
-    },
-    handleClickOutside(e) {
-      const dropdown = this.$refs.modeDropdown
-      if (dropdown && !dropdown.contains(e.target)) {
-        this.showDropdown = false
-      }
-    },
   },
 }
 </script>
@@ -603,47 +526,11 @@ body {
 .welcome-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
 .welcome-title { font-size: 32px; font-weight: 700; color: #1f2937; }
 
-/* ====== Mode Dropdown ====== */
-.mode-dropdown { position: relative; margin-left: 16px; }
-.mode-dropdown-trigger {
-  display: flex; align-items: center; gap: 6px; padding: 8px 16px;
-  border: 1.5px solid #e5e7eb; border-radius: 24px;
-  background: #fff; cursor: pointer; font-size: 16px; font-weight: 500;
-  color: #374151; transition: all 0.15s; user-select: none;
-}
-.mode-dropdown-trigger:hover { border-color: #4f46e5; }
-.mode-dropdown-label { white-space: nowrap; }
-.mode-dropdown-arrow { color: #9ca3af; transition: transform 0.15s; }
-.mode-dropdown-arrow.open { transform: rotate(180deg); }
-.mode-dropdown-menu {
-  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-  background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.1); padding: 6px; min-width: 160px; z-index: 100;
-}
-.mode-dropdown-item {
-  padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 15px;
-  font-weight: 500; color: #374151; transition: all 0.12s; white-space: nowrap;
-}
-.mode-dropdown-item:hover { background: #f3f4f6; }
-.mode-dropdown-item.active { background: #eff0ff; color: #4f46e5; }
-.dropdown-fade-enter-active, .dropdown-fade-leave-active { transition: all 0.15s ease; }
-.dropdown-fade-enter-from, .dropdown-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(-4px); }
-
 /* ====== Agent Hint ====== */
 .agent-hint p {
   color: #6b7280; font-size: 17px; text-align: center;
   margin-bottom: 36px; line-height: 1.6;
 }
-
-/* ====== Mode Switcher (Sub-modes) ====== */
-.mode-switcher { display: flex; gap: 12px; margin-bottom: 36px; }
-.mode-btn {
-  padding: 15px 36px; border: 1.5px solid #e5e7eb; border-radius: 30px;
-  background: #fff; color: #6b7280; cursor: pointer;
-  font-size: 20px; font-weight: 500; font-family: inherit; transition: all 0.15s;
-}
-.mode-btn:hover { border-color: #4f46e5; color: #4f46e5; }
-.mode-btn.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
 
 /* ====== Welcome Input Area (150% bigger) ====== */
 .welcome-input-area { width: 100%; max-width: 72rem; }
@@ -660,8 +547,6 @@ body {
   font-size: 22px; min-height: 48px; max-height: 360px; line-height: 1.6; padding: 6px 0;
 }
 .welcome-input-container .input-actions { padding: 8px 0 4px; }
-.welcome-input-container .toggle-btn { font-size: 14px; padding: 6px 12px; }
-.welcome-input-container .toggle-btn svg { width: 16px; height: 16px; }
 .welcome-input-container .btn-send { width: 36px; height: 36px; border-radius: 10px; }
 .welcome-input-container .btn-send svg { width: 20px; height: 20px; }
 
@@ -857,17 +742,7 @@ body {
   resize: none; min-height: 28px; max-height: 240px; line-height: 1.6; padding: 4px 0;
 }
 .input-box::placeholder { color: #bfbfc3; }
-.input-actions { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 2px; gap: 8px; }
-.input-actions.agent-mode { justify-content: flex-end; }
-.input-toggles { display: flex; gap: 4px; }
-.toggle-btn {
-  display: flex; align-items: center; gap: 4px;
-  padding: 4px 8px; border: none; border-radius: 6px;
-  background: none; color: #6b7280; cursor: pointer;
-  font-size: 12px; font-family: inherit; transition: all 0.15s;
-}
-.toggle-btn:hover { background: #f3f4f6; color: #374151; }
-.toggle-btn.active { background: #eff0ff; color: #4f46e5; }
+.input-actions { display: flex; align-items: center; justify-content: flex-end; padding: 4px 0 2px; gap: 8px; }
 .btn-send {
   width: 30px; height: 30px; border-radius: 8px; border: none;
   cursor: pointer; display: flex; align-items: center; justify-content: center;

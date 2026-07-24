@@ -66,7 +66,10 @@ npm run dev
 
 ## 开发路线
 
-- [x] Phase 1: 聊天界面（DeepSeek + Vue 3）
-- [ ] Phase 2: Agent 工具系统 + 热加载
-- [ ] Phase 3: ReAct 推理循环
-- [ ] Phase 4: 抖音漫剧插件
+完整计划见根目录 [`ROADMAP.md`](./ROADMAP.md)（源码消化顺序 + P0–P7 增量开发 + 学习单元）。
+
+- [x] Phase 1 / P0: 聊天界面（DeepSeek + Vue 3）
+- [ ] P1: 会话耐久化（列表 API + 落盘 + 侧边栏）
+- [ ] P2–P3: Agent Loop + 工具系统
+- [ ] P4–P5: 流式契约升级 + 审批/工作区
+- [ ] P6–P7: 记忆压缩 + 抖音漫剧等业务插件
