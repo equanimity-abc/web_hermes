@@ -13,8 +13,13 @@
 │
 ├── frontend/           # Vue 3 前端
 │   ├── src/
-│   │   ├── App.vue     # 聊天界面
-│   │   └── main.js     # 入口
+│   │   ├── App.vue              # 应用壳（组装布局）
+│   │   ├── api/                 # HTTP / SSE
+│   │   ├── composables/         # 会话 / 聊天 / 侧栏等逻辑
+│   │   ├── components/          # layout + chat 组件
+│   │   ├── styles/              # 全局样式
+│   │   ├── utils/               # markdown / clipboard
+│   │   └── main.js
 │   └── package.json
 │
 └── README.md
