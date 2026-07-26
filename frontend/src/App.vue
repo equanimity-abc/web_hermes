@@ -36,8 +36,12 @@ const {
   toggleDislike,
 } = useChat({
   getSessionId: () => currentSessionId.value,
-  setSessionId: (id) => setCurrentSessionId(id),
+  setSessionId: (id) => {
+    setCurrentSessionId(id)
+    refreshSessionList()
+  },
   scrollToBottom: () => chatViewRef.value?.scrollToBottom?.(),
+  onTurnComplete: () => refreshSessionList(),
 })
 
 function newChat() {

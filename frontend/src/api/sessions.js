@@ -1,6 +1,15 @@
 /**
- * Session REST helpers. Extend here when P1 list/persist APIs land.
+ * Session REST helpers.
  */
+
+export async function listSessions() {
+  const resp = await fetch('/api/sessions')
+  if (!resp.ok) {
+    throw new Error(`加载会话列表失败: HTTP ${resp.status}`)
+  }
+  const data = await resp.json()
+  return data.sessions || []
+}
 
 export async function fetchSession(sessionId) {
   const resp = await fetch(`/api/sessions/${sessionId}`)
@@ -15,9 +24,4 @@ export async function deleteSession(sessionId) {
   if (!resp.ok) {
     throw new Error(`删除会话失败: HTTP ${resp.status}`)
   }
-}
-
-/** Placeholder until backend exposes GET /api/sessions */
-export async function listSessions() {
-  return []
 }

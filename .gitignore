@@ -165,7 +165,6 @@ settings_local.py
 public/static/
 static/
 
-# 备份文件
-*.bak
-*.backup
-*.old
+# 会话持久化数据（P1 JSON 落盘）
+backend/data/sessions/*.json
+!backend/data/sessions/.gitkeep

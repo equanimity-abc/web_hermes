@@ -1,7 +1,7 @@
 <script setup>
-defineProps({
-  message: { type: String, default: '' },
-})
+  defineProps({
+    message: { type: String, default: '' },
+  })
 </script>
 
 <template>

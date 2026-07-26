@@ -8,6 +8,7 @@ import { streamChat } from '@/api/chat'
  *   getSessionId: () => string|null,
  *   setSessionId: (id: string) => void,
  *   scrollToBottom?: () => void,
+ *   onTurnComplete?: () => void | Promise<void>,
  * }} deps
  */
 export function useChat(deps) {
@@ -67,6 +68,11 @@ export function useChat(deps) {
       }
     } finally {
       isLoading.value = false
+      try {
+        await deps.onTurnComplete?.()
+      } catch (e) {
+        console.error('onTurnComplete failed:', e)
+      }
     }
   }
 

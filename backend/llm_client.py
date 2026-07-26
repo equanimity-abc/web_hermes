@@ -1,6 +1,7 @@
 """LLM 客户端 - DeepSeek API 封装，支持流式输出，接口可插拔"""
 
 from typing import AsyncGenerator
+import json
 import httpx
 from config import config
 
@@ -10,13 +11,26 @@ class LLMClient:
 
     def __init__(self):
         self.api_key = config.DEEPSEEK_API_KEY
-        self.base_url = config.DEEPSEEK_BASE_URL
+        self.base_url = config.DEEPSEEK_BASE_URL.rstrip("/")
         self.model = config.DEEPSEEK_MODEL
 
     def _get_headers(self) -> dict:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+        }
+
+    def _payload(
+        self, messages: list[dict], *, stream: bool, temperature: float, max_tokens: int
+    ) -> dict:
+        return {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": stream,
+            # 对齐旧 deepseek-chat：关闭 thinking
+            "thinking": {"type": "disabled"},
         }
 
     async def chat_stream(
@@ -28,21 +42,22 @@ class LLMClient:
                 "POST",
                 f"{self.base_url}/v1/chat/completions",
                 headers=self._get_headers(),
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": True,
-                },
+                json=self._payload(
+                    messages, stream=True, temperature=temperature, max_tokens=max_tokens
+                ),
             ) as response:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    raise httpx.HTTPStatusError(
+                        f"{response.status_code} {response.reason_phrase}: {body}",
+                        request=response.request,
+                        response=response,
+                    )
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         data = line[6:].strip()
                         if data == "[DONE]":
                             break
-                        import json
                         try:
                             chunk = json.loads(data)
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -60,15 +75,16 @@ class LLMClient:
             response = await client.post(
                 f"{self.base_url}/v1/chat/completions",
                 headers=self._get_headers(),
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": False,
-                },
+                json=self._payload(
+                    messages, stream=False, temperature=temperature, max_tokens=max_tokens
+                ),
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    f"{response.status_code} {response.reason_phrase}: {response.text}",
+                    request=response.request,
+                    response=response,
+                )
             data = response.json()
             return data["choices"][0]["message"]["content"]
 
