@@ -30,5 +30,8 @@ class Config:
         os.getenv("SESSION_DATA_DIR", str(_BACKEND_DIR / "data" / "sessions"))
     )
 
+    # Agent loop
+    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "8"))
+
 
 config = Config()

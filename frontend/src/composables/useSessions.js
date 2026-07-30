@@ -26,7 +26,12 @@ export function useSessions() {
   async function loadSessionMessages(sessionId) {
     const data = await sessionsApi.fetchSession(sessionId)
     return (data.messages || [])
-      .filter((m) => m.role !== 'system')
+      .filter((m) => {
+        if (m.role === 'user') return true
+        // Hide tool plumbing; only show assistant turns that have visible text
+        if (m.role === 'assistant' && String(m.content || '').trim()) return true
+        return false
+      })
       .map((m) => ({ ...m, isStreaming: false }))
   }
 

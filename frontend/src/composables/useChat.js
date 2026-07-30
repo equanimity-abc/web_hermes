@@ -15,6 +15,7 @@ export function useChat(deps) {
   const messages = ref([])
   const userInput = ref('')
   const isLoading = ref(false)
+  const statusText = ref('')
 
   function scrollToBottom() {
     deps.scrollToBottom?.()
@@ -23,6 +24,7 @@ export function useChat(deps) {
   function resetConversation() {
     messages.value = []
     userInput.value = ''
+    statusText.value = ''
   }
 
   function setMessages(list) {
@@ -36,6 +38,7 @@ export function useChat(deps) {
     messages.value.push({ role: 'user', content, isStreaming: false })
     userInput.value = ''
     isLoading.value = true
+    statusText.value = ''
     messages.value.push({ role: 'assistant', content: '', isStreaming: true })
     await nextTick()
     scrollToBottom()
@@ -50,24 +53,42 @@ export function useChat(deps) {
             }
           },
           onToken(text) {
+            statusText.value = ''
             const last = messages.value[messages.value.length - 1]
             if (last?.role === 'assistant') {
+              last.status = ''
               last.content += text
               nextTick(() => scrollToBottom())
             }
           },
+          onStatus(text) {
+            statusText.value = text || ''
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant' && last.isStreaming) {
+              last.status = text || ''
+              nextTick(() => scrollToBottom())
+            }
+          },
+          onTool() {
+            /* status already updated via onStatus */
+          },
         },
       )
       const last = messages.value[messages.value.length - 1]
-      if (last?.role === 'assistant') last.isStreaming = false
+      if (last?.role === 'assistant') {
+        last.isStreaming = false
+        last.status = ''
+      }
     } catch (e) {
       const last = messages.value[messages.value.length - 1]
       if (last?.role === 'assistant') {
         last.content = `❌ 错误: ${e.message}`
         last.isStreaming = false
+        last.status = ''
       }
     } finally {
       isLoading.value = false
+      statusText.value = ''
       try {
         await deps.onTurnComplete?.()
       } catch (e) {
@@ -114,6 +135,7 @@ export function useChat(deps) {
     messages,
     userInput,
     isLoading,
+    statusText,
     resetConversation,
     setMessages,
     sendMessage,

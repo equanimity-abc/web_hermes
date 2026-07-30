@@ -1,12 +1,12 @@
 .markdown-body {
   font-size: 15px;
   color: #374151;
-  line-height: 1.8;
+  line-height: 1.75;
   word-break: break-word;
 }
 
 .markdown-body p {
-  margin: 0 0 14px;
+  margin: 0 0 12px;
 }
 
 .markdown-body p:last-child {
@@ -20,30 +20,38 @@
 .markdown-body h5,
 .markdown-body h6 {
   color: #111827;
-  margin: 24px 0 12px;
+  margin: 20px 0 10px;
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.4;
   position: relative;
 }
 
+.markdown-body > h1:first-child,
+.markdown-body > h2:first-child,
+.markdown-body > h3:first-child,
+.markdown-body > h4:first-child {
+  margin-top: 0;
+}
+
 .markdown-body h1 {
-  font-size: 1.5em;
+  font-size: 1.4em;
   border-bottom: 2px solid var(--color-border);
   padding-bottom: 8px;
 }
 
 .markdown-body h2 {
-  font-size: 1.3em;
-  border-bottom: 1.5px solid var(--color-border-soft);
+  font-size: 1.22em;
+  border-bottom: 1px solid var(--color-border-soft);
   padding-bottom: 6px;
 }
 
 .markdown-body h3 {
-  font-size: 1.15em;
+  font-size: 1.08em;
+  color: #1f2937;
 }
 
 .markdown-body h4 {
-  font-size: 1.05em;
+  font-size: 1.02em;
   color: var(--color-text);
 }
 
@@ -57,15 +65,17 @@
   color: var(--color-text-secondary);
 }
 
+/* Softer inline code — less “red stamp” noise in dense CN answers */
 .markdown-body :not(pre) > code {
-  background: #fef2f2;
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 0.88em;
-  color: #dc2626;
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  color: #b45309;
   font-weight: 500;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-  border: 1px solid #fecaca;
+  border: 1px solid #e5e7eb;
+  white-space: break-spaces;
 }
 
 .markdown-body pre.code-block {
@@ -161,17 +171,18 @@
 
 .markdown-body ul,
 .markdown-body ol {
-  margin: 10px 0;
-  padding-left: 24px;
+  margin: 8px 0 14px;
+  padding-left: 1.4em;
 }
 
 .markdown-body li {
-  margin: 4px 0;
-  line-height: 1.8;
+  margin: 6px 0;
+  line-height: 1.75;
+  padding-left: 4px;
 }
 
 .markdown-body li::marker {
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
 }
 
 .markdown-body ul ul,
@@ -179,6 +190,14 @@
 .markdown-body ul ol,
 .markdown-body ol ul {
   margin: 4px 0;
+}
+
+.markdown-body li > p {
+  margin: 0 0 6px;
+}
+
+.markdown-body li > p:last-child {
+  margin-bottom: 0;
 }
 
 .markdown-body input[type='checkbox'] {

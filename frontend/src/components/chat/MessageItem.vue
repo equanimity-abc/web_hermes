@@ -60,6 +60,14 @@ const htmlContent = computed(() => {
 
         <template v-else>
           <div
+            v-if="message.isStreaming && !message.content && message.status"
+            class="stream-status"
+          >
+            {{ message.status }}
+            <span class="typing-cursor">▊</span>
+          </div>
+          <div
+            v-else
             class="markdown-body"
             :class="message.isStreaming ? 'streaming-text' : 'ai-text'"
             v-html="htmlContent"

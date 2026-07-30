@@ -86,8 +86,8 @@ Tool Registry
 |------|------|------|----|----|------|
 | **P0** | 打地基 | 已完成 | DeepSeek 聊天 + SSE + 内存会话 + Vue UI | 熟悉自己的代码；对照 WebUI 的 SSE 概念 | ✅ 已完成 |
 | **P1** | 会话耐久化 | 约 3–5 天 | 会话列表 API、磁盘/SQLite 持久化、侧边栏可用 | `hermes_state` + WebUI session JSON 模式 | ✅ 已完成 |
-| **P2** | 真正的 Agent Loop | 约 1–2 周 | `run()` 多轮循环：LLM → tool_calls → 执行 → 再请求 | `run_agent.run_conversation` + `agent-loop.md` | 👉 **下一步** |
-| **P3** | 工具系统 | 约 1–2 周 | registry + 3–5 个工具；SSE 推送 tool 事件；前端工具卡片 | `registry.py` → `model_tools` → `toolsets` | 待做 |
+| **P2** | 真正的 Agent Loop | 约 1–2 周 | `run()` 多轮循环：LLM → tool_calls → 执行 → 再请求 | `run_agent.run_conversation` + `agent-loop.md` | ✅ 已完成 |
+| **P3** | 工具系统 | 约 1–2 周 | registry + 3–5 个工具；SSE 推送 tool 事件；前端工具卡片 | `registry.py` → `model_tools` → `toolsets` | 👉 **下一步** |
 | **P4** | 流式契约升级 | 约 3–5 天 | `chat/start` + `stream_id`；`token`/`tool`/`done`/`error`；取消生成 | WebUI `api/streaming.py` + `messages.js` | 待做 |
 | **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | 待做 |
 | **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | 待做 |
@@ -163,15 +163,15 @@ Tool Registry
 
 ---
 
-## 建议的下一步行动（P2）
+## 建议的下一步行动（P3）
 
 | # | 任务 | 验收 |
 |---|------|------|
-| 1 | 阅读 `agent-loop.md` + `run_conversation` 主路径 | 能画出 while 循环 |
-| 2 | 在 backend 增加精简 `Agent.run()`（尚无工具） | 多轮对话走同一入口 |
-| 3 | 为后续 tool_calls 预留消息格式 | assistant + tool 消息可落盘 |
+| 1 | 扩展工具（file / web_search 等） | 至少 3 个实用工具 |
+| 2 | SSE `tool` 事件 + 前端工具卡片 | 调用过程在 UI 可见可折叠 |
+| 3 | 热加载 / 插件目录（可选） | 不改 loop 即可加工具 |
 
-P1 已完成：会话列表、JSON 落盘、侧边栏刷新。
+P2 已完成：`Agent.run` 循环 + `calculator` / `get_current_time` + 消息落盘含 tool_calls。
 
 ---
 
@@ -195,9 +195,9 @@ P1 已完成：会话列表、JSON 落盘、侧边栏刷新。
 | 启动/停止脚本 | ✅ DONE |
 | 会话侧边栏 / list API | ✅ DONE |
 | 持久化会话 / JSON 落盘 | ✅ DONE |
-| Tools / registry | ❌ NOT DONE |
-| ReAct / agent loop | ❌ NOT DONE |
-| 流式 tool_calls | ❌ NOT DONE |
+| Tools / registry | ✅ DONE（最小 registry + 2 工具） |
+| ReAct / agent loop | ✅ DONE |
+| 流式 tool_calls | ⚠ 部分（loop 内非流式检测；最终答案流式） |
 | Memory / skills / plugins | ❌ NOT DONE |
 | 取消 / interrupt | ❌ NOT DONE |
 | 审批（approval） | ❌ NOT DONE |

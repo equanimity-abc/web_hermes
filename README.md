@@ -78,6 +78,7 @@ npm run dev
 
 - [x] Phase 1 / P0: 聊天界面（DeepSeek + Vue 3）
 - [x] P1: 会话耐久化（列表 API + JSON 落盘 + 侧边栏）
-- [ ] P2–P3: Agent Loop + 工具系统
+- [x] P2: Agent Loop（calculator / get_current_time）
+- [ ] P3: 更多工具 + 前端工具卡片
 - [ ] P4–P5: 流式契约升级 + 审批/工作区
 - [ ] P6–P7: 记忆压缩 + 抖音漫剧等业务插件

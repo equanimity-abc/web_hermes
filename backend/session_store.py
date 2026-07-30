@@ -11,7 +11,10 @@ from typing import Any
 
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{8,64}$")
 
-SYSTEM_PROMPT = "你是一个乐于助人的AI助手，可以用中文回答问题。"
+SYSTEM_PROMPT = (
+    "你是一个乐于助人的 AI 助手，可以用中文回答问题。"
+    "需要精确计算或查询当前时间时，请调用提供的工具，不要凭空猜测。"
+)
 
 
 def _utc_now() -> str:

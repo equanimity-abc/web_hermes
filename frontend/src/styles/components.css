@@ -369,6 +369,13 @@
   word-break: break-word;
 }
 
+.stream-status {
+  font-size: 14px;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  font-style: italic;
+}
+
 .typing-cursor {
   color: var(--color-primary);
   animation: blink 1s step-end infinite;
