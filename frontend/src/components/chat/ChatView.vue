@@ -13,6 +13,7 @@ const props = defineProps({
 const emit = defineEmits([
   'update:modelValue',
   'submit',
+  'stop',
   'copy',
   'edit',
   'regenerate',
@@ -61,8 +62,10 @@ defineExpose({ focusComposer, scrollToBottom })
       ref="welcomeRef"
       :model-value="modelValue"
       :disabled="isLoading"
+      :is-loading="isLoading"
       @update:model-value="emit('update:modelValue', $event)"
       @submit="emit('submit')"
+      @stop="emit('stop')"
     />
 
     <template v-else>
@@ -82,9 +85,11 @@ defineExpose({ focusComposer, scrollToBottom })
           :model-value="modelValue"
           variant="normal"
           :disabled="isLoading"
+          :is-loading="isLoading"
           :placeholder="composerPlaceholder"
           @update:model-value="emit('update:modelValue', $event)"
           @submit="emit('submit')"
+          @stop="emit('stop')"
         />
       </div>
     </template>

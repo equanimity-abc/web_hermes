@@ -87,9 +87,9 @@ Tool Registry
 | **P0** | 打地基 | 已完成 | DeepSeek 聊天 + SSE + 内存会话 + Vue UI | 熟悉自己的代码；对照 WebUI 的 SSE 概念 | ✅ 已完成 |
 | **P1** | 会话耐久化 | 约 3–5 天 | 会话列表 API、磁盘/SQLite 持久化、侧边栏可用 | `hermes_state` + WebUI session JSON 模式 | ✅ 已完成 |
 | **P2** | 真正的 Agent Loop | 约 1–2 周 | `run()` 多轮循环：LLM → tool_calls → 执行 → 再请求 | `run_agent.run_conversation` + `agent-loop.md` | ✅ 已完成 |
-| **P3** | 工具系统 | 约 1–2 周 | registry + 3–5 个工具；SSE 推送 tool 事件；前端工具卡片 | `registry.py` → `model_tools` → `toolsets` | 👉 **下一步** |
-| **P4** | 流式契约升级 | 约 3–5 天 | `chat/start` + `stream_id`；`token`/`tool`/`done`/`error`；取消生成 | WebUI `api/streaming.py` + `messages.js` | 待做 |
-| **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | 待做 |
+| **P3** | 工具系统 | 约 1–2 周 | registry + 3–5 个工具；SSE 推送 tool 事件；前端工具卡片 | `registry.py` → `model_tools` → `toolsets` | ✅ 已完成 |
+| **P4** | 流式契约升级 | 约 3–5 天 | `chat/start` + `stream_id`；`token`/`tool`/`done`/`error`；取消生成 | WebUI `api/streaming.py` + `messages.js` | ✅ 已完成 |
+| **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | 👉 **下一步** |
 | **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | 待做 |
 | **P7** | 业务插件 | 按需 | 抖音漫剧等业务工具/技能，不改核心 loop | Footprint Ladder：能力放边缘 | 按需 |
 
@@ -163,15 +163,15 @@ Tool Registry
 
 ---
 
-## 建议的下一步行动（P3）
+## 建议的下一步行动（P5）
 
 | # | 任务 | 验收 |
 |---|------|------|
-| 1 | 扩展工具（file / web_search 等） | 至少 3 个实用工具 |
-| 2 | SSE `tool` 事件 + 前端工具卡片 | 调用过程在 UI 可见可折叠 |
-| 3 | 热加载 / 插件目录（可选） | 不改 loop 即可加工具 |
+| 1 | 危险工具审批（SSE `approval` + respond） | 拒绝/批准后继续，不静默执行 |
+| 2 | 工作区路径沙箱加固 + 上传入口 | 越界路径失败；附件进 workspace |
+| 3 | 审批 UI 弹窗 | 与主流聊天产品一致的阻塞式确认 |
 
-P2 已完成：`Agent.run` 循环 + `calculator` / `get_current_time` + 消息落盘含 tool_calls。
+P4 已完成：`POST /api/chat/start` + `GET /api/chat/stream/{id}` + `POST /api/chat/cancel`；统一 `meta`/`token`/`tool`/`tool_result`/`done`/`error`/`cancelled`；session busy 返回 409；前端 Stop 按钮。
 
 ---
 

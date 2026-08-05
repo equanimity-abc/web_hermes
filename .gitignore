@@ -168,3 +168,5 @@ static/
 # 会话持久化数据（P1 JSON 落盘）
 backend/data/sessions/*.json
 !backend/data/sessions/.gitkeep
+backend/data/workspace/**
+!backend/data/workspace/.gitkeep

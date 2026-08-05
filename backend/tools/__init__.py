@@ -1,6 +1,10 @@
-"""工具包：导入 builtin 以完成注册。"""
+"""工具包：builtin + workspace + 可选 plugins。"""
 
 from tools import builtin as _builtin  # noqa: F401
+from tools import workspace as _workspace  # noqa: F401
+from tools.loader import load_plugin_tools
 from tools.registry import dispatch, list_tool_names, openai_tools
 
-__all__ = ["dispatch", "list_tool_names", "openai_tools"]
+_loaded_plugins = load_plugin_tools()
+
+__all__ = ["dispatch", "list_tool_names", "openai_tools", "_loaded_plugins"]

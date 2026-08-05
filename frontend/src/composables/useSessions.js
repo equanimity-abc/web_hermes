@@ -1,9 +1,9 @@
 import { computed, ref } from 'vue'
 import * as sessionsApi from '@/api/sessions'
+import { foldMessagesForUi } from '@/utils/foldMessages'
 
 /**
  * Session list + current session id.
- * Ready for P1: swap listSessions() for a real backend call.
  */
 export function useSessions() {
   const currentSessionId = ref(null)
@@ -25,14 +25,7 @@ export function useSessions() {
 
   async function loadSessionMessages(sessionId) {
     const data = await sessionsApi.fetchSession(sessionId)
-    return (data.messages || [])
-      .filter((m) => {
-        if (m.role === 'user') return true
-        // Hide tool plumbing; only show assistant turns that have visible text
-        if (m.role === 'assistant' && String(m.content || '').trim()) return true
-        return false
-      })
-      .map((m) => ({ ...m, isStreaming: false }))
+    return foldMessagesForUi(data.messages || [])
   }
 
   async function removeSession(sessionId) {

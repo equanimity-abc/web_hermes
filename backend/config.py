@@ -30,6 +30,11 @@ class Config:
         os.getenv("SESSION_DATA_DIR", str(_BACKEND_DIR / "data" / "sessions"))
     )
 
+    # Agent 文件工具沙箱（相对路径均相对此目录）
+    WORKSPACE_DIR: Path = Path(
+        os.getenv("WORKSPACE_DIR", str(_BACKEND_DIR / "data" / "workspace"))
+    )
+
     # Agent loop
     AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "8"))
 

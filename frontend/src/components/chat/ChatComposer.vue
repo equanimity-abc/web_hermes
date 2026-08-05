@@ -4,12 +4,13 @@ import { nextTick, ref, watch } from 'vue'
 const props = defineProps({
   modelValue: { type: String, default: '' },
   disabled: { type: Boolean, default: false },
+  isLoading: { type: Boolean, default: false },
   placeholder: { type: String, default: '给 web_hermes 发送消息' },
   /** 'welcome' | 'normal' */
   variant: { type: String, default: 'normal' },
 })
 
-const emit = defineEmits(['update:modelValue', 'submit'])
+const emit = defineEmits(['update:modelValue', 'submit', 'stop'])
 
 const textareaRef = ref(null)
 
@@ -51,14 +52,26 @@ defineExpose({ focus, autoResize })
         class="input-box"
         :value="modelValue"
         :placeholder="placeholder"
-        :disabled="disabled"
+        :disabled="disabled || isLoading"
         rows="1"
         @input="onInput"
-        @keydown.enter.exact.prevent="emit('submit')"
+        @keydown.enter.exact.prevent="!isLoading && emit('submit')"
       />
     </div>
     <div class="input-actions">
       <button
+        v-if="isLoading"
+        type="button"
+        class="btn-stop"
+        title="停止生成"
+        @click="emit('stop')"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <rect x="2" y="2" width="10" height="10" rx="1.5" fill="currentColor" />
+        </svg>
+      </button>
+      <button
+        v-else
         type="button"
         class="btn-send"
         :class="{ 'has-content': modelValue.trim() }"

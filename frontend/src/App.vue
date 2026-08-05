@@ -30,6 +30,7 @@ const {
   resetConversation,
   setMessages,
   sendMessage,
+  stopGeneration,
   editMessage,
   regenerateResponse,
   toggleLike,
@@ -97,6 +98,7 @@ onMounted(() => {
       :messages="messages"
       :is-loading="isLoading"
       @submit="sendMessage"
+      @stop="stopGeneration"
       @copy="copyWithToast"
       @edit="onEditMessage"
       @regenerate="regenerateResponse"

@@ -65,7 +65,10 @@ npm run dev
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/chat` | 非流式聊天 |
-| POST | `/api/chat/stream` | 流式聊天（SSE） |
+| POST | `/api/chat/start` | 开始一轮生成，返回 `stream_id` |
+| GET | `/api/chat/stream/{stream_id}` | SSE 订阅/重连（`token`/`tool`/`done`/`error`/`cancelled`） |
+| POST | `/api/chat/cancel` | 取消生成（终端事件为 `cancelled`，不是 `done`） |
+| POST | `/api/chat/stream` | 兼容旧客户端的一次性 POST SSE |
 | GET | `/api/sessions` | 会话列表（摘要） |
 | GET | `/api/sessions/{id}` | 获取会话历史 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
@@ -79,6 +82,7 @@ npm run dev
 - [x] Phase 1 / P0: 聊天界面（DeepSeek + Vue 3）
 - [x] P1: 会话耐久化（列表 API + JSON 落盘 + 侧边栏）
 - [x] P2: Agent Loop（calculator / get_current_time）
-- [ ] P3: 更多工具 + 前端工具卡片
-- [ ] P4–P5: 流式契约升级 + 审批/工作区
+- [x] P3: 工具系统（workspace 文件工具 + ToolCard + 插件目录）
+- [x] P4: 流式契约升级（`stream_id` / 取消 / busy）
+- [ ] P5: 审批与工作区加固
 - [ ] P6–P7: 记忆压缩 + 抖音漫剧等业务插件

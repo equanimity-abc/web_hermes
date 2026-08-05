@@ -112,21 +112,35 @@ class Agent:
         messages: list[dict[str, Any]],
         *,
         use_tools: bool = True,
+        cancel_event: Any | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield SSE-oriented events while running the loop.
 
         Event shapes:
           {"type": "status", "text": "..."}
           {"type": "tool", "name": "...", "arguments": "..."}
+          {"type": "tool_result", ...}
           {"type": "token", "text": "..."}
+          {"type": "cancelled"}
           {"type": "error", "message": "..."}
         """
         tools = openai_tools() if use_tools else None
 
+        def cancelled() -> bool:
+            return bool(cancel_event is not None and cancel_event.is_set())
+
         try:
             for _ in range(self.max_turns):
+                if cancelled():
+                    yield {"type": "cancelled"}
+                    return
+
                 if tools:
                     msg = await self.client.chat_completion(messages, tools=tools)
+                    if cancelled():
+                        yield {"type": "cancelled"}
+                        return
+
                     tool_calls = msg.get("tool_calls") or []
 
                     if tool_calls:
@@ -138,6 +152,32 @@ class Agent:
                             }
                         )
                         for tc in tool_calls:
+                            if cancelled():
+                                # Keep OpenAI alternation valid: every tool_call needs a result.
+                                for remaining in tool_calls:
+                                    rid = remaining.get("id") or ""
+                                    already = any(
+                                        m.get("role") == "tool"
+                                        and m.get("tool_call_id") == rid
+                                        for m in messages
+                                    )
+                                    if already:
+                                        continue
+                                    rfn = remaining.get("function") or {}
+                                    rname = rfn.get("name") or ""
+                                    messages.append(
+                                        {
+                                            "role": "tool",
+                                            "tool_call_id": rid,
+                                            "name": rname,
+                                            "content": json.dumps(
+                                                {"error": "cancelled"},
+                                                ensure_ascii=False,
+                                            ),
+                                        }
+                                    )
+                                yield {"type": "cancelled"}
+                                return
                             fn = tc.get("function") or {}
                             name = fn.get("name") or ""
                             raw_args = fn.get("arguments") or "{}"
@@ -161,17 +201,31 @@ class Agent:
                                     "content": result,
                                 }
                             )
+                            yield {
+                                "type": "tool_result",
+                                "name": name,
+                                "tool_call_id": tc_id,
+                                "content": result,
+                            }
                         continue
 
                     final = msg.get("content") or ""
                     messages.append({"role": "assistant", "content": final})
                     chunk_size = 24
                     for i in range(0, len(final), chunk_size):
+                        if cancelled():
+                            yield {"type": "cancelled"}
+                            return
                         yield {"type": "token", "text": final[i : i + chunk_size]}
                     return
 
                 full = ""
                 async for token in self.client.chat_stream(messages):
+                    if cancelled():
+                        if full:
+                            messages.append({"role": "assistant", "content": full})
+                        yield {"type": "cancelled"}
+                        return
                     full += token
                     yield {"type": "token", "text": token}
                 messages.append({"role": "assistant", "content": full})

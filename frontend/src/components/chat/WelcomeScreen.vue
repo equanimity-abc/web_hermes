@@ -5,9 +5,10 @@ import ChatComposer from './ChatComposer.vue'
 defineProps({
   modelValue: { type: String, default: '' },
   disabled: { type: Boolean, default: false },
+  isLoading: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'submit'])
+const emit = defineEmits(['update:modelValue', 'submit', 'stop'])
 
 const composerRef = ref(null)
 
@@ -38,9 +39,11 @@ defineExpose({ focus })
         :model-value="modelValue"
         variant="welcome"
         :disabled="disabled"
+        :is-loading="isLoading"
         placeholder="给 web_hermes 发送消息"
         @update:model-value="emit('update:modelValue', $event)"
         @submit="emit('submit')"
+        @stop="emit('stop')"
       />
     </div>
   </div>
