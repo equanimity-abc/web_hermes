@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "54930bd4_dd779a5a",
+        "filename": ".gitignore",
+        "patchSetId": 1
+      },
+      "lineNbr": 171,
+      "author": {
+        "id": 1039782
+      },
+      "writtenOn": "2026-08-05T13:03:17Z",
+      "side": 1,
+      "message": "已经走查通过\n```suggestion\nbackend/data/workspace/**\n```",
+      "range": {
+        "startLine": 171,
+        "startChar": 13,
+        "endLine": 171,
+        "endChar": 22
+      },
+      "revId": "13482c89d21efd7641df57671eb8716d8e6c520e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "36c9c85d_b64d10bf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1039782
+      },
+      "writtenOn": "2026-08-05T13:03:17Z",
+      "side": 1,
+      "message": "good, push in repo",
+      "revId": "13482c89d21efd7641df57671eb8716d8e6c520e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735"
+    }
+  ]
+}
