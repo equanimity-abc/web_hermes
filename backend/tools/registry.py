@@ -16,12 +16,14 @@ def register(
     description: str,
     parameters: dict[str, Any],
     handler: Handler,
+    requires_approval: bool = False,
 ) -> None:
     _REGISTRY[name] = {
         "name": name,
         "description": description,
         "parameters": parameters,
         "handler": handler,
+        "requires_approval": bool(requires_approval),
     }
 
 
@@ -38,6 +40,11 @@ def openai_tools() -> list[dict[str, Any]]:
         }
         for meta in _REGISTRY.values()
     ]
+
+
+def tool_requires_approval(name: str) -> bool:
+    meta = _REGISTRY.get(name) or {}
+    return bool(meta.get("requires_approval"))
 
 
 def dispatch(name: str, arguments: dict[str, Any] | str | None) -> str:

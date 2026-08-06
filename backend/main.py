@@ -6,7 +6,7 @@ import asyncio
 import json
 from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -15,8 +15,9 @@ from agent import agent, messages_for_api
 from config import config
 from session_store import SessionStore
 from stream_manager import BusyError, streams
+from tools.workspace import save_upload, workspace_root
 
-app = FastAPI(title="Agent Chat API", version="0.3.0")
+app = FastAPI(title="Agent Chat API", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +47,12 @@ class CancelRequest(BaseModel):
 class StartResponse(BaseModel):
     stream_id: str
     session_id: str
+
+
+class ApprovalRespondRequest(BaseModel):
+    stream_id: str
+    approval_id: str
+    decision: str  # approved | denied
 
 
 def _sse(event: dict[str, Any]) -> dict[str, str]:
@@ -92,13 +99,27 @@ async def _run_stream_job(
         return
     messages = session["messages"]
 
+    class _Gate:
+        def begin(self, approval_id: str) -> None:
+            streams.begin_approval(stream_id, approval_id)
+
+        async def await_decision(self, approval_id: str) -> str:
+            return await streams.await_approval(
+                stream_id,
+                approval_id,
+                cancel_event=state.cancel_event,
+            )
+
     try:
         async for event in agent.run_stream(
             working,
             use_tools=True,
             cancel_event=state.cancel_event,
+            approval_gate=_Gate(),
         ):
             etype = event.get("type")
+            if etype == "approval":
+                event = {**event, "stream_id": stream_id}
             if etype == "error":
                 _persist_partial(
                     session,
@@ -283,6 +304,51 @@ async def chat_cancel(req: CancelRequest):
         "stream_id": req.stream_id,
         "already_finished": False,
     }
+
+
+@app.post("/api/chat/approval/respond")
+async def approval_respond(req: ApprovalRespondRequest):
+    """Approve or deny a pending dangerous tool call."""
+    decision = (req.decision or "").strip().lower()
+    if decision not in ("approved", "denied"):
+        raise HTTPException(
+            status_code=400, detail="decision must be 'approved' or 'denied'"
+        )
+    try:
+        result = streams.respond_approval(req.stream_id, req.approval_id, decision)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="stream not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.get("/api/workspace")
+async def workspace_info():
+    root = workspace_root()
+    return {
+        "workspace": str(root),
+        "exists": root.exists(),
+        "hint": "上传文件使用 POST /api/workspace/upload；工具路径均为相对此目录",
+    }
+
+
+@app.post("/api/workspace/upload")
+async def workspace_upload(
+    file: UploadFile = File(...),
+    subdir: str = Form(""),
+):
+    """Upload a file into the sandboxed workspace."""
+    data = await file.read()
+    try:
+        meta = save_upload(file.filename or "upload.bin", data, subdir=subdir)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return meta
 
 
 @app.post("/api/chat/stream")

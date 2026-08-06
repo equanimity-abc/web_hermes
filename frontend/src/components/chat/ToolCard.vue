@@ -31,6 +31,9 @@ const previewResult = computed(() => {
 
 const statusLabel = computed(() => {
   if (props.tool.status === 'running') return '运行中'
+  if (props.tool.status === 'awaiting_approval') return '等待审批'
+  if (props.tool.status === 'denied') return '已拒绝'
+  if (props.tool.status === 'cancelled') return '已取消'
   if (props.tool.status === 'error') return '失败'
   return '完成'
 })
@@ -39,7 +42,15 @@ const statusLabel = computed(() => {
 <template>
   <div class="tool-card" :class="tool.status">
     <button type="button" class="tool-card-header" @click="open = !open">
-      <span class="tool-card-icon">{{ tool.status === 'running' ? '⏳' : '🔧' }}</span>
+      <span class="tool-card-icon">
+        {{
+          tool.status === 'awaiting_approval'
+            ? '🛡️'
+            : tool.status === 'running'
+              ? '⏳'
+              : '🔧'
+        }}
+      </span>
       <span class="tool-card-name">{{ tool.name || 'tool' }}</span>
       <span class="tool-card-status">{{ statusLabel }}</span>
       <span class="tool-card-chevron" :class="{ open }">▾</span>
@@ -69,6 +80,18 @@ const statusLabel = computed(() => {
 .tool-card.running {
   border-color: #c7d2fe;
   background: #f5f3ff;
+}
+
+.tool-card.awaiting_approval {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.tool-card.denied,
+.tool-card.cancelled {
+  border-color: #e5e7eb;
+  background: #f9fafb;
+  opacity: 0.9;
 }
 
 .tool-card.error {

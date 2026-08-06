@@ -508,6 +508,146 @@
   height: 36px;
 }
 
+.btn-attach {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-attach:hover:not(:disabled) {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+
+.btn-attach:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.composer--welcome .btn-attach {
+  width: 36px;
+  height: 36px;
+}
+
+/* Approval modal */
+.approval-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.approval-modal {
+  width: min(480px, 100%);
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  padding: 22px 22px 18px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+.approval-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.approval-desc {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.approval-desc code {
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.approval-section {
+  margin-bottom: 16px;
+}
+
+.approval-label {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+
+.approval-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--color-code-bg);
+  color: #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+
+.approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.approval-btn {
+  min-width: 96px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff;
+  color: var(--color-text);
+}
+
+.approval-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.approval-btn.deny:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: var(--color-danger);
+}
+
+.approval-btn.approve {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.approval-btn.approve:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
 /* Toast */
 .copy-toast {
   position: fixed;

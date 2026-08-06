@@ -89,8 +89,8 @@ Tool Registry
 | **P2** | 真正的 Agent Loop | 约 1–2 周 | `run()` 多轮循环：LLM → tool_calls → 执行 → 再请求 | `run_agent.run_conversation` + `agent-loop.md` | ✅ 已完成 |
 | **P3** | 工具系统 | 约 1–2 周 | registry + 3–5 个工具；SSE 推送 tool 事件；前端工具卡片 | `registry.py` → `model_tools` → `toolsets` | ✅ 已完成 |
 | **P4** | 流式契约升级 | 约 3–5 天 | `chat/start` + `stream_id`；`token`/`tool`/`done`/`error`；取消生成 | WebUI `api/streaming.py` + `messages.js` | ✅ 已完成 |
-| **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | 👉 **下一步** |
-| **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | 待做 |
+| **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | ✅ 已完成 |
+| **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | 👉 **下一步** |
 | **P7** | 业务插件 | 按需 | 抖音漫剧等业务工具/技能，不改核心 loop | Footprint Ladder：能力放边缘 | 按需 |
 
 ---
@@ -163,15 +163,14 @@ Tool Registry
 
 ---
 
-## 建议的下一步行动（P5）
+## 建议的下一步行动（P6）
 
 | # | 任务 | 验收 |
 |---|------|------|
-| 1 | 危险工具审批（SSE `approval` + respond） | 拒绝/批准后继续，不静默执行 |
-| 2 | 工作区路径沙箱加固 + 上传入口 | 越界路径失败；附件进 workspace |
-| 3 | 审批 UI 弹窗 | 与主流聊天产品一致的阻塞式确认 |
+| 1 | 简单记忆文件（跨会话偏好/事实） | 新会话能读到已写入记忆 |
+| 2 | 超长上下文摘要压缩 | 历史膨胀后仍能继续对话且不破消息交替 |
 
-P4 已完成：`POST /api/chat/start` + `GET /api/chat/stream/{id}` + `POST /api/chat/cancel`；统一 `meta`/`token`/`tool`/`tool_result`/`done`/`error`/`cancelled`；session busy 返回 409；前端 Stop 按钮。
+P5 已完成：`write_file`/`delete_file` 需审批（SSE `approval` + `POST /api/chat/approval/respond`）；路径沙箱加固；`POST /api/workspace/upload`；前端审批弹窗 + 上传按钮。
 
 ---
 
@@ -200,7 +199,7 @@ P4 已完成：`POST /api/chat/start` + `GET /api/chat/stream/{id}` + `POST /api
 | 流式 tool_calls | ⚠ 部分（loop 内非流式检测；最终答案流式） |
 | Memory / skills / plugins | ❌ NOT DONE |
 | 取消 / interrupt | ❌ NOT DONE |
-| 审批（approval） | ❌ NOT DONE |
+| 审批（approval） | ✅ DONE |
 | 抖音漫剧插件 | ❌ NOT DONE |
 
 ---

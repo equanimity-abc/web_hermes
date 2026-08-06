@@ -8,7 +8,7 @@ defineProps({
   isLoading: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'submit', 'stop'])
+const emit = defineEmits(['update:modelValue', 'submit', 'stop', 'attach'])
 
 const composerRef = ref(null)
 
@@ -44,6 +44,7 @@ defineExpose({ focus })
         @update:model-value="emit('update:modelValue', $event)"
         @submit="emit('submit')"
         @stop="emit('stop')"
+        @attach="emit('attach', $event)"
       />
     </div>
   </div>

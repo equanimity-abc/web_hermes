@@ -10,9 +10,10 @@ const props = defineProps({
   variant: { type: String, default: 'normal' },
 })
 
-const emit = defineEmits(['update:modelValue', 'submit', 'stop'])
+const emit = defineEmits(['update:modelValue', 'submit', 'stop', 'attach'])
 
 const textareaRef = ref(null)
+const fileInputRef = ref(null)
 
 function onInput(e) {
   emit('update:modelValue', e.target.value)
@@ -28,6 +29,17 @@ function autoResize() {
 
 function focus() {
   nextTick(() => textareaRef.value?.focus())
+}
+
+function pickFile() {
+  if (props.disabled || props.isLoading) return
+  fileInputRef.value?.click()
+}
+
+function onFileChange(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (file) emit('attach', file)
 }
 
 watch(
@@ -59,6 +71,26 @@ defineExpose({ focus, autoResize })
       />
     </div>
     <div class="input-actions">
+      <input
+        ref="fileInputRef"
+        type="file"
+        hidden
+        @change="onFileChange"
+      />
+      <button
+        type="button"
+        class="btn-attach"
+        title="上传到 workspace"
+        :disabled="disabled || isLoading"
+        @click="pickFile"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M7 14V5.4L4.2 8.2 3 7l5-5 5 5-1.2 1.2L9 5.4V14H7z"
+            fill="currentColor"
+          />
+        </svg>
+      </button>
       <button
         v-if="isLoading"
         type="button"

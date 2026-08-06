@@ -1,8 +1,14 @@
 import { nextTick, ref } from 'vue'
-import { cancelChat, SessionBusyError, streamChat } from '@/api/chat'
+import {
+  cancelChat,
+  respondApproval,
+  SessionBusyError,
+  streamChat,
+  uploadWorkspaceFile,
+} from '@/api/chat'
 
 /**
- * Conversation messages + streaming send loop (P4: start/reconnect/cancel).
+ * Conversation messages + streaming send loop (P4/P5: cancel + approval).
  *
  * @param {{
  *   getSessionId: () => string|null,
@@ -17,6 +23,8 @@ export function useChat(deps) {
   const isLoading = ref(false)
   const statusText = ref('')
   const activeStreamId = ref(null)
+  const pendingApproval = ref(null)
+  const approvalBusy = ref(false)
 
   let abortController = null
 
@@ -47,7 +55,9 @@ export function useChat(deps) {
     }
     if (last.toolCalls) {
       last.toolCalls.forEach((t) => {
-        if (t.status === 'running') t.status = opts.cancelled ? 'cancelled' : 'done'
+        if (t.status === 'running' || t.status === 'awaiting_approval') {
+          t.status = opts.cancelled ? 'cancelled' : 'done'
+        }
       })
     }
   }
@@ -57,6 +67,8 @@ export function useChat(deps) {
     userInput.value = ''
     statusText.value = ''
     activeStreamId.value = null
+    pendingApproval.value = null
+    approvalBusy.value = false
   }
 
   function setMessages(list) {
@@ -65,6 +77,7 @@ export function useChat(deps) {
 
   async function stopGeneration() {
     const sid = activeStreamId.value
+    pendingApproval.value = null
     if (!sid) {
       abortController?.abort()
       return
@@ -77,6 +90,44 @@ export function useChat(deps) {
     abortController?.abort()
   }
 
+  async function decideApproval(decision) {
+    const pending = pendingApproval.value
+    if (!pending || approvalBusy.value) return
+    approvalBusy.value = true
+    try {
+      await respondApproval({
+        streamId: pending.stream_id || activeStreamId.value,
+        approvalId: pending.approval_id,
+        decision,
+      })
+      const last = lastAssistant()
+      const hit = last?.toolCalls?.find(
+        (t) => t.id && t.id === pending.tool_call_id,
+      )
+      if (hit) {
+        hit.status = decision === 'approved' ? 'running' : 'denied'
+      }
+      pendingApproval.value = null
+    } catch (e) {
+      console.error('approval respond failed:', e)
+    } finally {
+      approvalBusy.value = false
+    }
+  }
+
+  async function uploadFile(file) {
+    if (!file || isLoading.value) return null
+    const meta = await uploadWorkspaceFile(file)
+    const path = meta.path || file.name
+    const note = `已上传到 workspace：\`${path}\``
+    if (userInput.value.trim()) {
+      userInput.value = `${userInput.value.trim()}\n${note}`
+    } else {
+      userInput.value = note
+    }
+    return meta
+  }
+
   async function sendMessage() {
     const content = userInput.value.trim()
     if (!content || isLoading.value) return
@@ -85,6 +136,7 @@ export function useChat(deps) {
     userInput.value = ''
     isLoading.value = true
     statusText.value = ''
+    pendingApproval.value = null
     messages.value.push({
       role: 'assistant',
       content: '',
@@ -138,20 +190,39 @@ export function useChat(deps) {
             })
             nextTick(() => scrollToBottom())
           },
-          onToolResult(evt) {
+          onApproval(evt) {
+            pendingApproval.value = evt
             const last = lastAssistant()
             if (!last?.toolCalls) return
             const hit =
               last.toolCalls.find((t) => t.id && t.id === evt.tool_call_id) ||
               last.toolCalls.find((t) => t.name === evt.name && t.status === 'running')
+            if (hit) hit.status = 'awaiting_approval'
+            nextTick(() => scrollToBottom())
+          },
+          onToolResult(evt) {
+            pendingApproval.value = null
+            const last = lastAssistant()
+            if (!last?.toolCalls) return
+            const hit =
+              last.toolCalls.find((t) => t.id && t.id === evt.tool_call_id) ||
+              last.toolCalls.find(
+                (t) =>
+                  t.name === evt.name &&
+                  (t.status === 'running' || t.status === 'awaiting_approval'),
+              )
             if (!hit) return
             hit.result = evt.content || ''
-            hit.status = 'done'
-            try {
-              const parsed = JSON.parse(hit.result)
-              if (parsed && parsed.error) hit.status = 'error'
-            } catch {
-              /* ignore */
+            if (evt.denied) {
+              hit.status = 'denied'
+            } else {
+              hit.status = 'done'
+              try {
+                const parsed = JSON.parse(hit.result)
+                if (parsed && parsed.error) hit.status = 'error'
+              } catch {
+                /* ignore */
+              }
             }
             nextTick(() => scrollToBottom())
           },
@@ -184,8 +255,6 @@ export function useChat(deps) {
           last.content = `❌ ${e.message}`
           last.isStreaming = false
         }
-        // Remove the optimistic user+assistant pair's empty assistant if busy
-        // Keep user message visible with error on assistant.
         terminal = 'error'
       } else {
         const last = lastAssistant()
@@ -199,6 +268,8 @@ export function useChat(deps) {
       isLoading.value = false
       statusText.value = ''
       activeStreamId.value = null
+      pendingApproval.value = null
+      approvalBusy.value = false
       abortController = null
       try {
         await deps.onTurnComplete?.()
@@ -249,10 +320,14 @@ export function useChat(deps) {
     isLoading,
     statusText,
     activeStreamId,
+    pendingApproval,
+    approvalBusy,
     resetConversation,
     setMessages,
     sendMessage,
     stopGeneration,
+    decideApproval,
+    uploadFile,
     editMessage,
     regenerateResponse,
     toggleLike,

@@ -3,6 +3,7 @@ import { nextTick, onMounted, ref } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
+import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
 import { useSessions } from '@/composables/useSessions'
 import { useSidebarResize } from '@/composables/useSidebarResize'
@@ -21,16 +22,20 @@ const {
 } = useSessions()
 
 const { sidebarWidth, startResize } = useSidebarResize()
-const { toast, copyWithToast } = useClipboardToast()
+const { toast, showToast, copyWithToast } = useClipboardToast()
 
 const {
   messages,
   userInput,
   isLoading,
+  pendingApproval,
+  approvalBusy,
   resetConversation,
   setMessages,
   sendMessage,
   stopGeneration,
+  decideApproval,
+  uploadFile,
   editMessage,
   regenerateResponse,
   toggleLike,
@@ -75,6 +80,17 @@ function onEditMessage(index) {
   nextTick(() => chatViewRef.value?.focusComposer?.())
 }
 
+async function onAttach(file) {
+  try {
+    const meta = await uploadFile(file)
+    showToast(`已上传：${meta.path || file.name}`)
+    nextTick(() => chatViewRef.value?.focusComposer?.())
+  } catch (e) {
+    console.error('上传失败:', e)
+    showToast(`上传失败: ${e.message}`)
+  }
+}
+
 onMounted(() => {
   refreshSessionList()
 })
@@ -99,11 +115,19 @@ onMounted(() => {
       :is-loading="isLoading"
       @submit="sendMessage"
       @stop="stopGeneration"
+      @attach="onAttach"
       @copy="copyWithToast"
       @edit="onEditMessage"
       @regenerate="regenerateResponse"
       @like="toggleLike"
       @dislike="toggleDislike"
+    />
+
+    <ApprovalModal
+      :approval="pendingApproval"
+      :busy="approvalBusy"
+      @approve="decideApproval('approved')"
+      @deny="decideApproval('denied')"
     />
 
     <AppToast :message="toast" />

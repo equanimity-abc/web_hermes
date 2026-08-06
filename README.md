@@ -68,12 +68,16 @@ npm run dev
 | POST | `/api/chat/start` | 开始一轮生成，返回 `stream_id` |
 | GET | `/api/chat/stream/{stream_id}` | SSE 订阅/重连（`token`/`tool`/`done`/`error`/`cancelled`） |
 | POST | `/api/chat/cancel` | 取消生成（终端事件为 `cancelled`，不是 `done`） |
+| POST | `/api/chat/approval/respond` | 批准/拒绝危险工具（`approved` / `denied`） |
 | POST | `/api/chat/stream` | 兼容旧客户端的一次性 POST SSE |
+| GET | `/api/workspace` | workspace 根目录信息 |
+| POST | `/api/workspace/upload` | 上传附件到 workspace 沙箱 |
 | GET | `/api/sessions` | 会话列表（摘要） |
 | GET | `/api/sessions/{id}` | 获取会话历史 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
 
 会话落盘目录：`backend/data/sessions/{id}.json`（重启后仍可恢复）。
+工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
 
 ## 开发路线
 
@@ -84,5 +88,5 @@ npm run dev
 - [x] P2: Agent Loop（calculator / get_current_time）
 - [x] P3: 工具系统（workspace 文件工具 + ToolCard + 插件目录）
 - [x] P4: 流式契约升级（`stream_id` / 取消 / busy）
-- [ ] P5: 审批与工作区加固
+- [x] P5: 审批与工作区加固（approval + upload + 路径沙箱）
 - [ ] P6–P7: 记忆压缩 + 抖音漫剧等业务插件

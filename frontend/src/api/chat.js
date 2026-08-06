@@ -56,6 +56,38 @@ export async function cancelChat(streamId) {
   return response.json()
 }
 
+export async function respondApproval({ streamId, approvalId, decision }) {
+  const response = await fetch('/api/chat/approval/respond', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stream_id: streamId,
+      approval_id: approvalId,
+      decision,
+    }),
+  })
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`HTTP ${response.status}: ${errText}`)
+  }
+  return response.json()
+}
+
+export async function uploadWorkspaceFile(file, { subdir = '' } = {}) {
+  const form = new FormData()
+  form.append('file', file)
+  if (subdir) form.append('subdir', subdir)
+  const response = await fetch('/api/workspace/upload', {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`HTTP ${response.status}: ${errText}`)
+  }
+  return response.json()
+}
+
 /**
  * Connect (or reconnect) to a stream and dispatch typed events.
  * Resolves when a terminal event arrives (done / error / cancelled),
@@ -69,6 +101,7 @@ export async function connectStream(
     onStatus,
     onTool,
     onToolResult,
+    onApproval,
     onDone,
     onError,
     onCancelled,
@@ -119,6 +152,11 @@ export async function connectStream(
     if (type === 'tool') {
       onTool?.(parsed)
       onStatus?.(parsed.name ? `正在调用工具：${parsed.name}` : '正在调用工具…')
+      return null
+    }
+    if (type === 'approval') {
+      onApproval?.(parsed)
+      onStatus?.(parsed.name ? `等待审批：${parsed.name}` : '等待审批…')
       return null
     }
     if (type === 'tool_result') {

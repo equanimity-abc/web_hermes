@@ -5,7 +5,9 @@ Contract:
     msg = LLM(messages, tools)
     if msg.tool_calls:
       append assistant(tool_calls)
-      for each call: dispatch → append role=tool
+      for each call:
+        if requires_approval → emit approval → wait → deny or dispatch
+        append role=tool
       continue
     else:
       append assistant(content) → done
@@ -14,14 +16,50 @@ Contract:
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from config import config
 from llm_client import LLMClient, llm_client
-from tools import dispatch, openai_tools
+from tools import dispatch, openai_tools, tool_requires_approval
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+class ApprovalGate:
+    """begin() before emitting SSE; await_decision() after — avoids respond races."""
+
+    def begin(self, approval_id: str) -> None:  # pragma: no cover - protocol
+        raise NotImplementedError
+
+    async def await_decision(self, approval_id: str) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+
+def _pad_missing_tool_results(
+    messages: list[dict[str, Any]],
+    tool_calls: list[dict[str, Any]],
+    *,
+    reason: str = "cancelled",
+) -> None:
+    for remaining in tool_calls:
+        rid = remaining.get("id") or ""
+        already = any(
+            m.get("role") == "tool" and m.get("tool_call_id") == rid for m in messages
+        )
+        if already:
+            continue
+        rfn = remaining.get("function") or {}
+        rname = rfn.get("name") or ""
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": rid,
+                "name": rname,
+                "content": json.dumps({"error": reason}, ensure_ascii=False),
+            }
+        )
 
 
 class Agent:
@@ -41,7 +79,7 @@ class Agent:
         use_tools: bool = True,
         on_event: EventCallback | None = None,
     ) -> str:
-        """Run the agent loop in-place on `messages`. Returns final assistant text."""
+        """Non-stream loop. Tools that require approval are denied (fail closed)."""
         tools = openai_tools() if use_tools else None
 
         async def emit(event: dict[str, Any]) -> None:
@@ -78,7 +116,16 @@ class Agent:
                             "tool_call_id": tc_id,
                         }
                     )
-                    result = dispatch(name, raw_args)
+                    if tool_requires_approval(name):
+                        result = json.dumps(
+                            {
+                                "error": "tool requires approval",
+                                "hint": "请使用流式聊天以审批危险工具",
+                            },
+                            ensure_ascii=False,
+                        )
+                    else:
+                        result = dispatch(name, raw_args)
                     messages.append(
                         {
                             "role": "tool",
@@ -113,12 +160,14 @@ class Agent:
         *,
         use_tools: bool = True,
         cancel_event: Any | None = None,
+        approval_gate: ApprovalGate | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield SSE-oriented events while running the loop.
 
         Event shapes:
           {"type": "status", "text": "..."}
-          {"type": "tool", "name": "...", "arguments": "..."}
+          {"type": "tool", ...}
+          {"type": "approval", "approval_id", "name", "arguments", ...}
           {"type": "tool_result", ...}
           {"type": "token", "text": "..."}
           {"type": "cancelled"}
@@ -153,29 +202,7 @@ class Agent:
                         )
                         for tc in tool_calls:
                             if cancelled():
-                                # Keep OpenAI alternation valid: every tool_call needs a result.
-                                for remaining in tool_calls:
-                                    rid = remaining.get("id") or ""
-                                    already = any(
-                                        m.get("role") == "tool"
-                                        and m.get("tool_call_id") == rid
-                                        for m in messages
-                                    )
-                                    if already:
-                                        continue
-                                    rfn = remaining.get("function") or {}
-                                    rname = rfn.get("name") or ""
-                                    messages.append(
-                                        {
-                                            "role": "tool",
-                                            "tool_call_id": rid,
-                                            "name": rname,
-                                            "content": json.dumps(
-                                                {"error": "cancelled"},
-                                                ensure_ascii=False,
-                                            ),
-                                        }
-                                    )
+                                _pad_missing_tool_results(messages, tool_calls)
                                 yield {"type": "cancelled"}
                                 return
                             fn = tc.get("function") or {}
@@ -188,6 +215,58 @@ class Agent:
                                 "arguments": raw_args,
                                 "tool_call_id": tc_id,
                             }
+
+                            if tool_requires_approval(name):
+                                approval_id = uuid.uuid4().hex
+                                if approval_gate is not None:
+                                    approval_gate.begin(approval_id)
+                                yield {
+                                    "type": "approval",
+                                    "approval_id": approval_id,
+                                    "name": name,
+                                    "arguments": raw_args,
+                                    "tool_call_id": tc_id,
+                                    "reason": "dangerous_tool",
+                                }
+                                yield {
+                                    "type": "status",
+                                    "text": f"等待审批工具：{name}",
+                                }
+                                if approval_gate is None:
+                                    decision = "denied"
+                                else:
+                                    decision = await approval_gate.await_decision(
+                                        approval_id
+                                    )
+                                if cancelled() or decision == "cancelled":
+                                    _pad_missing_tool_results(messages, tool_calls)
+                                    yield {"type": "cancelled"}
+                                    return
+                                if decision != "approved":
+                                    result = json.dumps(
+                                        {
+                                            "error": "denied by user",
+                                            "tool": name,
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                    messages.append(
+                                        {
+                                            "role": "tool",
+                                            "tool_call_id": tc_id,
+                                            "name": name,
+                                            "content": result,
+                                        }
+                                    )
+                                    yield {
+                                        "type": "tool_result",
+                                        "name": name,
+                                        "tool_call_id": tc_id,
+                                        "content": result,
+                                        "denied": True,
+                                    }
+                                    continue
+
                             yield {
                                 "type": "status",
                                 "text": f"正在调用工具：{name}",

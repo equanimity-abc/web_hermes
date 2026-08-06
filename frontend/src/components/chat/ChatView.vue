@@ -14,6 +14,7 @@ const emit = defineEmits([
   'update:modelValue',
   'submit',
   'stop',
+  'attach',
   'copy',
   'edit',
   'regenerate',
@@ -66,6 +67,7 @@ defineExpose({ focusComposer, scrollToBottom })
       @update:model-value="emit('update:modelValue', $event)"
       @submit="emit('submit')"
       @stop="emit('stop')"
+      @attach="emit('attach', $event)"
     />
 
     <template v-else>
@@ -90,6 +92,7 @@ defineExpose({ focusComposer, scrollToBottom })
           @update:model-value="emit('update:modelValue', $event)"
           @submit="emit('submit')"
           @stop="emit('stop')"
+          @attach="emit('attach', $event)"
         />
       </div>
     </template>
