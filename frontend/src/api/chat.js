@@ -159,12 +159,6 @@ export async function connectStream(
       onStatus?.(parsed.name ? `等待审批：${parsed.name}` : '等待审批…')
       return null
     }
-    if (type === 'compress') {
-      onStatus?.(
-        `上下文已压缩（${parsed.before_chars || '?'} → ${parsed.after_chars || '?'} 字符）`,
-      )
-      return null
-    }
     if (type === 'tool_result') {
       onToolResult?.(parsed)
       return null
