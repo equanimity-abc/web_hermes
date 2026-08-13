@@ -14,21 +14,39 @@ from agent.memory_store import memory_block_for_prompt
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{8,64}$")
 
 SYSTEM_PROMPT_BASE = (
-    "你是一个有用的 AI Agent。你可以调用工具完成任务："
-    "calculator、get_current_time、list_dir、read_file、write_file、delete_file、"
-    "memory_read、memory_write。"
+    "你是一个有用的 AI Agent。"
     "文件工具只能访问 workspace 沙箱内的相对路径；write_file / delete_file 需要用户审批后才会执行。"
     "跨会话的用户偏好与重要事实请用 memory_write 保存；需要时可 memory_read。"
     "用中文简洁回答。"
 )
 
 
+def _tools_prompt_block() -> str:
+    """List registered tools + plugin hints so plugins need not edit this file."""
+    try:
+        from tools.loader import plugin_prompt_hints
+        from tools.registry import list_tool_names
+    except Exception:
+        return ""
+    names = "、".join(list_tool_names())
+    lines = []
+    if names:
+        lines.append(f"你可以调用工具完成任务：{names}。")
+    for hint in plugin_prompt_hints():
+        lines.append(hint)
+    return "\n".join(lines)
+
+
 def build_system_prompt() -> str:
-    """Build system prompt; inject long-term memory."""
+    """Build system prompt; inject tool list, plugin hints, and long-term memory."""
+    parts = [SYSTEM_PROMPT_BASE]
+    tools_block = _tools_prompt_block()
+    if tools_block:
+        parts.append(tools_block)
     block = memory_block_for_prompt()
     if block:
-        return SYSTEM_PROMPT_BASE + "\n\n" + block
-    return SYSTEM_PROMPT_BASE
+        parts.append(block)
+    return "\n\n".join(parts)
 
 
 def refresh_system_prompt(session: dict[str, Any]) -> None:

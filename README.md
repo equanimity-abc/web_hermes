@@ -81,6 +81,7 @@ npm run dev
 会话落盘目录：`backend/data/sessions/{id}.json`（重启后仍可恢复）。
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
 记忆文件：`backend/data/memory/MEMORY.md`（跨会话；新会话 system 会注入，每轮会刷新）。
+漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
 
 ## 开发路线
 
@@ -93,4 +94,4 @@ npm run dev
 - [x] P4: 流式契约升级（`stream_id` / 取消 / busy）
 - [x] P5: 审批与工作区加固（approval + upload + 路径沙箱）
 - [x] P6: 记忆与压缩（MEMORY.md + 上下文摘要）
-- [ ] P7: 抖音漫剧等业务插件
+- [x] P7: 抖音漫剧插件（`tiktok_drama`，不改 agent loop）

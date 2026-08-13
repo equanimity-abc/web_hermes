@@ -7,6 +7,19 @@ import pkgutil
 import sys
 from pathlib import Path
 
+_PLUGIN_PROMPT_HINTS: list[str] = []
+
+
+def add_plugin_prompt_hint(text: str) -> None:
+    """Plugins may append a short system-prompt hint (loaded at import)."""
+    snippet = (text or "").strip()
+    if snippet and snippet not in _PLUGIN_PROMPT_HINTS:
+        _PLUGIN_PROMPT_HINTS.append(snippet)
+
+
+def plugin_prompt_hints() -> list[str]:
+    return list(_PLUGIN_PROMPT_HINTS)
+
 
 def load_plugin_tools() -> list[str]:
     """Import tools.plugins.* modules. Returns loaded module names."""

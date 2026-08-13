@@ -186,7 +186,14 @@ async def _run_stream_job(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "agent": True}
+    from tools import _loaded_plugins, list_tool_names
+
+    return {
+        "status": "ok",
+        "agent": True,
+        "tools": list_tool_names(),
+        "plugins": list(_loaded_plugins),
+    }
 
 
 @app.get("/api/sessions")

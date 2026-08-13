@@ -91,7 +91,7 @@ Tool Registry
 | **P4** | 流式契约升级 | 约 3–5 天 | `chat/start` + `stream_id`；`token`/`tool`/`done`/`error`；取消生成 | WebUI `api/streaming.py` + `messages.js` | ✅ 已完成 |
 | **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | ✅ 已完成 |
 | **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | ✅ 已完成 |
-| **P7** | 业务插件 | 按需 | 抖音漫剧等业务工具/技能，不改核心 loop | Footprint Ladder：能力放边缘 | 👉 **下一步** |
+| **P7** | 业务插件 | 按需 | 抖音漫剧等业务工具/技能，不改核心 loop | Footprint Ladder：能力放边缘 | ✅ 已完成 |
 
 ---
 
@@ -163,14 +163,11 @@ Tool Registry
 
 ---
 
-## 建议的下一步行动（P7）
+## 建议的下一步行动
 
-| # | 任务 | 验收 |
-|---|------|------|
-| 1 | 抖音漫剧等业务能力做成工具/技能插件 | 不改 agent loop 即可启用 |
-| 2 | 按 Footprint Ladder 放边缘 | 核心 schema 不膨胀 |
+P0–P7 骨架已齐。之后按痛点加能力即可：业务工具继续丢进 `backend/tools/plugins/`，不要改 `agent/loop.py`。
 
-P6 已完成：`MEMORY.md` 跨会话记忆 + `memory_read`/`memory_write`；每轮刷新 system 注入记忆；超长上下文摘要压缩（保 system、不拆 tool 组、插摘要桥接且不破角色交替）；SSE `compress` 事件。
+P7 已完成：插件 `tiktok_drama`（guide / init / list / get / save_bible / save_outline / save_episode），项目落在 `workspace/dramas/{slug}/`；system prompt 动态列出工具 + 插件 hint。
 
 ---
 
@@ -197,11 +194,11 @@ P6 已完成：`MEMORY.md` 跨会话记忆 + `memory_read`/`memory_write`；每�
 | Tools / registry | ✅ DONE（最小 registry + 2 工具） |
 | ReAct / agent loop | ✅ DONE |
 | 流式 tool_calls | ⚠ 部分（loop 内非流式检测；最终答案流式） |
-| Memory / skills / plugins | ✅ DONE（MEMORY.md + memory 工具；plugins 目录已有） |
+| Memory / skills / plugins | ✅ DONE（MEMORY.md + `tiktok_drama` 插件） |
 | 取消 / interrupt | ✅ DONE |
 | 审批（approval） | ✅ DONE |
 | 上下文压缩 | ✅ DONE |
-| 抖音漫剧插件 | ❌ NOT DONE |
+| 抖音漫剧插件 | ✅ DONE |
 
 ---
 
