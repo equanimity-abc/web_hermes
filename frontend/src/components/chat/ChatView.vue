@@ -16,10 +16,6 @@ const emit = defineEmits([
   'stop',
   'attach',
   'copy',
-  'edit',
-  'regenerate',
-  'like',
-  'dislike',
 ])
 
 const welcomeRef = ref(null)
@@ -75,10 +71,6 @@ defineExpose({ focusComposer, scrollToBottom })
         ref="messageListRef"
         :messages="messages"
         @copy="emit('copy', $event)"
-        @edit="emit('edit', $event)"
-        @regenerate="emit('regenerate', $event)"
-        @like="emit('like', $event)"
-        @dislike="emit('dislike', $event)"
       />
 
       <div class="input-area">

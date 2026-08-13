@@ -72,12 +72,15 @@ npm run dev
 | POST | `/api/chat/stream` | 兼容旧客户端的一次性 POST SSE |
 | GET | `/api/workspace` | workspace 根目录信息 |
 | POST | `/api/workspace/upload` | 上传附件到 workspace 沙箱 |
+| GET | `/api/memory` | 读取跨会话长期记忆 |
+| PUT | `/api/memory` | 写入长期记忆（`append` / `replace`） |
 | GET | `/api/sessions` | 会话列表（摘要） |
 | GET | `/api/sessions/{id}` | 获取会话历史 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
 
 会话落盘目录：`backend/data/sessions/{id}.json`（重启后仍可恢复）。
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
+记忆文件：`backend/data/memory/MEMORY.md`（跨会话；新会话 system 会注入）。
 
 ## 开发路线
 
@@ -89,4 +92,5 @@ npm run dev
 - [x] P3: 工具系统（workspace 文件工具 + ToolCard + 插件目录）
 - [x] P4: 流式契约升级（`stream_id` / 取消 / busy）
 - [x] P5: 审批与工作区加固（approval + upload + 路径沙箱）
-- [ ] P6–P7: 记忆压缩 + 抖音漫剧等业务插件
+- [x] P6: 记忆与压缩（MEMORY.md + 上下文摘要）
+- [ ] P7: 抖音漫剧等业务插件

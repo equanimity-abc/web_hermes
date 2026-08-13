@@ -36,10 +36,6 @@ const {
   stopGeneration,
   decideApproval,
   uploadFile,
-  editMessage,
-  regenerateResponse,
-  toggleLike,
-  toggleDislike,
 } = useChat({
   getSessionId: () => currentSessionId.value,
   setSessionId: (id) => {
@@ -73,11 +69,6 @@ async function deleteSession(sessionId) {
   } catch (e) {
     console.error('删除会话失败:', e)
   }
-}
-
-function onEditMessage(index) {
-  editMessage(index)
-  nextTick(() => chatViewRef.value?.focusComposer?.())
 }
 
 async function onAttach(file) {
@@ -117,10 +108,6 @@ onMounted(() => {
       @stop="stopGeneration"
       @attach="onAttach"
       @copy="copyWithToast"
-      @edit="onEditMessage"
-      @regenerate="regenerateResponse"
-      @like="toggleLike"
-      @dislike="toggleDislike"
     />
 
     <ApprovalModal

@@ -9,14 +9,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agent.memory_store import memory_block_for_prompt
+
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{8,64}$")
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "你是一个有用的 AI Agent。你可以调用工具完成任务："
-    "calculator、get_current_time、list_dir、read_file、write_file、delete_file。"
+    "calculator、get_current_time、list_dir、read_file、write_file、delete_file、"
+    "memory_read、memory_write。"
     "文件工具只能访问 workspace 沙箱内的相对路径；write_file / delete_file 需要用户审批后才会执行。"
+    "跨会话的用户偏好与重要事实请用 memory_write 保存；需要时可 memory_read。"
     "用中文简洁回答。"
 )
+
+
+def build_system_prompt() -> str:
+    """Build system prompt; inject long-term memory for new sessions."""
+    block = memory_block_for_prompt()
+    if block:
+        return SYSTEM_PROMPT_BASE + "\n\n" + block
+    return SYSTEM_PROMPT_BASE
+
+
+# Back-compat alias
+SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
 
 def _utc_now() -> str:
@@ -27,7 +43,7 @@ def _title_from_messages(messages: list[dict]) -> str:
     for msg in messages:
         if msg.get("role") == "user":
             text = str(msg.get("content") or "").strip().replace("\n", " ")
-            if not text:
+            if not text or text.startswith("[此前对话摘要]"):
                 continue
             return text[:40] + ("…" if len(text) > 40 else "")
     return "新对话"
@@ -60,7 +76,7 @@ class SessionStore:
             "title": "新对话",
             "created_at": now,
             "updated_at": now,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
+            "messages": [{"role": "system", "content": build_system_prompt()}],
         }
         self.save(session)
         return session
