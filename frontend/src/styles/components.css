@@ -354,6 +354,14 @@
   color: var(--color-text-secondary);
 }
 
+.ai-action-btn.active {
+  color: var(--color-primary);
+}
+
+.ai-action-btn.active svg {
+  fill: var(--color-primary);
+}
+
 .streaming-text {
   font-size: 15px;
   color: #374151;

@@ -7,7 +7,7 @@ defineProps({
   messages: { type: Array, required: true },
 })
 
-const emit = defineEmits(['copy'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike'])
 
 const containerRef = ref(null)
 
@@ -51,7 +51,12 @@ defineExpose({ scrollToBottom, containerRef })
       v-for="(msg, index) in messages"
       :key="index"
       :message="msg"
+      :index="index"
       @copy="emit('copy', $event)"
+      @edit="emit('edit', $event)"
+      @regenerate="emit('regenerate', $event)"
+      @like="emit('like', $event)"
+      @dislike="emit('dislike', $event)"
     />
   </div>
 </template>

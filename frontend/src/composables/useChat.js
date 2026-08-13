@@ -279,6 +279,41 @@ export function useChat(deps) {
     }
   }
 
+  function editMessage(index) {
+    const msg = messages.value[index]
+    if (!msg || isLoading.value) return
+    userInput.value = msg.content
+    messages.value.splice(index, 1)
+  }
+
+  async function regenerateResponse(index) {
+    if (isLoading.value) return
+    const userMsg = messages.value
+      .slice(0, index)
+      .reverse()
+      .find((m) => m.role === 'user')
+    if (!userMsg) return
+    const userContent = userMsg.content
+    messages.value = messages.value.slice(0, index)
+    userInput.value = userContent
+    await nextTick()
+    await sendMessage()
+  }
+
+  function toggleLike(index) {
+    const msg = messages.value[index]
+    if (!msg) return
+    msg.liked = !msg.liked
+    if (msg.liked) msg.disliked = false
+  }
+
+  function toggleDislike(index) {
+    const msg = messages.value[index]
+    if (!msg) return
+    msg.disliked = !msg.disliked
+    if (msg.disliked) msg.liked = false
+  }
+
   return {
     messages,
     userInput,
@@ -293,5 +328,9 @@ export function useChat(deps) {
     stopGeneration,
     decideApproval,
     uploadFile,
+    editMessage,
+    regenerateResponse,
+    toggleLike,
+    toggleDislike,
   }
 }

@@ -55,6 +55,8 @@ export function foldMessagesForUi(rawMessages = []) {
         content,
         toolCalls: pendingTools.length ? pendingTools : undefined,
         isStreaming: false,
+        liked: !!m.liked,
+        disliked: !!m.disliked,
       })
       pendingTools = []
     }
