@@ -35,8 +35,17 @@ class Config:
         os.getenv("WORKSPACE_DIR", str(_BACKEND_DIR / "data" / "workspace"))
     )
 
+    # 跨会话长期记忆
+    MEMORY_DIR: Path = Path(
+        os.getenv("MEMORY_DIR", str(_BACKEND_DIR / "data" / "memory"))
+    )
+
     # Agent loop
     AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "8"))
+
+    # Context compression（按字符粗估，超限则摘要旧轮次）
+    CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))
+    CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
 
 
 config = Config()

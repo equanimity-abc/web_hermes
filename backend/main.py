@@ -12,12 +12,14 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from agent import agent, messages_for_api
+from agent.compressor import maybe_compress
+from agent.memory_store import memory_path, read_memory, write_memory
 from config import config
-from session_store import SessionStore
+from session_store import SessionStore, refresh_system_prompt
 from stream_manager import BusyError, streams
 from tools.workspace import save_upload, workspace_root
 
-app = FastAPI(title="Agent Chat API", version="0.4.0")
+app = FastAPI(title="Agent Chat API", version="0.6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,6 +80,21 @@ def _persist_partial(
     if drop_user_on_empty and messages and messages[-1].get("role") == "user":
         messages.pop()
         store.save(session)
+
+
+async def _prepare_context(
+    session: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Refresh memory prompt, then compress long history in-place."""
+    refresh_system_prompt(session)
+    messages = session["messages"]
+    new_msgs, info = await maybe_compress(messages)
+    if info.get("compressed"):
+        session["messages"] = new_msgs
+        store.save(session)
+        return session["messages"], info
+    store.save(session)
+    return messages, info
 
 
 async def _run_stream_job(
@@ -212,6 +229,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     messages.append({"role": "user", "content": req.message})
     store.save(session)
 
+    messages, _compress_info = await _prepare_context(session)
     working = messages_for_api(messages)
     pre_len = len(working)
 
@@ -252,6 +270,7 @@ async def chat_start(req: ChatRequest) -> StartResponse:
     messages.append({"role": "user", "content": req.message})
     store.save(session)
 
+    messages, compress_info = await _prepare_context(session)
     working = messages_for_api(messages)
     pre_len = len(working)
 
@@ -263,6 +282,20 @@ async def chat_start(req: ChatRequest) -> StartResponse:
             "stream_id": state.stream_id,
         },
     )
+    if compress_info.get("compressed"):
+        streams.publish(
+            state.stream_id,
+            {
+                "type": "compress",
+                "before_chars": compress_info.get("before_chars"),
+                "after_chars": compress_info.get("after_chars"),
+                "removed": compress_info.get("removed"),
+            },
+        )
+        streams.publish(
+            state.stream_id,
+            {"type": "status", "text": "上下文过长，已摘要压缩历史…"},
+        )
 
     task = asyncio.create_task(
         _run_stream_job(state.stream_id, session_id, working, pre_len)
@@ -323,6 +356,33 @@ async def approval_respond(req: ApprovalRespondRequest):
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result)
     return result
+
+
+@app.get("/api/memory")
+async def memory_get():
+    text = read_memory()
+    return {
+        "path": str(memory_path()),
+        "chars": len(text),
+        "content": text,
+    }
+
+
+class MemoryWriteRequest(BaseModel):
+    content: str
+    mode: str = "append"  # append | replace
+
+
+@app.put("/api/memory")
+async def memory_put(req: MemoryWriteRequest):
+    mode = (req.mode or "append").strip().lower()
+    stored = write_memory(req.content, append=(mode != "replace"))
+    return {
+        "ok": True,
+        "mode": "append" if mode != "replace" else "replace",
+        "path": str(memory_path()),
+        "chars": len(stored),
+    }
 
 
 @app.get("/api/workspace")

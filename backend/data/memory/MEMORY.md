@@ -1,0 +1,2 @@
+- 用户喜欢简体中文
+- 项目名 my_tiktok_video
