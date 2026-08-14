@@ -32,7 +32,8 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 2. save_bible 写入人设 bible.md
 3. save_outline 写入系列大纲 outline.md
 4. save_episode 按集写入 episodes/epNN.md
-5. get / list 回看进度
+5. render_episode 按分镜生成画面 + 运镜 + 配音，合成竖屏 mp4
+6. get / list 回看进度；视频在 videos/epNN.mp4
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -171,12 +172,14 @@ def _action_list(_args: dict) -> str:
         if not data:
             continue
         episodes = data.get("episodes") or []
+        videos = data.get("videos") or []
         items.append(
             {
                 "slug": data.get("slug") or child.name,
                 "title": data.get("title") or child.name,
                 "logline": data.get("logline") or "",
                 "episodes": len(episodes),
+                "videos": len(videos),
                 "path": _rel(child.name),
                 "updated_at": data.get("updated_at"),
             }
@@ -218,6 +221,11 @@ def _action_get(args: dict) -> str:
         payload["episode"] = n
         payload["episode_path"] = ep_rel
         payload["episode_content"] = content
+        video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
+        video_path = resolve_safe(video_rel)
+        if video_path.is_file():
+            payload["video_path"] = video_rel
+            payload["play_url"] = f"/api/workspace/file?path={video_rel}"
     return _ok(**payload)
 
 
@@ -278,6 +286,70 @@ def _action_save_episode(args: dict) -> str:
     )
 
 
+def _episode_number(args: dict) -> tuple[str | None, int | None, str | None]:
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return None, None, "需要合法 slug"
+    try:
+        n = int(args.get("episode"))
+    except (TypeError, ValueError):
+        return slug, None, "需要 episode（正整数 1–99）"
+    if n < 1 or n > 99:
+        return slug, None, "episode 范围 1–99"
+    return slug, n, None
+
+
+def _action_parse_shots(args: dict) -> str:
+    from tools.drama_video import parse_episode_markdown
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
+    content = _read_text(ep_rel)
+    if content is None:
+        return _err("该集剧本不存在", slug=slug, episode=n, path=ep_rel)
+    parsed = parse_episode_markdown(content)
+    return _ok(action="parse_shots", slug=slug, episode=n, path=ep_rel, **parsed)
+
+
+def _action_render_episode(args: dict) -> str:
+    from tools.drama_video import render_episode_video
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    project = _load_project(slug)
+    if not project:
+        return _err("项目不存在，请先 init", slug=slug)
+    ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
+    content = _read_text(ep_rel)
+    if content is None:
+        return _err("该集剧本不存在，请先 save_episode", slug=slug, episode=n, path=ep_rel)
+    ep_meta = next(
+        (e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n),
+        {},
+    )
+    title = str(args.get("title") or ep_meta.get("title") or "").strip()
+    result = render_episode_video(slug, n, content, title=title)
+    videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != n]
+    videos.append(
+        {
+            "n": n,
+            "path": result["path"],
+            "play_url": result["play_url"],
+            "shots": result["shots"],
+            "bytes": result["bytes"],
+        }
+    )
+    videos.sort(key=lambda v: int(v.get("n") or 0))
+    project["videos"] = videos
+    _save_project(slug, project)
+    return _ok(action="render_episode", **result)
+
+
 def _tiktok_drama(args: dict) -> str:
     action = str(args.get("action") or "").strip().lower()
     handlers = {
@@ -288,6 +360,8 @@ def _tiktok_drama(args: dict) -> str:
         "save_bible": lambda a: _action_save_md(a, filename="bible.md", label="bible"),
         "save_outline": lambda a: _action_save_md(a, filename="outline.md", label="outline"),
         "save_episode": _action_save_episode,
+        "parse_shots": _action_parse_shots,
+        "render_episode": _action_render_episode,
     }
     handler = handlers.get(action)
     if not handler:
@@ -302,6 +376,8 @@ def _tiktok_drama(args: dict) -> str:
         return _err(str(e))
     except OSError as e:
         return _err(str(e))
+    except RuntimeError as e:
+        return _err(str(e))
 
 
 def register_tiktok_drama() -> None:
@@ -310,15 +386,16 @@ def register_tiktok_drama() -> None:
         description=(
             "抖音竖屏漫剧项目工具。action: "
             "guide（规范与剧本格式）、init（建项目）、list、get、"
-            "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）。"
-            "文件写在 workspace/dramas/{slug}/。"
+            "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
+            "parse_shots（解析分镜）、render_episode（分镜出画面+运镜+配音，生成竖屏视频）。"
+            "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode",
                     "enum": [
                         "guide",
                         "init",
@@ -327,6 +404,8 @@ def register_tiktok_drama() -> None:
                         "save_bible",
                         "save_outline",
                         "save_episode",
+                        "parse_shots",
+                        "render_episode",
                     ],
                 },
                 "slug": {
@@ -347,7 +426,7 @@ def register_tiktok_drama() -> None:
                 },
                 "episode": {
                     "type": "integer",
-                    "description": "集数 1–99，get / save_episode 使用",
+                    "description": "集数 1–99，get / save_episode / parse_shots / render_episode 使用",
                 },
                 "seconds": {
                     "type": "integer",
@@ -365,6 +444,9 @@ def register_tiktok_drama() -> None:
     add_plugin_prompt_hint(
         "抖音漫剧请调用 tiktok_drama：先 guide 看规范，再 init 建项目，"
         "save_bible / save_outline / save_episode 落盘到 workspace/dramas/{slug}/。"
+        "写完分集后立刻 render_episode：会按「画面」生成镜头画面并加运镜/配音，"
+        "不要再用 write_file 手动画字幕卡。回复里用返回的 play_url 做成 markdown 链接，"
+        "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )
 
 

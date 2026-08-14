@@ -92,6 +92,7 @@ Tool Registry
 | **P5** | 安全与工作区 | 约 1 周 | 危险命令审批、workspace 根目录、路径沙箱 | WebUI approval 合同；terminal 工具约束 | ✅ 已完成 |
 | **P6** | 记忆与压缩 | 约 1 周 | 简单记忆文件 + 超长上下文摘要压缩 | memory 拦截路径；`context_compressor` 思想 | ✅ 已完成 |
 | **P7** | 业务插件 | 按需 | 抖音漫剧等业务工具/技能，不改核心 loop | Footprint Ladder：能力放边缘 | ✅ 已完成 |
+| **P8** | 成片 | 按需 | 分镜 → 配音 → ffmpeg 竖屏 mp4 | 能力继续放插件边缘 | ✅ 已完成 |
 
 ---
 
@@ -169,6 +170,8 @@ P0–P7 骨架已齐。之后按痛点加能力即可：业务工具继续丢进
 
 P7 已完成：插件 `tiktok_drama`（guide / init / list / get / save_bible / save_outline / save_episode），项目落在 `workspace/dramas/{slug}/`；system prompt 动态列出工具 + 插件 hint。
 
+P8 已完成：`parse_shots` / `render_episode` 按分镜生成画面（Pollinations）+ Ken Burns 运镜 + edge-tts 配音，合成 9:16 mp4。成片：`workspace/dramas/{slug}/videos/epNN.mp4`。
+
 ---
 
 ## 怎么用两份源码（方法）
@@ -199,6 +202,7 @@ P7 已完成：插件 `tiktok_drama`（guide / init / list / get / save_bible / 
 | 审批（approval） | ✅ DONE |
 | 上下文压缩 | ✅ DONE |
 | 抖音漫剧插件 | ✅ DONE |
+| 分镜成片（配音 mp4） | ✅ DONE |
 
 ---
 

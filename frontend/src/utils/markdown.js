@@ -4,6 +4,19 @@ const codeBlockCounter = { count: 0 }
 
 marked.use({
   renderer: {
+    link({ href, title, text }) {
+      const url = String(href || '')
+      const safeHref = escapeHtml(url)
+      const label = text || url
+      const isVideo =
+        /\.mp4(\?|$)/i.test(url) ||
+        (url.includes('/api/workspace/file') && /\.mp4/i.test(url))
+      if (isVideo) {
+        return `<video class="md-video" controls preload="metadata" src="${safeHref}"></video>`
+      }
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
+      return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener noreferrer">${label}</a>`
+    },
     code({ text, lang }) {
       const id = 'code-' + codeBlockCounter.count++
       const safeLang = (lang || '').replace(/[<>"']/g, '')

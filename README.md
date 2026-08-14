@@ -71,6 +71,7 @@ npm run dev
 | POST | `/api/chat/approval/respond` | 批准/拒绝危险工具（`approved` / `denied`） |
 | POST | `/api/chat/stream` | 兼容旧客户端的一次性 POST SSE |
 | GET | `/api/workspace` | workspace 根目录信息 |
+| GET | `/api/workspace/file` | 预览/下载沙箱内文件（mp4 等） |
 | POST | `/api/workspace/upload` | 上传附件到 workspace 沙箱 |
 | GET | `/api/memory` | 读取跨会话长期记忆 |
 | PUT | `/api/memory` | 写入长期记忆（`append` / `replace`） |
@@ -82,6 +83,7 @@ npm run dev
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
 记忆文件：`backend/data/memory/MEMORY.md`（跨会话；新会话 system 会注入，每轮会刷新）。
 漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
+成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（按分镜出画面 + 运镜 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
 
 ## 开发路线
 
@@ -95,3 +97,4 @@ npm run dev
 - [x] P5: 审批与工作区加固（approval + upload + 路径沙箱）
 - [x] P6: 记忆与压缩（MEMORY.md + 上下文摘要）
 - [x] P7: 抖音漫剧插件（`tiktok_drama`，不改 agent loop）
+- [x] P8: 分镜成片（`render_episode` → 竖屏配音 mp4）
