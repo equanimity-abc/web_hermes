@@ -41,11 +41,15 @@ class Config:
     )
 
     # Agent loop
-    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "8"))
+    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "32"))
 
     # Context compression（按字符粗估，超限则摘要旧轮次）
     CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))
     CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
+
+    # 分镜画面（pollinations 免费图生；none 则只用运镜底图）
+    IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
+    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")
 
 
 config = Config()

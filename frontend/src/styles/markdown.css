@@ -359,3 +359,13 @@
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+.markdown-body .md-video {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  max-height: 500px;
+  margin: 8px 0 12px;
+  border-radius: 12px;
+  background: #111;
+}

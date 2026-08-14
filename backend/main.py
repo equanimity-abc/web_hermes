@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -17,7 +18,7 @@ from agent.memory_store import memory_path, read_memory, write_memory
 from config import config
 from session_store import SessionStore, refresh_system_prompt
 from stream_manager import BusyError, streams
-from tools.workspace import save_upload, workspace_root
+from tools.workspace import resolve_safe, save_upload, workspace_root
 
 app = FastAPI(title="Agent Chat API", version="0.6.0")
 
@@ -400,6 +401,36 @@ async def workspace_info():
         "exists": root.exists(),
         "hint": "上传文件使用 POST /api/workspace/upload；工具路径均为相对此目录",
     }
+
+
+_PLAYABLE = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".md": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+}
+
+
+@app.get("/api/workspace/file")
+async def workspace_file(path: str):
+    """Serve a sandboxed workspace file (videos / images / text)."""
+    try:
+        target = resolve_safe(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    media = _PLAYABLE.get(target.suffix.lower())
+    if not media:
+        raise HTTPException(status_code=403, detail="不允许预览该文件类型")
+    return FileResponse(target, media_type=media, filename=target.name)
 
 
 @app.post("/api/workspace/upload")
