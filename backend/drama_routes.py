@@ -50,6 +50,9 @@ class ShotPatch(BaseModel):
     camera: str | None = None
     duration: float | None = None
     timing: str | None = None
+    locked: list[str] | None = None
+    lock: list[str] | str | None = None
+    unlock: list[str] | str | None = None
 
 
 class RerenderRequest(BaseModel):
@@ -113,7 +116,7 @@ async def drama_list_shots(slug: str, episode: int):
 async def drama_patch_shot(slug: str, episode: int, shot: int, body: ShotPatch):
     try:
         return patch_shot(slug, episode, shot, body.model_dump(exclude_unset=True))
-    except (DramaNotFound, DramaBadRequest) as e:
+    except (DramaNotFound, DramaBadRequest, ValueError, KeyError) as e:
         raise _http(e) from e
 
 
@@ -122,5 +125,5 @@ async def drama_rerender_shot(slug: str, episode: int, shot: int, body: Rerender
     try:
         layers = (body.layers if body else None) or None
         return rerender_one_shot(slug, episode, shot, layers)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
         raise _http(e) from e

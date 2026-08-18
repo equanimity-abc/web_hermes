@@ -36,6 +36,8 @@ const {
   selectShot,
   saveShot,
   rerenderSelected,
+  rerenderLayer,
+  toggleLock,
 } = useDramaStudio()
 
 const {
@@ -202,6 +204,8 @@ onMounted(() => {
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"
+      @rerender-layer="rerenderLayer"
+      @toggle-lock="toggleLock"
     />
 
     <ApprovalModal

@@ -14,6 +14,7 @@ from tools.drama_shots import (
     load_doc,
     public_shot,
     save_doc,
+    set_shot_locks,
 )
 from tools.workspace import resolve_safe, workspace_root
 
@@ -249,6 +250,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "video_path": video_rel if video["exists"] else None,
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
+        "layer_ids": ["scene", "overlay", "voice", "clip"],
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -305,6 +307,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     shot_n = parse_shot_n(shot_n)
     allowed = ("画面", "对白", "字幕", "camera", "timing", "duration")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
+    has_lock = any(patch.get(k) is not None for k in ("locked", "lock", "unlock") if k in patch)
     if "duration" in body:
         try:
             body["duration"] = float(body["duration"])
@@ -317,30 +320,39 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         if cam and cam not in CAMERAS:
             raise DramaBadRequest(f"未知运镜：{cam}，可选 {', '.join(CAMERAS)}")
         body["camera"] = cam
-    if not body:
-        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / camera / duration）")
+    if not body and not has_lock:
+        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / camera / duration / locked）")
 
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
-    dirty = apply_patch(shot, body)
+    if has_lock:
+        set_shot_locks(
+            shot,
+            locked=patch.get("locked") if "locked" in patch else None,
+            lock=patch.get("lock"),
+            unlock=patch.get("unlock"),
+        )
+    dirty: list[str] = []
+    if body:
+        dirty = apply_patch(shot, body)
+        script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
+        script = _read_text(script_rel)
+        if script is not None:
+            from tools.drama_video import patch_shot_in_markdown
+
+            updated = patch_shot_in_markdown(script, shot_n, body)
+            if updated != script:
+                _write_text(script_rel, updated.rstrip() + "\n")
     save_doc(doc)
-
-    script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
-    script = _read_text(script_rel)
-    if script is not None:
-        from tools.drama_video import patch_shot_in_markdown
-
-        updated = patch_shot_in_markdown(script, shot_n, body)
-        if updated != script:
-            _write_text(script_rel, updated.rstrip() + "\n")
 
     return {
         "slug": slug,
         "episode": n,
         "shot": enrich_shot(shot),
-        "dirty": dirty,
+        "dirty": dirty or list(shot.get("dirty") or []),
+        "locked": list(shot.get("locked") or []),
         "shots_json": json_rel(slug, n),
     }
 

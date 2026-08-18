@@ -27,6 +27,7 @@ from tools.drama_shots import (
     load_doc,
     merge_from_parsed,
     output_rel,
+    parse_layers,
     public_shot,
     save_doc,
     work_rel,
@@ -852,9 +853,11 @@ def render_episode_video(
                 continue
             layers = list(LAYERS)
         info = render_shot_layers(slug, episode, shot, layers, title=ep_title)
-        rebuilt.append(int(shot["n"]))
+        if info.get("rebuilt"):
+            rebuilt.append(int(shot["n"]))
+        else:
+            skipped.append(int(shot["n"]))
         shot["status"] = "rendered" if not shot.get("dirty") else shot.get("status")
-        _ = info
     out_path = resolve_safe(str(doc.get("output") or output_rel(slug, episode)))
     if rebuilt or not out_path.is_file():
         assemble = assemble_episode(doc)
@@ -889,11 +892,30 @@ def rerender_shot(
     if patch:
         apply_patch(shot, patch)
 
-    wanted = layers
+    requested = parse_layers(layers, allow_assemble=True) if layers else []
+    locked = set(shot.get("locked") or [])
+    wanted = [layer for layer in requested if layer in LAYERS]
+    assemble_only = bool(requested) and not wanted and "assemble" in requested
+    if assemble_only:
+        assemble = assemble_episode(doc)
+        return _episode_result(
+            doc,
+            {
+                "rebuilt_shots": [],
+                "skipped_shots": [int(s["n"]) for s in doc.get("shots") or []],
+                "shot": public_shot(shot),
+                "rebuilt_layers": ["assemble"],
+                "skipped_layers": list(locked),
+                "assemble": assemble,
+            },
+        )
+
     if not wanted:
-        wanted = list(shot.get("dirty") or []) or layers_for_patch(patch) or ["clip"]
+        wanted = list(shot.get("dirty") or []) or layers_for_patch(patch, shot.get("locked")) or ["clip"]
     if "clip" not in wanted and any(layer in wanted for layer in ("scene", "overlay", "voice")):
-        wanted = [*wanted, "clip"]
+        if "clip" not in locked:
+            wanted = [*wanted, "clip"]
+    wanted = [layer for layer in wanted if layer not in locked]
 
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     info = render_shot_layers(slug, episode, shot, wanted, title=ep_title)
@@ -901,12 +923,13 @@ def rerender_shot(
     return _episode_result(
         doc,
         {
-            "rebuilt_shots": [shot_n],
+            "rebuilt_shots": [shot_n] if info.get("rebuilt") else [],
             "skipped_shots": [
                 int(s["n"]) for s in doc.get("shots") or [] if int(s["n"]) != shot_n
             ],
             "shot": public_shot(shot),
-            "rebuilt_layers": info.get("rebuilt"),
+            "rebuilt_layers": info.get("rebuilt") or [],
+            "skipped_layers": [layer for layer in (requested or wanted) if layer in locked],
             "assemble": assemble,
         },
     )

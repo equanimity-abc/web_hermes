@@ -3,13 +3,24 @@
  */
 
 async function request(path, options = {}) {
+  const method = (options.method || 'GET').toUpperCase()
+  const headers = { ...(options.headers || {}) }
+  if (method !== 'GET' && method !== 'HEAD') {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json'
+  }
   const resp = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers,
   })
-  const data = await resp.json().catch(() => ({}))
+  const text = await resp.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { detail: text || `HTTP ${resp.status}` }
+  }
   if (!resp.ok) {
-    const detail = data.detail || data.error || `HTTP ${resp.status}`
+    const detail = data.detail || data.error || text || `HTTP ${resp.status}`
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   }
   return data
@@ -53,4 +64,12 @@ export function rerenderShot(slug, episode, shot, layers) {
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/rerender`,
     { method: 'POST', body: JSON.stringify(layers ? { layers } : {}) },
   )
+}
+
+export function lockShot(slug, episode, shot, { lock, unlock, locked } = {}) {
+  const body = {}
+  if (locked !== undefined) body.locked = locked
+  if (lock) body.lock = lock
+  if (unlock) body.unlock = unlock
+  return patchShot(slug, episode, shot, body)
 }

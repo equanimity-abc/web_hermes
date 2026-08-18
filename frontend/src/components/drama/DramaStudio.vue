@@ -18,10 +18,33 @@ const props = defineProps({
   bust: { type: Number, default: 0 },
 })
 
-const emit = defineEmits(['open-episode', 'select-shot', 'save', 'rerender', 'save-episode'])
+const emit = defineEmits([
+  'open-episode',
+  'select-shot',
+  'save',
+  'rerender',
+  'rerender-layer',
+  'toggle-lock',
+  'save-episode',
+])
 
 const previewMode = ref('shot')
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
+const layerRows = [
+  { id: 'scene', label: '画面' },
+  { id: 'overlay', label: '字幕' },
+  { id: 'voice', label: '配音' },
+  { id: 'clip', label: '成片' },
+  { id: 'assemble', label: '整集' },
+]
+
+function isLocked(layer) {
+  return (props.selected?.locked || []).includes(layer)
+}
+
+function isDirtyLayer(layer) {
+  return (props.selected?.dirty || []).includes(layer)
+}
 
 const previewUrl = computed(() => {
   let url = ''
@@ -90,7 +113,9 @@ function statusLabel(shot) {
             <strong>Shot {{ shot.n }}</strong>
             <em>{{ shot.画面 || '（无画面描述）' }}</em>
           </span>
-          <span class="drama-shot-flag">{{ statusLabel(shot) }}</span>
+          <span class="drama-shot-flag">
+            <template v-if="(shot.locked || []).length">锁 </template>{{ statusLabel(shot) }}
+          </span>
         </button>
         <p v-if="!shots.length" class="drama-empty-hint">
           还没有 shots.json。请先在对话里 parse_shots 或 render_episode。
@@ -130,35 +155,67 @@ function statusLabel(shot) {
         <template v-if="selected">
           <label>
             画面
-            <textarea v-model="draft.画面" rows="3" />
+            <textarea v-model="draft.画面" rows="3" :disabled="isLocked('scene')" />
           </label>
           <label>
             对白
             <textarea v-model="draft.对白" rows="3" />
           </label>
-          <label>
+            <label>
             字幕
-            <textarea v-model="draft.字幕" rows="2" />
+            <textarea v-model="draft.字幕" rows="2" :disabled="isLocked('overlay')" />
           </label>
           <label>
             运镜
-            <select v-model="draft.camera">
+            <select v-model="draft.camera" :disabled="isLocked('clip')">
               <option v-for="cam in cameras" :key="cam" :value="cam">{{ cam }}</option>
             </select>
           </label>
           <label>
             时长（秒）
-            <input v-model.number="draft.duration" type="number" min="0.2" step="0.1" />
+            <input v-model.number="draft.duration" type="number" min="0.2" step="0.1" :disabled="isLocked('clip')" />
           </label>
+          <h3 class="drama-layers-title">分层</h3>
+          <div class="drama-layers">
+            <div v-for="row in layerRows" :key="row.id" class="drama-layer-row">
+              <span>{{ row.label }}</span>
+              <span class="drama-layer-flags">
+                <em v-if="isLocked(row.id)">锁</em>
+                <em v-else-if="isDirtyLayer(row.id)" class="is-dirty">脏</em>
+                <em v-else>可渲</em>
+              </span>
+              <button
+                v-if="row.id !== 'assemble'"
+                type="button"
+                class="btn-tiny"
+                :disabled="saving || rendering"
+                @click="emit('toggle-lock', row.id)"
+              >
+                {{ isLocked(row.id) ? '解锁' : '锁定' }}
+              </button>
+              <span v-else />
+              <button
+                type="button"
+                class="btn-tiny"
+                :disabled="rendering || saving || isLocked(row.id)"
+                @click="emit('rerender-layer', row.id)"
+              >
+                {{ row.id === 'assemble' ? '重拼' : '仅重做' }}
+              </button>
+            </div>
+          </div>
           <p v-if="(selected.dirty || []).length" class="drama-dirty">
             脏层：{{ selected.dirty.join(' / ') }}
+          </p>
+          <p v-if="(selected.locked || []).length" class="drama-locked">
+            已锁：{{ selected.locked.join(' / ') }}（重渲不会覆盖）
           </p>
           <div class="drama-actions">
             <button type="button" class="btn-primary" :disabled="saving || !dirty" @click="emit('save')">
               {{ saving ? '保存中…' : '保存' }}
             </button>
             <button type="button" class="btn-ghost" :disabled="rendering || saving" @click="emit('rerender')">
-              {{ rendering ? '重渲中…' : '重渲本镜' }}
+              {{ rendering ? '重渲中…' : '重渲脏层' }}
             </button>
           </div>
         </template>

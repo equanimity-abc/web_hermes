@@ -34,8 +34,9 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 4. save_episode 按集写入 episodes/epNN.md
 5. parse_shots 解析分镜并写入 videos/epNN/shots.json（分镜真相源）
 6. render_episode 按镜生成 clip，再拼接竖屏 mp4
-7. 改某一镜（如字幕）用 rerender_shot，只重渲该镜再整集重拼
-8. get / list 回看进度；成片 videos/epNN.mp4
+7. 改某一镜用 rerender_shot；layers=scene|overlay|voice|clip|assemble 只重做指定层
+8. lock_shot 锁住 scene 后，改台词只换声和字幕，不会覆盖画面
+9. get / list 回看进度；成片 videos/epNN.mp4
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -461,6 +462,35 @@ def _action_rerender_shot(args: dict) -> str:
     return _ok(action="rerender_shot", **result)
 
 
+def _action_lock_shot(args: dict) -> str:
+    from tools.drama_studio import patch_shot
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    try:
+        shot_n = int(args.get("shot"))
+    except (TypeError, ValueError):
+        return _err("需要 shot（镜头号，正整数）")
+    if shot_n < 1 or shot_n > 99:
+        return _err("shot 范围 1–99")
+    patch: dict[str, Any] = {}
+    if args.get("locked") is not None:
+        patch["locked"] = _parse_layers(args.get("locked")) or []
+    if args.get("lock") is not None:
+        patch["lock"] = args.get("lock")
+    if args.get("unlock") is not None:
+        patch["unlock"] = args.get("unlock")
+    if args.get("layers") and "lock" not in patch and "unlock" not in patch and "locked" not in patch:
+        patch["lock"] = args.get("layers")
+    if not patch:
+        return _err("需要 locked / lock / unlock（层名：scene,overlay,voice,clip）")
+    result = patch_shot(slug, n, shot_n, patch)
+    return _ok(action="lock_shot", **result)
+
+
 def _tiktok_drama(args: dict) -> str:
     action = str(args.get("action") or "").strip().lower()
     handlers = {
@@ -474,6 +504,7 @@ def _tiktok_drama(args: dict) -> str:
         "parse_shots": _action_parse_shots,
         "render_episode": _action_render_episode,
         "rerender_shot": _action_rerender_shot,
+        "lock_shot": _action_lock_shot,
     }
     handler = handlers.get(action)
     if not handler:
@@ -500,7 +531,7 @@ def register_tiktok_drama() -> None:
             "guide（规范与剧本格式）、init（建项目）、list、get、"
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
-            "rerender_shot（只重渲一镜再整集重拼）。"
+            "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -508,7 +539,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot",
                     "enum": [
                         "guide",
                         "init",
@@ -520,6 +551,7 @@ def register_tiktok_drama() -> None:
                         "parse_shots",
                         "render_episode",
                         "rerender_shot",
+                        "lock_shot",
                     ],
                 },
                 "slug": {
@@ -548,7 +580,7 @@ def register_tiktok_drama() -> None:
                 },
                 "layers": {
                     "type": "string",
-                    "description": "rerender_shot 要重做的层，逗号分隔：scene,overlay,voice,clip；默认按改动推断",
+                    "description": "rerender_shot 要重做的层，逗号分隔：scene,overlay,voice,clip,assemble；默认按脏层推断。lock_shot 时作为要锁定的层",
                 },
                 "force": {
                     "type": "boolean",
@@ -574,6 +606,18 @@ def register_tiktok_drama() -> None:
                     "type": "number",
                     "description": "rerender_shot 时覆盖该镜秒数",
                 },
+                "lock": {
+                    "type": "string",
+                    "description": "lock_shot 要锁定的层，逗号分隔：scene,overlay,voice,clip",
+                },
+                "unlock": {
+                    "type": "string",
+                    "description": "lock_shot 要解锁的层，逗号分隔",
+                },
+                "locked": {
+                    "type": "string",
+                    "description": "lock_shot 时整表替换锁定层；空字符串表示全部解锁",
+                },
                 "seconds": {
                     "type": "integer",
                     "description": "save_episode 预估时长（15–90，默认 45）",
@@ -591,7 +635,8 @@ def register_tiktok_drama() -> None:
         "抖音漫剧请调用 tiktok_drama：先 guide 看规范，再 init 建项目，"
         "save_bible / save_outline / save_episode 落盘到 workspace/dramas/{slug}/。"
         "写完分集后先 parse_shots 落盘 shots.json，再 render_episode。"
-        "只改某一镜（例如字幕）请用 rerender_shot，不要整集重渲。"
+        "只改某一镜请用 rerender_shot；layers 可指定 scene/overlay/voice/clip。"
+        "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

@@ -119,7 +119,25 @@ export function useDramaStudio() {
     }
   }
 
-  async function rerenderSelected() {
+  async function toggleLock(layer) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !layer) return
+    const locked = selected.value?.locked || []
+    const has = locked.includes(layer)
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.lockShot(slug.value, episodeN.value, selectedN.value, has ? { unlock: [layer] } : { lock: [layer] })
+      await openEpisode(episodeN.value)
+      notice.value = has ? `已解锁 ${layer}` : `已锁定 ${layer}，重渲不会覆盖该层`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function rerenderLayer(layer) {
     if (!slug.value || !episodeN.value || !selectedN.value) return
     if (dirty.value) {
       await saveShot()
@@ -129,10 +147,16 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     try {
-      await dramaApi.rerenderShot(slug.value, episodeN.value, selectedN.value)
+      const result = await dramaApi.rerenderShot(
+        slug.value,
+        episodeN.value,
+        selectedN.value,
+        layer ? [layer] : undefined,
+      )
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = '本镜已重渲，整集已重拼。'
+      const rebuilt = (result.rebuilt_layers || []).join(' / ') || '无'
+      notice.value = layer ? `已重做 ${layer}（实际重建：${rebuilt}）` : `本镜已重渲（${rebuilt}）`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -178,7 +202,9 @@ export function useDramaStudio() {
     openEpisode,
     selectShot,
     saveShot,
-    rerenderSelected,
+    rerenderSelected: () => rerenderLayer(),
+    rerenderLayer,
+    toggleLock,
     saveEpisodeMeta,
   }
 }

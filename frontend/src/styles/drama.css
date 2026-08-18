@@ -279,10 +279,63 @@
   resize: vertical;
 }
 
-.drama-dirty {
+.drama-layers-title {
   font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 4px 0 8px;
+  font-weight: 600;
+}
+
+.drama-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.drama-layer-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.drama-layer-flags em {
+  font-style: normal;
+  color: var(--color-text-faint);
+}
+
+.drama-layer-flags em.is-dirty {
   color: #b45309;
+}
+
+.btn-tiny {
+  border: 1px solid var(--color-border);
+  background: #fff;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.btn-tiny:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.drama-locked {
+  font-size: 12px;
+  color: var(--color-primary);
   margin-bottom: 10px;
+}
+
+.drama-inspector textarea:disabled,
+.drama-inspector input:disabled,
+.drama-inspector select:disabled {
+  background: var(--color-bg-muted);
+  color: var(--color-text-muted);
 }
 
 .drama-actions {

@@ -15,6 +15,14 @@ from typing import Any
 from tools.workspace import resolve_safe
 
 LAYERS = ("scene", "overlay", "voice", "clip")
+RENDER_LAYERS = (*LAYERS, "assemble")
+LAYER_LABELS = {
+    "scene": "画面",
+    "overlay": "字幕",
+    "voice": "配音",
+    "clip": "成片",
+    "assemble": "整集拼接",
+}
 _CONTENT_KEYS = ("画面", "对白", "字幕", "duration", "timing")
 
 
@@ -64,12 +72,15 @@ def load_doc(slug: str, episode: int) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
-    return data
+    return normalize_doc(data, slug, episode)
 
 
 def save_doc(doc: dict[str, Any]) -> str:
-    slug = str(doc["slug"])
-    episode = int(doc["episode"])
+    slug = str(doc.get("slug") or "")
+    episode = int(doc.get("episode") or 0)
+    if not slug or episode < 1:
+        raise ValueError("shots.json 缺少 slug/episode，无法保存")
+    doc = normalize_doc(doc, slug, episode)
     rel = json_rel(slug, episode)
     path = resolve_safe(rel)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +105,77 @@ def _asset_exists(rel: str) -> bool:
         return resolve_safe(rel).is_file() and resolve_safe(rel).stat().st_size > 0
     except ValueError:
         return False
+
+
+def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade legacy shot records (pre-D0 flat clip/scene fields) to assets schema."""
+    n = int(raw.get("n") or 0)
+    defaults = shot_assets(slug, episode, n)
+    existing = raw.get("assets") if isinstance(raw.get("assets"), dict) else {}
+    assets = {**defaults, **{k: str(v) for k, v in existing.items() if v}}
+
+    # Legacy: top-level "clip": "dramas/.../shot01.mp4"
+    legacy_clip = raw.get("clip")
+    if isinstance(legacy_clip, str) and legacy_clip.strip() and "/" in legacy_clip:
+        assets["clip"] = legacy_clip.strip()
+
+    scene_source = str(raw.get("scene_source") or "")
+    legacy_scene = raw.get("scene")
+    if legacy_scene in ("ai", "fallback") and not scene_source:
+        scene_source = str(legacy_scene)
+
+    need_voice = bool(str(raw.get("对白") or "").strip() or str(raw.get("字幕") or "").strip())
+    dirty = _as_str_list(raw.get("dirty"))
+    if not dirty and "dirty" not in raw:
+        # Fresh legacy docs have no dirty tracking — mark missing layers.
+        for layer in LAYERS:
+            if layer == "voice" and not need_voice:
+                continue
+            if not _asset_exists(assets.get(layer) or ""):
+                dirty.append(layer)
+    locked = _as_str_list(raw.get("locked"))
+    status = str(raw.get("status") or "")
+    if not status:
+        status = "rendered" if _asset_exists(assets.get("clip") or "") and not dirty else (
+            "dirty" if dirty else "pending"
+        )
+
+    duration = float(raw.get("duration") or 5)
+    return {
+        "n": n,
+        "timing": str(raw.get("timing") or ""),
+        "start": float(raw.get("start") or 0),
+        "end": float(raw.get("end") or duration),
+        "duration": duration,
+        "画面": str(raw.get("画面") or ""),
+        "对白": str(raw.get("对白") or ""),
+        "字幕": str(raw.get("字幕") or ""),
+        "camera": str(raw.get("camera") or ""),
+        "prompt": str(raw.get("prompt") or ""),
+        "locked": locked,
+        "dirty": dirty,
+        "status": status,
+        "scene_source": scene_source,
+        "assets": assets,
+    }
+
+
+def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, Any]:
+    """Ensure shots.json has D0 fields so PATCH/rerender work on older projects."""
+    shots = [normalize_shot(slug, episode, s) for s in (data.get("shots") or []) if isinstance(s, dict)]
+    return {
+        **data,
+        "slug": slug,
+        "episode": episode,
+        "title": data.get("title") or f"第{episode}集",
+        "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
+        "script_path": str(data.get("script_path") or script_rel(slug, episode)),
+        "work_dir": str(data.get("work_dir") or work_rel(slug, episode)),
+        "output": str(data.get("output") or output_rel(slug, episode)),
+        "count": len(shots),
+        "shots": shots,
+        "updated_at": str(data.get("updated_at") or utc_now()),
+    }
 
 
 def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
@@ -152,7 +234,24 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
     return ordered
 
 
-def layers_for_patch(patch: dict[str, Any]) -> list[str]:
+def parse_layers(raw: Any, *, allow_assemble: bool = False) -> list[str]:
+    allowed = RENDER_LAYERS if allow_assemble else LAYERS
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        parts = [str(x).strip() for x in raw]
+    else:
+        parts = [str(raw).strip()]
+    ordered: list[str] = []
+    for part in parts:
+        if part in allowed and part not in ordered:
+            ordered.append(part)
+    return ordered
+
+
+def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
     dirty: list[str] = []
     if "画面" in patch:
         dirty.extend(["scene", "clip"])
@@ -162,15 +261,28 @@ def layers_for_patch(patch: dict[str, Any]) -> list[str]:
         dirty.extend(["overlay", "clip"])
     if "timing" in patch or "duration" in patch or "camera" in patch:
         dirty.extend(["clip"])
+    locked_set = set(_as_str_list(locked))
     ordered: list[str] = []
     for layer in LAYERS:
-        if layer in dirty and layer not in ordered:
+        if layer in dirty and layer not in locked_set and layer not in ordered:
             ordered.append(layer)
     return ordered
 
 
 def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     """Apply field edits and return newly dirtied layers (minus locks)."""
+    locked = set(_as_str_list(shot.get("locked")))
+    patch = dict(patch or {})
+    if "scene" in locked:
+        patch.pop("画面", None)
+    if "overlay" in locked:
+        patch.pop("字幕", None)
+    if "voice" in locked and "overlay" in locked:
+        patch.pop("对白", None)
+    if "clip" in locked:
+        for key in ("camera", "duration", "timing", "start", "end"):
+            patch.pop(key, None)
+
     before = {k: shot.get(k) for k in (*_CONTENT_KEYS, "camera")}
     for key in ("画面", "对白", "字幕", "timing", "camera"):
         if key in patch and patch[key] is not None:
@@ -183,15 +295,40 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         shot["end"] = float(patch["end"])
     dirty = infer_dirty({**shot, **before, "locked": shot.get("locked")}, shot)
     if "duration" in patch and patch["duration"] is not None:
-        if "clip" not in dirty:
+        if "clip" not in dirty and "clip" not in locked:
             dirty.append("clip")
+    dirty = [layer for layer in dirty if layer not in locked]
     merged = _as_str_list(shot.get("dirty"))
     for layer in dirty:
-        if layer not in merged:
+        if layer not in merged and layer not in locked:
             merged.append(layer)
-    shot["dirty"] = merged
-    shot["status"] = "dirty" if merged else shot.get("status") or "pending"
+    shot["dirty"] = [layer for layer in merged if layer not in locked]
+    shot["status"] = "dirty" if shot["dirty"] else shot.get("status") or "pending"
     return dirty
+
+
+def set_shot_locks(
+    shot: dict[str, Any],
+    *,
+    locked: Any = None,
+    lock: Any = None,
+    unlock: Any = None,
+) -> list[str]:
+    """Replace or incrementally update locked layers. Locked layers drop out of dirty."""
+    current = _as_str_list(shot.get("locked"))
+    if locked is not None:
+        current = parse_layers(locked)
+    else:
+        for layer in parse_layers(lock):
+            if layer not in current:
+                current.append(layer)
+        drop = set(parse_layers(unlock))
+        current = [layer for layer in current if layer not in drop]
+    shot["locked"] = [layer for layer in LAYERS if layer in current]
+    shot["dirty"] = [layer for layer in _as_str_list(shot.get("dirty")) if layer not in shot["locked"]]
+    if not shot["dirty"] and shot.get("status") == "dirty":
+        shot["status"] = "rendered"
+    return list(shot["locked"])
 
 
 def merge_from_parsed(
@@ -213,10 +350,21 @@ def merge_from_parsed(
         old = old_by_n.get(rec["n"])
         if old:
             rec["locked"] = _as_str_list(old.get("locked"))
+            locked = set(rec["locked"])
             rec["camera"] = str(old.get("camera") or rec["camera"])
             rec["prompt"] = str(old.get("prompt") or "")
             rec["scene_source"] = str(old.get("scene_source") or "")
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
+            if "scene" in locked:
+                rec["画面"] = str(old.get("画面") or rec["画面"])
+                rec["prompt"] = str(old.get("prompt") or rec.get("prompt") or "")
+                rec["scene_source"] = str(old.get("scene_source") or rec["scene_source"])
+            if "overlay" in locked:
+                rec["字幕"] = str(old.get("字幕") or rec["字幕"])
+            if "voice" in locked and "overlay" in locked:
+                rec["对白"] = str(old.get("对白") or rec["对白"])
+            if "clip" in locked:
+                rec["duration"] = float(old.get("duration") or rec["duration"])
             rec["dirty"] = infer_dirty(old, rec)
             if not rec["dirty"] and _asset_exists(rec["assets"].get("clip") or ""):
                 rec["status"] = "rendered"
