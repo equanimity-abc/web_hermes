@@ -435,6 +435,42 @@
   font-size: 13px;
 }
 
+.drama-file {
+  display: none;
+}
+
+.drama-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.drama-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.drama-roles em {
+  width: 100%;
+  font-style: normal;
+  color: var(--color-primary);
+}
+
+.drama-shot-item--add {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
 .btn-primary {
   background: var(--color-primary);
   color: #fff;

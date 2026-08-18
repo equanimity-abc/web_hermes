@@ -17,10 +17,17 @@ export function useDramaStudio() {
   const scriptDraft = ref('')
   const scriptImpact = ref(null)
   const boardMode = ref('shots')
+  const selectedCharacterId = ref(null)
+  const charDraft = ref(emptyCharDraft())
 
   const shots = computed(() => episode.value?.shots || [])
   const selected = computed(() => shots.value.find((s) => s.n === selectedN.value) || null)
   const episodes = computed(() => project.value?.episodes || [])
+  const characters = computed(() => project.value?.characters || episode.value?.characters || [])
+  const voices = computed(() => project.value?.voices || episode.value?.voices || [])
+  const selectedCharacter = computed(
+    () => characters.value.find((c) => c.id === selectedCharacterId.value) || null,
+  )
   const dirty = computed(() => {
     const shot = selected.value
     if (!shot) return false
@@ -29,12 +36,22 @@ export function useDramaStudio() {
       String(draft.value.对白 || '') !== String(shot.对白 || '') ||
       String(draft.value.字幕 || '') !== String(shot.字幕 || '') ||
       String(draft.value.camera || '') !== String(shot.camera || '') ||
-      Number(draft.value.duration || 0) !== Number(shot.duration || 0)
+      Number(draft.value.duration || 0) !== Number(shot.duration || 0) ||
+      rolesKey(draft.value.角色) !== rolesKey(shot.角色)
     )
   })
 
   function emptyDraft() {
-    return { 画面: '', 对白: '', 字幕: '', camera: 'punch_in', duration: 3 }
+    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3 }
+  }
+
+  function emptyCharDraft() {
+    return { id: '', name: '', look: '', voice: 'zh-CN-YunxiNeural', aliases: '', colors: '' }
+  }
+
+  function rolesKey(raw) {
+    const list = Array.isArray(raw) ? raw : String(raw || '').split(/[,，、]/)
+    return list.map((x) => String(x || '').trim()).filter(Boolean).join(',')
   }
 
   function fillDraft(shot) {
@@ -42,8 +59,20 @@ export function useDramaStudio() {
       画面: shot?.画面 || '',
       对白: shot?.对白 || '',
       字幕: shot?.字幕 || '',
+      角色: Array.isArray(shot?.角色) ? [...shot.角色] : [],
       camera: shot?.camera || 'punch_in',
       duration: Number(shot?.duration || 3),
+    }
+  }
+
+  function fillCharDraft(char) {
+    charDraft.value = {
+      id: char?.id || '',
+      name: char?.name || '',
+      look: char?.look || '',
+      voice: char?.voice || 'zh-CN-YunxiNeural',
+      aliases: (char?.aliases || []).join('、'),
+      colors: char?.colors || '',
     }
   }
 
@@ -73,6 +102,9 @@ export function useDramaStudio() {
       selectedN.value = null
       fillDraft(null)
     }
+    const firstChar = (data.characters || [])[0]
+    selectedCharacterId.value = firstChar?.id || null
+    fillCharDraft(firstChar || null)
   }
 
   async function openEpisode(n) {
@@ -108,6 +140,9 @@ export function useDramaStudio() {
       if (String(draft.value.camera || '') !== String(shot.camera || '')) body.camera = draft.value.camera
       if (Number(draft.value.duration || 0) !== Number(shot.duration || 0)) {
         body.duration = Number(draft.value.duration)
+      }
+      if (rolesKey(draft.value.角色) !== rolesKey(shot.角色)) {
+        body.角色 = [...(draft.value.角色 || [])]
       }
       if (!Object.keys(body).length) {
         notice.value = '没有改动'
@@ -263,6 +298,142 @@ export function useDramaStudio() {
     }
   }
 
+  async function refreshCast() {
+    if (!slug.value) return
+    project.value = await dramaApi.getProject(slug.value)
+    const keep = characters.value.some((c) => c.id === selectedCharacterId.value)
+    selectCharacter(keep ? selectedCharacterId.value : characters.value[0]?.id || null)
+    if (episodeN.value) {
+      try {
+        await openEpisode(episodeN.value)
+      } catch {
+        /* keep current episode */
+      }
+    }
+  }
+
+  function selectCharacter(id) {
+    selectedCharacterId.value = id
+    fillCharDraft(characters.value.find((c) => c.id === id) || null)
+  }
+
+  function toggleShotRole(id) {
+    if (!id || shotFrozenLocked()) return
+    const cur = new Set(draft.value.角色 || [])
+    if (cur.has(id)) cur.delete(id)
+    else cur.add(id)
+    const ordered = characters.value.map((c) => c.id).filter((cid) => cur.has(cid))
+    for (const extra of cur) {
+      if (!ordered.includes(extra)) ordered.push(extra)
+    }
+    draft.value.角色 = ordered
+  }
+
+  function shotFrozenLocked() {
+    return (selected.value?.locked || []).includes('shot')
+  }
+
+  async function addCharacter() {
+    if (!slug.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const rec = await dramaApi.createCharacter(slug.value, { name: '新角色' })
+      await refreshCast()
+      selectCharacter(rec.id)
+      notice.value = '已添加角色卡'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function saveCharacterCard() {
+    if (!slug.value) return
+    const cid = String(charDraft.value.id || selectedCharacterId.value || '').trim()
+    if (!cid && !charDraft.value.name) {
+      error.value = '请填写角色 id 或名字'
+      return
+    }
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const rec = cid
+        ? await dramaApi.saveCharacter(slug.value, cid, {
+            name: charDraft.value.name,
+            look: charDraft.value.look,
+            voice: charDraft.value.voice,
+            aliases: charDraft.value.aliases,
+            colors: charDraft.value.colors,
+          })
+        : await dramaApi.createCharacter(slug.value, {
+            name: charDraft.value.name,
+            look: charDraft.value.look,
+            voice: charDraft.value.voice,
+            aliases: charDraft.value.aliases,
+            colors: charDraft.value.colors,
+          })
+      await refreshCast()
+      selectCharacter(rec.id)
+      notice.value = '角色卡已保存；外形/音色改动会标记相关镜头为脏'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function lockSelectedRef() {
+    if (!slug.value || !selectedCharacterId.value) return
+    const locked = !selectedCharacter.value?.ref_locked
+    saving.value = true
+    error.value = ''
+    try {
+      await dramaApi.lockCharacterRef(slug.value, selectedCharacterId.value, locked)
+      await refreshCast()
+      notice.value = locked ? '已锁定参考图' : '已解锁参考图'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function uploadSelectedRef(file) {
+    if (!slug.value || !selectedCharacterId.value || !file) return
+    saving.value = true
+    error.value = ''
+    try {
+      await dramaApi.uploadCharacterRef(slug.value, selectedCharacterId.value, file)
+      bust.value = Date.now()
+      await refreshCast()
+      notice.value = '参考图已更新，出图 prompt 会带上外形与配色'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function deleteSelectedCharacter() {
+    if (!slug.value || !selectedCharacterId.value) return
+    saving.value = true
+    error.value = ''
+    try {
+      await dramaApi.deleteCharacter(slug.value, selectedCharacterId.value)
+      selectedCharacterId.value = null
+      await refreshCast()
+      notice.value = '角色已删除'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   return {
     projects,
     slug,
@@ -283,6 +454,11 @@ export function useDramaStudio() {
     scriptDraft,
     scriptImpact,
     boardMode,
+    characters,
+    voices,
+    selectedCharacterId,
+    selectedCharacter,
+    charDraft,
     assetUrl,
     refreshProjects,
     openProject,
@@ -296,5 +472,12 @@ export function useDramaStudio() {
     previewScriptChanges,
     saveScriptChanges,
     rerenderDirtyShots,
+    selectCharacter,
+    toggleShotRole,
+    addCharacter,
+    saveCharacterCard,
+    lockSelectedRef,
+    uploadSelectedRef,
+    deleteSelectedCharacter,
   }
 }

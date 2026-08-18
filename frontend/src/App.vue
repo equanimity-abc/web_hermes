@@ -33,6 +33,11 @@ const {
   scriptDraft: dramaScriptDraft,
   scriptImpact: dramaScriptImpact,
   boardMode: dramaBoardMode,
+  characters: dramaCharacters,
+  voices: dramaVoices,
+  selectedCharacterId: dramaSelectedCharacterId,
+  selectedCharacter: dramaSelectedCharacter,
+  charDraft: dramaCharDraft,
   refreshProjects,
   openProject,
   openEpisode,
@@ -44,6 +49,13 @@ const {
   previewScriptChanges,
   saveScriptChanges,
   rerenderDirtyShots,
+  selectCharacter,
+  toggleShotRole,
+  addCharacter,
+  saveCharacterCard,
+  lockSelectedRef,
+  uploadSelectedRef,
+  deleteSelectedCharacter,
 } = useDramaStudio()
 
 const {
@@ -209,6 +221,11 @@ onMounted(() => {
       v-model:script-draft="dramaScriptDraft"
       :script-impact="dramaScriptImpact"
       v-model:board-mode="dramaBoardMode"
+      :characters="dramaCharacters"
+      :voices="dramaVoices"
+      :selected-character-id="dramaSelectedCharacterId"
+      :selected-character="dramaSelectedCharacter"
+      :char-draft="dramaCharDraft"
       @open-episode="openEpisode"
       @select-shot="selectShot"
       @save="saveShot"
@@ -218,6 +235,13 @@ onMounted(() => {
       @preview-script="previewScriptChanges"
       @save-script="saveScriptChanges"
       @rerender-dirty="rerenderDirtyShots"
+      @select-character="selectCharacter"
+      @add-character="addCharacter"
+      @save-character="saveCharacterCard"
+      @lock-ref="lockSelectedRef"
+      @upload-ref="uploadSelectedRef"
+      @delete-character="deleteSelectedCharacter"
+      @toggle-role="toggleShotRole"
     />
 
     <ApprovalModal

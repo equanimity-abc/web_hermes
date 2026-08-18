@@ -39,6 +39,9 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 9. lock_shot 锁住 shot（整镜）后，save_episode 改剧本不会覆盖该镜
 10. get / list 回看进度；成片 videos/epNN.mp4
 11. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）
+12. save_character 写角色卡（外形 look + 音色 voice）；工作台可上传并锁定妆图
+13. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
+14. 锁参考图后无法覆盖已锁定的定妆 png
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -51,11 +54,13 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 - 画面:
 - 对白:
 - 字幕:
+- 角色:
 
 ### Shot 2 (3-12s)
 - 画面:
 - 对白:
 - 字幕:
+- 角色:
 """
 
 
@@ -159,7 +164,7 @@ def _action_init(args: dict) -> str:
             f"- slug: `{slug}`\n"
             f"- 画幅: 9:16\n"
             f"- 一句话: {logline or '（待写）'}\n\n"
-            f"目录：`bible.md` 人设 · `outline.md` 大纲 · `episodes/` 分集剧本\n"
+            f"目录：`bible.md` 人设 · `characters.json` 角色卡 · `outline.md` 大纲 · `episodes/` 分集剧本\n"
         )
         files.append(_write_text(_rel(slug, "README.md"), readme))
     resolve_safe(_rel(slug, "episodes")).mkdir(parents=True, exist_ok=True)
@@ -212,6 +217,12 @@ def _action_get(args: dict) -> str:
     outline = _read_text(_rel(slug, "outline.md"))
     if outline is not None:
         payload["outline"] = outline
+    try:
+        from tools.drama_studio import list_characters
+
+        payload["characters"] = list_characters(slug)
+    except Exception:
+        payload["characters"] = []
     if episode is not None and str(episode).strip() != "":
         try:
             n = int(episode)
@@ -439,7 +450,7 @@ def _action_rerender_shot(args: dict) -> str:
     ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
     content = _read_text(ep_rel)
     patch: dict[str, Any] = {}
-    for key in ("画面", "对白", "字幕", "camera", "timing"):
+    for key in ("画面", "对白", "字幕", "角色", "camera", "timing"):
         if args.get(key) is not None:
             patch[key] = args.get(key)
     if args.get("duration") is not None:
@@ -501,6 +512,36 @@ def _action_lock_shot(args: dict) -> str:
     return _ok(action="lock_shot", **result)
 
 
+def _action_save_character(args: dict) -> str:
+    from tools.drama_studio import lock_character_ref, save_character
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要合法 slug")
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    cid = str(args.get("character_id") or args.get("id") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not cid and not name:
+        return _err("需要 character_id 或 name")
+    payload: dict[str, Any] = {}
+    if cid:
+        payload["id"] = cid
+    if name:
+        payload["name"] = name
+    for key in ("look", "voice", "colors", "catchphrase", "aliases"):
+        if args.get(key) is not None:
+            payload[key] = args.get(key)
+    try:
+        rec = save_character(slug, payload)
+        if args.get("ref_locked") is not None:
+            rec = lock_character_ref(slug, rec["id"], bool(args.get("ref_locked")))
+    except ValueError as e:
+        return _err(str(e), slug=slug)
+    return _ok(action="save_character", slug=slug, character=rec)
+
+
+
 def _action_rerender_dirty(args: dict) -> str:
     from tools.drama_studio import rerender_dirty_shots
 
@@ -530,6 +571,7 @@ def _tiktok_drama(args: dict) -> str:
         "rerender_shot": _action_rerender_shot,
         "lock_shot": _action_lock_shot,
         "rerender_dirty": _action_rerender_dirty,
+        "save_character": _action_save_character,
     }
     handler = handlers.get(action)
     if not handler:
@@ -557,7 +599,7 @@ def register_tiktok_drama() -> None:
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
-            "rerender_dirty（只重渲脏镜）。"
+            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -565,7 +607,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character",
                     "enum": [
                         "guide",
                         "init",
@@ -579,6 +621,7 @@ def register_tiktok_drama() -> None:
                         "rerender_shot",
                         "lock_shot",
                         "rerender_dirty",
+                        "save_character",
                     ],
                 },
                 "slug": {
@@ -653,6 +696,42 @@ def register_tiktok_drama() -> None:
                     "type": "string",
                     "description": "save_bible / save_outline / save_episode 的 Markdown 正文",
                 },
+                "character_id": {
+                    "type": "string",
+                    "description": "save_character 的角色 id，如 wukong",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "save_character 角色名",
+                },
+                "look": {
+                    "type": "string",
+                    "description": "save_character 外形/定妆描述，会写入出图 prompt",
+                },
+                "voice": {
+                    "type": "string",
+                    "description": "save_character 绑定的 edge-tts 音色，如 zh-CN-YunxiNeural",
+                },
+                "aliases": {
+                    "type": "string",
+                    "description": "save_character 别名，逗号分隔，用于对白匹配",
+                },
+                "colors": {
+                    "type": "string",
+                    "description": "save_character 配色，写入 prompt",
+                },
+                "catchphrase": {
+                    "type": "string",
+                    "description": "save_character 口头禅",
+                },
+                "角色": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖该镜角色，逗号分隔 id 或名字",
+                },
+                "ref_locked": {
+                    "type": "boolean",
+                    "description": "save_character 时锁定参考图，禁止覆盖定妆 png",
+                },
             },
             "required": ["action"],
         },
@@ -665,6 +744,7 @@ def register_tiktok_drama() -> None:
         "只改某一镜请用 rerender_shot；layers 可指定 scene/overlay/voice/clip。"
         "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕；"
         "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
+        "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

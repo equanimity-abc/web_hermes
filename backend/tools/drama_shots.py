@@ -12,6 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.drama_characters import (
+    infer_roles_from_dialogue,
+    load_characters,
+    normalize_roles,
+    resolve_role_ids,
+    roles_key,
+)
 from tools.workspace import resolve_safe
 
 LAYERS = ("scene", "overlay", "voice", "clip")
@@ -25,7 +32,7 @@ LAYER_LABELS = {
     "assemble": "整集拼接",
     "shot": "整镜",
 }
-_CONTENT_KEYS = ("画面", "对白", "字幕", "duration", "timing")
+_CONTENT_KEYS = ("画面", "对白", "字幕", "角色", "duration", "timing")
 
 
 def utc_now() -> str:
@@ -152,6 +159,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "画面": str(raw.get("画面") or ""),
         "对白": str(raw.get("对白") or ""),
         "字幕": str(raw.get("字幕") or ""),
+        "角色": normalize_roles(raw.get("角色")),
         "camera": str(raw.get("camera") or ""),
         "prompt": str(raw.get("prompt") or ""),
         "locked": locked,
@@ -193,6 +201,7 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "画面": str(raw.get("画面") or ""),
         "对白": str(raw.get("对白") or ""),
         "字幕": str(raw.get("字幕") or ""),
+        "角色": normalize_roles(raw.get("角色")),
         "camera": str(raw.get("camera") or ""),
         "prompt": str(raw.get("prompt") or ""),
         "locked": _as_str_list(raw.get("locked")),
@@ -220,6 +229,8 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
         dirty.extend(["voice", "overlay", "clip"])
     if changed("字幕"):
         dirty.extend(["overlay", "clip"])
+    if roles_key(old.get("角色")) != roles_key(new_content.get("角色")):
+        dirty.extend(["scene", "voice", "clip"])
     if changed("timing"):
         dirty.extend(["clip"])
     if str(old.get("camera") or "") != str(new_content.get("camera") or "") and str(
@@ -263,6 +274,8 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
         dirty.extend(["voice", "overlay", "clip"])
     if "字幕" in patch:
         dirty.extend(["overlay", "clip"])
+    if "角色" in patch:
+        dirty.extend(["scene", "voice", "clip"])
     if "timing" in patch or "duration" in patch or "camera" in patch:
         dirty.extend(["clip"])
     locked_set = set(_as_str_list(locked))
@@ -295,6 +308,8 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     for key in ("画面", "对白", "字幕", "timing", "camera"):
         if key in patch and patch[key] is not None:
             shot[key] = str(patch[key])
+    if "角色" in patch and patch["角色"] is not None:
+        shot["角色"] = normalize_roles(patch["角色"])
     if "duration" in patch and patch["duration"] is not None:
         shot["duration"] = float(patch["duration"])
     if "start" in patch and patch["start"] is not None:
@@ -358,10 +373,17 @@ def merge_from_parsed(
         for s in (existing or {}).get("shots") or []
         if s.get("n") is not None
     }
+    cards = load_characters(slug)
     shots: list[dict[str, Any]] = []
     for raw in parsed.get("shots") or []:
         rec = empty_shot(slug, episode, raw)
         old = old_by_n.get(rec["n"])
+        roles = resolve_role_ids(rec.get("角色"), cards)
+        if not roles:
+            roles = infer_roles_from_dialogue(str(rec.get("对白") or ""), cards)
+        if not roles and old:
+            roles = normalize_roles(old.get("角色"))
+        rec["角色"] = roles
         if old and "shot" in _as_str_list(old.get("locked")):
             frozen = dict(old)
             frozen["locked"] = _as_str_list(old.get("locked"))
@@ -465,6 +487,7 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "画面": shot.get("画面"),
         "对白": shot.get("对白"),
         "字幕": shot.get("字幕"),
+        "角色": normalize_roles(shot.get("角色")),
         "camera": shot.get("camera"),
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],
@@ -500,6 +523,8 @@ def script_impact(
             for key in ("画面", "对白", "字幕", "timing"):
                 if str(old.get(key) or "") != str(shot.get(key) or ""):
                     changed.append(key)
+            if roles_key(old.get("角色")) != roles_key(shot.get("角色")):
+                changed.append("角色")
         items.append(
             {
                 "n": n,

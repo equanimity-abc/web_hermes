@@ -19,6 +19,11 @@ const props = defineProps({
   scriptDraft: { type: String, default: '' },
   scriptImpact: { type: Object, default: null },
   boardMode: { type: String, default: 'shots' },
+  characters: { type: Array, default: () => [] },
+  voices: { type: Array, default: () => [] },
+  selectedCharacterId: { type: [String, null], default: null },
+  selectedCharacter: { type: Object, default: null },
+  charDraft: { type: Object, required: true },
 })
 
 const emit = defineEmits([
@@ -34,9 +39,17 @@ const emit = defineEmits([
   'preview-script',
   'save-script',
   'rerender-dirty',
+  'select-character',
+  'add-character',
+  'save-character',
+  'lock-ref',
+  'upload-ref',
+  'delete-character',
+  'toggle-role',
 ])
 
 const previewMode = ref('shot')
+const refInput = ref(null)
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
   { id: 'scene', label: '画面' },
@@ -92,6 +105,30 @@ const previewKind = computed(() => {
   return 'image'
 })
 
+const refPreviewUrl = computed(() => {
+  const url = props.selectedCharacter?.ref_url
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+})
+
+const boundVoice = computed(() => {
+  const ids = props.draft?.角色 || []
+  const first = (props.characters || []).find((c) => ids.includes(c.id))
+  if (!first) return ''
+  const voice = (props.voices || []).find((v) => v.id === first.voice)
+  return `${first.name} · ${voice?.label || first.voice}`
+})
+
+function isRoleOn(id) {
+  return (props.draft?.角色 || []).includes(id)
+}
+
+function onRefFile(ev) {
+  const file = ev.target.files?.[0]
+  ev.target.value = ''
+  if (file) emit('upload-ref', file)
+}
+
 function statusLabel(shot) {
   if ((shot.dirty || []).length) return '脏'
   if (shot.status === 'rendered') return '已渲'
@@ -125,7 +162,7 @@ function statusLabel(shot) {
     <p v-if="error" class="drama-banner drama-banner--err">{{ error }}</p>
     <p v-else-if="notice" class="drama-banner">{{ notice }}</p>
 
-    <div v-if="episode" class="drama-board">
+    <div v-if="project" class="drama-board">
       <section class="drama-shots">
         <div class="drama-board-tabs">
           <button
@@ -142,8 +179,38 @@ function statusLabel(shot) {
           >
             剧本
           </button>
+          <button
+            type="button"
+            :class="{ active: boardMode === 'cast' }"
+            @click="emit('update:boardMode', 'cast')"
+          >
+            角色
+          </button>
         </div>
-        <h2>{{ boardMode === 'script' ? '受影响镜头' : '分镜' }}</h2>
+        <h2>{{ boardMode === 'script' ? '受影响镜头' : boardMode === 'cast' ? '角色卡' : '分镜' }}</h2>
+        <template v-if="boardMode === 'cast'">
+          <button
+            v-for="char in characters"
+            :key="char.id"
+            type="button"
+            class="drama-shot-item"
+            :class="{ active: char.id === selectedCharacterId }"
+            @click="emit('select-character', char.id)"
+          >
+            <span class="drama-shot-n">{{ (char.name || char.id).slice(0, 1) }}</span>
+            <span class="drama-shot-body">
+              <strong>{{ char.name || char.id }}</strong>
+              <em>{{ char.look || '（未写外形）' }}</em>
+            </span>
+            <span class="drama-shot-flag">{{ char.ref_locked ? '锁图' : char.ref_exists ? '有图' : '无图' }}</span>
+          </button>
+          <button type="button" class="drama-shot-item drama-shot-item--add" @click="emit('add-character')">
+            <span class="drama-shot-n">+</span>
+            <span class="drama-shot-body"><strong>添加角色</strong></span>
+          </button>
+          <p v-if="!characters.length" class="drama-empty-hint">还没有角色卡。添加后写外形、绑音色，出图会按角色稳定下来。</p>
+        </template>
+        <template v-else>
         <button
           v-for="shot in shots"
           :key="shot.n"
@@ -166,6 +233,7 @@ function statusLabel(shot) {
         <p v-if="!shots.length" class="drama-empty-hint">
           还没有 shots.json。请先在对话里 parse_shots 或 render_episode。
         </p>
+        </template>
       </section>
 
       <section v-if="boardMode === 'script'" class="drama-script">
@@ -185,6 +253,13 @@ function statusLabel(shot) {
             <template v-else>：无改动</template>
           </li>
         </ul>
+      </section>
+
+      <section v-else-if="boardMode === 'cast'" class="drama-preview">
+        <div class="drama-stage">
+          <img v-if="refPreviewUrl" class="drama-media" :src="refPreviewUrl" alt="角色参考图" />
+          <div v-else class="drama-stage-empty">上传定妆图后，出图会按外形描述和配色锁定同一张脸</div>
+        </div>
       </section>
 
       <section v-else class="drama-preview">
@@ -216,7 +291,7 @@ function statusLabel(shot) {
       </section>
 
       <section class="drama-inspector">
-        <h2>{{ boardMode === 'script' ? '剧本操作' : '检查器' }}</h2>
+        <h2>{{ boardMode === 'script' ? '剧本操作' : boardMode === 'cast' ? '角色卡' : '检查器' }}</h2>
         <div v-if="boardMode === 'script'" class="drama-actions drama-actions--script">
           <button type="button" class="btn-ghost" :disabled="saving || rendering" @click="emit('preview-script')">
             {{ saving ? '预览中…' : '预览影响' }}
@@ -238,7 +313,56 @@ function statusLabel(shot) {
             {{ rendering ? '重渲中…' : `重渲脏镜${dirtyShotCount ? ` (${dirtyShotCount})` : ''}` }}
           </button>
         </div>
-        <template v-if="selected">
+        <template v-if="boardMode === 'cast'">
+          <p v-if="!selectedCharacter" class="drama-empty-hint">左侧添加或选择一个角色。</p>
+          <template v-else>
+            <label>
+              名字
+              <input v-model="charDraft.name" type="text" />
+            </label>
+            <label>
+              id
+              <input v-model="charDraft.id" type="text" :disabled="Boolean(selectedCharacterId)" />
+            </label>
+            <label>
+              外形（写入每镜 prompt）
+              <textarea v-model="charDraft.look" rows="3" placeholder="金箍、火眼金睛、虎皮裙、如意金箍棒…" />
+            </label>
+            <label>
+              配色
+              <input v-model="charDraft.colors" type="text" placeholder="金、赤、青绿" />
+            </label>
+            <label>
+              别名（对白匹配）
+              <input v-model="charDraft.aliases" type="text" placeholder="悟空、齐天大圣" />
+            </label>
+            <label>
+              音色
+              <select v-model="charDraft.voice">
+                <option v-for="voice in voices" :key="voice.id" :value="voice.id">{{ voice.label }}</option>
+              </select>
+            </label>
+            <div class="drama-freeze">
+              <button type="button" class="btn-tiny" :disabled="saving" @click="refInput?.click()">
+                上传参考图
+              </button>
+              <button type="button" class="btn-tiny" :disabled="saving || !selectedCharacter.ref_exists" @click="emit('lock-ref')">
+                {{ selectedCharacter.ref_locked ? '解锁参考图' : '锁定参考图' }}
+              </button>
+              <span>{{ selectedCharacter.ref_locked ? '已锁，不会被覆盖' : '锁住后不能替换定妆图' }}</span>
+            </div>
+            <input ref="refInput" class="drama-file" type="file" accept="image/*" @change="onRefFile" />
+            <div class="drama-actions">
+              <button type="button" class="btn-primary" :disabled="saving" @click="emit('save-character')">
+                {{ saving ? '保存中…' : '保存角色卡' }}
+              </button>
+              <button type="button" class="btn-ghost" :disabled="saving" @click="emit('delete-character')">
+                删除
+              </button>
+            </div>
+          </template>
+        </template>
+        <template v-else-if="selected">
           <div class="drama-freeze">
             <button
               type="button"
@@ -249,6 +373,20 @@ function statusLabel(shot) {
               {{ shotFrozen ? '解锁整镜' : '锁定整镜' }}
             </button>
             <span>{{ shotFrozen ? '保存剧本时不会覆盖这一镜' : '锁住后改剧本不会动这一镜' }}</span>
+          </div>
+          <div v-if="boardMode === 'shots'" class="drama-roles">
+            <span>本镜角色</span>
+            <p v-if="!characters.length" class="drama-empty-hint">先到角色页建卡，再勾选本镜出场人物。</p>
+            <label v-for="char in characters" :key="char.id" class="drama-role-chip">
+              <input
+                type="checkbox"
+                :checked="isRoleOn(char.id)"
+                :disabled="shotFrozen || saving"
+                @change="emit('toggle-role', char.id)"
+              />
+              {{ char.name }}
+            </label>
+            <em v-if="boundVoice">配音：{{ boundVoice }}</em>
           </div>
           <label>
             画面
@@ -325,14 +463,20 @@ function statusLabel(shot) {
           </template>
         </template>
         <p v-else class="drama-empty-hint">
-          {{ boardMode === 'script' ? '可先保存剧本生成分镜，再选镜头锁定整镜。' : '选择左侧一个镜头。' }}
+          {{
+            boardMode === 'script'
+              ? '可先保存剧本生成分镜，再选镜头锁定整镜。'
+              : boardMode === 'cast'
+                ? '添加角色卡，写外形并锁定参考图。'
+                : '选择左侧一个镜头。'
+          }}
         </p>
       </section>
     </div>
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
-      <p>从左侧打开一个漫剧项目。分镜页改对白和运镜；剧本页改结局悬念，已锁整镜不会被覆盖。</p>
+      <p>从左侧打开一个漫剧项目。分镜页改对白和运镜；剧本页改结局；角色页写外形、绑音色、锁参考图。</p>
     </div>
   </main>
 </template>

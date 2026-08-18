@@ -83,10 +83,16 @@ npm run dev
 | PATCH | `/api/drama/projects/{slug}` | 改标题 / logline |
 | GET | `/api/drama/projects/{slug}/episodes/{n}` | 分集 + 分镜 + 预览 URL |
 | PATCH | `/api/drama/projects/{slug}/episodes/{n}` | 改分集标题 / 时长 |
-| PATCH | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}` | 改对白 / 画面 / 字幕 / 运镜 / 时长；`lock` / `unlock` / `locked` 锁层 |
+| PATCH | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}` | 改对白 / 画面 / 字幕 / 角色 / 运镜 / 时长；`lock` / `unlock` / `locked` 锁层 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/script/preview` | 预览剧本改动影响哪些 Shot（不落盘） |
 | PUT | `/api/drama/projects/{slug}/episodes/{n}/script` | 保存剧本并同步 `shots.json`；已锁整镜不覆盖 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/rerender-dirty` | 只重渲脏镜 |
+| GET | `/api/drama/projects/{slug}/characters` | 角色卡列表 + 可选音色 |
+| POST | `/api/drama/projects/{slug}/characters` | 新建角色卡 |
+| PUT | `/api/drama/projects/{slug}/characters/{id}` | 更新外形 / 音色 / 别名 |
+| DELETE | `/api/drama/projects/{slug}/characters/{id}` | 删除角色卡（参考图已锁时拒绝） |
+| POST | `/api/drama/projects/{slug}/characters/{id}/ref` | 上传定妆参考图 |
+| POST | `/api/drama/projects/{slug}/characters/{id}/lock-ref` | 锁定/解锁参考图 |
 
 会话落盘目录：`backend/data/sessions/{id}.json`（重启后仍可恢复）。
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
@@ -94,7 +100,7 @@ npm run dev
 漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
 成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（分镜静图 + 运镜/转场/调色 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
 分镜资产：`videos/epNN/shots.json` + `shotNN.mp4`（改一镜用 `rerender_shot`，其它镜不重渲）。
-工作台：前端侧栏切到「漫剧」，REST `/api/drama/*` 直接改分镜（对白 / 运镜 / 时长）或剧本，不走 Agent loop。锁住 `scene` 后改台词只重配音和字幕；锁住整镜后改剧本不会覆盖该镜。
+工作台：前端侧栏切到「漫剧」，REST `/api/drama/*` 直接改分镜（对白 / 运镜 / 时长 / 角色）或剧本，不走 Agent loop。锁住 `scene` 后改台词只重配音和字幕；锁住整镜后改剧本不会覆盖该镜。角色卡的外形进入出图 prompt，音色绑定配音，参考图可锁。
 
 ## 开发路线
 
@@ -113,3 +119,4 @@ npm run dev
 - [x] D1: 漫剧工作台（分镜台 UI + `/api/drama` REST，不靠聊天改镜）
 - [x] D2: 分层重做 + 锁（锁画面后改台词只换声/字幕）
 - [x] D3: 剧情干预（剧本编辑器 + 脏镜提示；已锁整镜不覆盖）
+- [x] D4: 角色一致性（角色卡 + 参考图进 prompt + 每镜选角色 + 音色绑定）

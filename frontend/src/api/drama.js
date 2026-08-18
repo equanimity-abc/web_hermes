@@ -94,3 +94,55 @@ export function rerenderDirty(slug, episode) {
     { method: 'POST', body: JSON.stringify({}) },
   )
 }
+
+export function listCharacters(slug) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/characters`)
+}
+
+export function saveCharacter(slug, cid, body) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function createCharacter(slug, body) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/characters`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteCharacter(slug, cid) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function lockCharacterRef(slug, cid, locked) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/lock-ref`,
+    { method: 'POST', body: JSON.stringify({ locked }) },
+  )
+}
+
+export async function uploadCharacterRef(slug, cid, file) {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/ref`,
+    { method: 'POST', body: form },
+  )
+  const text = await resp.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { detail: text || `HTTP ${resp.status}` }
+  }
+  if (!resp.ok) {
+    const detail = data.detail || data.error || text || `HTTP ${resp.status}`
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return data
+}

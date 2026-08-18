@@ -7,6 +7,19 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from tools.drama_characters import (
+    VOICES,
+    CharacterError,
+    delete_character,
+    load_characters,
+    normalize_roles,
+    primary_voice,
+    resolve_shot_characters,
+    save_character_ref,
+    set_ref_locked,
+    suggest_character_id,
+    upsert_character,
+)
 from tools.drama_shots import (
     apply_patch,
     find_shot,
@@ -136,12 +149,17 @@ def _asset_meta(rel: str) -> dict[str, Any]:
     return info
 
 
-def enrich_shot(shot: dict[str, Any]) -> dict[str, Any]:
+def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
     pub = public_shot(shot)
     assets = pub.get("assets") or {}
     pub["files"] = {layer: _asset_meta(str(rel or "")) for layer, rel in assets.items()}
     clip = pub["files"].get("clip") or {}
     pub["preview_url"] = clip.get("url") or (pub["files"].get("scene") or {}).get("url")
+    if slug:
+        cards = load_characters(slug)
+        cast = resolve_shot_characters(shot, cards)
+        pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
+        pub["voice_id"] = primary_voice(cast) if cast else ""
     return pub
 
 
@@ -208,6 +226,8 @@ def get_project(slug: str) -> dict[str, Any]:
         "outline": outline,
         "episodes": episodes,
         "cameras": list(CAMERAS),
+        "characters": list_characters(slug),
+        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
     }
 
 
@@ -237,7 +257,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     doc = load_doc(slug, n)
     video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
     video = _asset_meta(video_rel)
-    shots = [enrich_shot(s) for s in (doc.get("shots") or [])] if doc else []
+    shots = [enrich_shot(s, slug=slug) for s in (doc.get("shots") or [])] if doc else []
     return {
         "slug": slug,
         "episode": n,
@@ -251,6 +271,8 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "video_path": video_rel if video["exists"] else None,
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
+        "characters": list_characters(slug),
+        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
         "layer_ids": ["scene", "overlay", "voice", "clip"],
         "updated_at": (doc or {}).get("updated_at"),
     }
@@ -306,7 +328,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "camera", "timing", "duration")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
     has_lock = any(patch.get(k) is not None for k in ("locked", "lock", "unlock") if k in patch)
     if "duration" in body:
@@ -321,8 +343,10 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         if cam and cam not in CAMERAS:
             raise DramaBadRequest(f"未知运镜：{cam}，可选 {', '.join(CAMERAS)}")
         body["camera"] = cam
+    if "角色" in body:
+        body["角色"] = normalize_roles(body["角色"])
     if not body and not has_lock:
-        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / camera / duration / locked）")
+        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / locked）")
 
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
@@ -354,7 +378,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     return {
         "slug": slug,
         "episode": n,
-        "shot": enrich_shot(shot),
+        "shot": enrich_shot(shot, slug=slug),
         "dirty": dirty or list(shot.get("dirty") or []),
         "locked": list(shot.get("locked") or []),
         "shots_json": json_rel(slug, n),
@@ -460,3 +484,109 @@ def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
         ),
     }
     return result
+
+
+def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
+    pub = dict(char)
+    meta = _asset_meta(str(char.get("ref") or ""))
+    pub["ref_exists"] = bool(meta["exists"])
+    pub["ref_url"] = meta.get("url")
+    return pub
+
+
+def list_characters(slug: str) -> list[dict[str, Any]]:
+    slug = parse_slug(slug)
+    return [enrich_character(slug, c) for c in load_characters(slug)]
+
+
+def get_characters(slug: str) -> dict[str, Any]:
+    project = load_project(slug)
+    slug = str(project.get("slug") or slug)
+    return {
+        "slug": slug,
+        "characters": list_characters(slug),
+        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+    }
+
+
+def _dirty_shots_for_character(slug: str, cid: str, layers: list[str]) -> None:
+    project = load_project(slug)
+    for ep in project.get("episodes") or []:
+        try:
+            n = int(ep.get("n") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n < 1:
+            continue
+        doc = load_doc(slug, n)
+        if doc is None:
+            continue
+        changed = False
+        for shot in doc.get("shots") or []:
+            if cid not in normalize_roles(shot.get("角色")):
+                continue
+            locked = set(shot.get("locked") or [])
+            if "shot" in locked:
+                continue
+            dirty = list(shot.get("dirty") or [])
+            for layer in layers:
+                if layer not in locked and layer not in dirty:
+                    dirty.append(layer)
+                    changed = True
+            shot["dirty"] = dirty
+            if dirty:
+                shot["status"] = "dirty"
+        if changed:
+            save_doc(doc)
+
+
+def save_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
+    project = load_project(slug)
+    slug = str(project.get("slug") or slug)
+    cid = str(patch.get("id") or suggest_character_id(str(patch.get("name") or ""))).strip()
+    before = next((c for c in load_characters(slug) if c.get("id") == cid), None)
+    try:
+        rec = upsert_character(slug, {**patch, "id": cid})
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
+    layers: list[str] = []
+    if before:
+        if str(before.get("look") or "") != str(rec.get("look") or "") or str(
+            before.get("colors") or ""
+        ) != str(rec.get("colors") or ""):
+            layers.extend(["scene", "clip"])
+        if str(before.get("voice") or "") != str(rec.get("voice") or ""):
+            layers.extend(["voice", "clip"])
+        if layers:
+            _dirty_shots_for_character(slug, rec["id"], layers)
+    return enrich_character(slug, rec)
+
+
+def remove_character(slug: str, cid: str) -> dict[str, Any]:
+    load_project(slug)
+    slug = parse_slug(slug)
+    try:
+        delete_character(slug, cid)
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
+    return get_characters(slug)
+
+
+def lock_character_ref(slug: str, cid: str, locked: bool) -> dict[str, Any]:
+    load_project(slug)
+    slug = parse_slug(slug)
+    try:
+        rec = set_ref_locked(slug, cid, locked)
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
+    return enrich_character(slug, rec)
+
+
+def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
+    load_project(slug)
+    slug = parse_slug(slug)
+    try:
+        rec = save_character_ref(slug, cid, data)
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
+    return enrich_character(slug, rec)

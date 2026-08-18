@@ -12,11 +12,18 @@ import shutil
 import subprocess
 import threading
 import urllib.parse
-import zlib
 from pathlib import Path
 from typing import Any
 
 from config import config
+from tools.drama_characters import (
+    character_prompt_clause,
+    character_seed,
+    load_characters,
+    normalize_roles,
+    primary_voice,
+    resolve_shot_characters,
+)
 from tools.drama_shots import (
     LAYERS,
     apply_patch,
@@ -47,7 +54,7 @@ _SHOT_HEAD = re.compile(
     r"^###\s*Shot\s+(\d+)\s*(?:\(([^)]*)\))?\s*$",
     re.IGNORECASE,
 )
-_FIELD = re.compile(r"^-\s*(画面|对白|字幕)\s*[:：]\s*(.*)\s*$")
+_FIELD = re.compile(r"^-\s*(画面|对白|字幕|角色)\s*[:：]\s*(.*)\s*$")
 _RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–~]\s*(\d+(?:\.\d+)?)")
 _QUOTE = re.compile(r"[「『“\"]([^」』”\"]+)[」』”\"]")
 
@@ -106,6 +113,7 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
                 "画面": "",
                 "对白": "",
                 "字幕": "",
+                "角色": "",
             }
             continue
         if current is None:
@@ -122,17 +130,34 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
 
 
 def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str:
-    """Write 画面/对白/字幕 back into the episode markdown for one shot."""
-    fields = {k: str(v) for k, v in patch.items() if k in ("画面", "对白", "字幕") and v is not None}
+    """Write 画面/对白/字幕/角色 back into the episode markdown for one shot."""
+    keys = ("画面", "对白", "字幕", "角色")
+    fields: dict[str, str] = {}
+    for key, value in (patch or {}).items():
+        if key not in keys or value is None:
+            continue
+        if key == "角色":
+            fields[key] = "、".join(normalize_roles(value))
+        else:
+            fields[key] = str(value)
     if not fields:
         return text
     lines = str(text or "").replace("\r\n", "\n").split("\n")
     in_target = False
+    pending = dict(fields)
     out: list[str] = []
+
+    def flush_pending() -> None:
+        for key in keys:
+            if key in pending:
+                out.append(f"- {key}: {pending.pop(key)}")
+
     for line in lines:
         stripped = line.rstrip()
         m_shot = _SHOT_HEAD.match(stripped)
         if m_shot:
+            if in_target:
+                flush_pending()
             in_target = int(m_shot.group(1)) == int(shot_n)
             out.append(line)
             continue
@@ -141,8 +166,11 @@ def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str
             if m_field and m_field.group(1) in fields:
                 key = m_field.group(1)
                 out.append(f"- {key}: {fields[key]}")
+                pending.pop(key, None)
                 continue
         out.append(line)
+    if in_target:
+        flush_pending()
     return "\n".join(out)
 
 
@@ -159,6 +187,7 @@ def restore_frozen_shots_markdown(markdown: str, doc: dict[str, Any]) -> str:
                 "画面": shot.get("画面") or "",
                 "对白": shot.get("对白") or "",
                 "字幕": shot.get("字幕") or "",
+                "角色": shot.get("角色") or [],
             },
         )
     return text
@@ -222,7 +251,13 @@ def _wrap(draw, text: str, font, max_width: int) -> list[str]:
     return lines
 
 
-def _scene_prompt(title: str, shot: dict[str, Any]) -> str:
+def _scene_prompt(
+    title: str,
+    shot: dict[str, Any],
+    characters: list[dict[str, Any]] | None = None,
+    *,
+    slug: str = "",
+) -> str:
     scene = (shot.get("画面") or "").strip() or "cinematic Chinese myth scene"
     style = _camera_style(shot)
     kinetic = {
@@ -234,12 +269,12 @@ def _scene_prompt(title: str, shot: dict[str, Any]) -> str:
         "fall": "high angle descending, ground rushing closer",
         "pull_out": "epic establishing shot, vast landscape, tiny figure",
     }.get(style, "cinematic staging, strong silhouette")
+    slug = slug or str(shot.get("slug") or "")
+    char_clause = character_prompt_clause(characters or [], slug=slug)
     return (
         "vertical 9:16 cinematic Chinese animation keyframe, "
-        f"{title or 'Journey to the West'}, {scene}, {kinetic}, "
-        "classic 西游记 manhua / anime illustration, Monkey King Sun Wukong "
-        "gold headband tiger-skin skirt Ruyi Jingu Bang, heavenly palace clouds, "
-        "dramatic rim lighting, highly detailed, character in frame, "
+        f"{title or 'short drama'}, {scene}, {char_clause}, {kinetic}, "
+        "classic manhua / anime illustration, dramatic rim lighting, highly detailed, "
         "no text, no letters, no subtitles, no watermark, no UI"
     )
 
@@ -294,7 +329,11 @@ def _fit_cover(img, width: int, height: int):
     return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def _draw_fallback_scene(shot: dict[str, Any], dest: Path) -> None:
+def _draw_fallback_scene(
+    shot: dict[str, Any],
+    dest: Path,
+    characters: list[dict[str, Any]] | None = None,
+) -> None:
     """Atmospheric still if image gen fails — not a subtitle document."""
     from PIL import Image, ImageDraw, ImageFilter
 
@@ -318,8 +357,41 @@ def _draw_fallback_scene(shot: dict[str, Any], dest: Path) -> None:
 
     draw = ImageDraw.Draw(img)
     draw.ellipse((ZOOM_W // 2 - 90, 520, ZOOM_W // 2 + 90, 980), outline="#d4a017", width=8)
+    _paste_character_refs(img, characters or [])
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest, "PNG")
+
+
+def _paste_character_refs(img, characters: list[dict[str, Any]]) -> None:
+    """Stamp locked/available 定妆图 onto fallback stills so consecutive shots share a face."""
+    from PIL import Image
+
+    refs: list[Path] = []
+    for char in characters[:2]:
+        rel = str(char.get("ref") or "")
+        if not rel:
+            continue
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
+        if path.is_file() and path.stat().st_size > 0:
+            refs.append(path)
+    if not refs:
+        return
+    slot_w = 720 if len(refs) == 1 else 540
+    slot_h = 960
+    gap = 40
+    total_w = len(refs) * slot_w + (len(refs) - 1) * gap
+    x0 = max((ZOOM_W - total_w) // 2, 40)
+    y0 = ZOOM_H - slot_h - 280
+    for i, path in enumerate(refs):
+        try:
+            portrait = Image.open(path).convert("RGB")
+        except OSError:
+            continue
+        portrait = _fit_cover(portrait, slot_w, slot_h)
+        img.paste(portrait, (x0 + i * (slot_w + gap), y0))
 
 
 def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
@@ -456,7 +528,7 @@ def _run_ffmpeg(args: list[str], *, cwd: Path | None = None, timeout: int = 240)
         raise RuntimeError(err[:800] or f"ffmpeg exit {proc.returncode}")
 
 
-def _tts_to_file(text: str, dest: Path) -> bool:
+def _tts_to_file(text: str, dest: Path, *, voice: str | None = None) -> bool:
     """Synthesize speech. Returns False if skipped / failed."""
     spoken = (text or "").strip()
     if not spoken:
@@ -475,7 +547,7 @@ def _tts_to_file(text: str, dest: Path) -> bool:
     error: list[BaseException] = []
 
     async def _go() -> None:
-        communicate = edge_tts.Communicate(spoken, _tts_voice())
+        communicate = edge_tts.Communicate(spoken, voice or _tts_voice())
         await communicate.save(str(dest))
 
     def _thread() -> None:
@@ -751,17 +823,17 @@ def render_shot_layers(
     rebuilt: list[str] = []
     used_tts = False
     used_ai = False
+    cards = load_characters(slug)
+    cast = resolve_shot_characters(shot, cards)
 
     if "scene" in wanted:
         shot["camera"] = shot.get("camera") or _camera_style(shot)
-        prompt = _scene_prompt(title, shot)
+        prompt = _scene_prompt(title, shot, cast, slug=slug)
         shot["prompt"] = prompt
-        seed = zlib.crc32(
-            f"{slug}:{episode}:{shot['n']}:{shot.get('画面')}".encode()
-        ) & 0x7FFFFFFF
+        seed = character_seed(slug, cast, int(shot.get("n") or 1))
         ai_ok = _generate_scene_image(prompt, scene, seed=seed)
         if not ai_ok:
-            _draw_fallback_scene(shot, scene)
+            _draw_fallback_scene(shot, scene, cast)
         shot["scene_source"] = "ai" if ai_ok else "fallback"
         used_ai = ai_ok
         rebuilt.append("scene")
@@ -773,7 +845,7 @@ def render_shot_layers(
     duration = float(shot.get("duration") or 5)
     if "voice" in wanted:
         speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
-        has_audio = _tts_to_file(speech, voice) if speech else False
+        has_audio = _tts_to_file(speech, voice, voice=primary_voice(cast)) if speech else False
         if has_audio:
             used_tts = True
             duration = max(duration, _probe_duration(voice) + 0.25)
