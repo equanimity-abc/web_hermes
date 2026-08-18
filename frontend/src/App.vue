@@ -30,6 +30,9 @@ const {
   error: dramaError,
   notice: dramaNotice,
   bust: dramaBust,
+  scriptDraft: dramaScriptDraft,
+  scriptImpact: dramaScriptImpact,
+  boardMode: dramaBoardMode,
   refreshProjects,
   openProject,
   openEpisode,
@@ -38,6 +41,9 @@ const {
   rerenderSelected,
   rerenderLayer,
   toggleLock,
+  previewScriptChanges,
+  saveScriptChanges,
+  rerenderDirtyShots,
 } = useDramaStudio()
 
 const {
@@ -200,12 +206,18 @@ onMounted(() => {
       :error="dramaError"
       :notice="dramaNotice"
       :bust="dramaBust"
+      v-model:script-draft="dramaScriptDraft"
+      :script-impact="dramaScriptImpact"
+      v-model:board-mode="dramaBoardMode"
       @open-episode="openEpisode"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"
       @rerender-layer="rerenderLayer"
       @toggle-lock="toggleLock"
+      @preview-script="previewScriptChanges"
+      @save-script="saveScriptChanges"
+      @rerender-dirty="rerenderDirtyShots"
     />
 
     <ApprovalModal

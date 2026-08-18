@@ -30,6 +30,7 @@ from tools.drama_shots import (
     parse_layers,
     public_shot,
     save_doc,
+    script_rel,
     work_rel,
 )
 from tools.workspace import resolve_safe
@@ -143,6 +144,24 @@ def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str
                 continue
         out.append(line)
     return "\n".join(out)
+
+
+def restore_frozen_shots_markdown(markdown: str, doc: dict[str, Any]) -> str:
+    """Write frozen shot fields back so the script matches shots.json."""
+    text = str(markdown or "")
+    for shot in doc.get("shots") or []:
+        if "shot" not in (shot.get("locked") or []):
+            continue
+        text = patch_shot_in_markdown(
+            text,
+            int(shot["n"]),
+            {
+                "画面": shot.get("画面") or "",
+                "对白": shot.get("对白") or "",
+                "字幕": shot.get("字幕") or "",
+            },
+        )
+    return text
 
 
 def _parse_timing(timing: str) -> tuple[float, float, float]:
@@ -684,6 +703,13 @@ def sync_shots_doc(
     )
     resolve_safe(work_rel(slug, episode)).mkdir(parents=True, exist_ok=True)
     save_doc(doc)
+    rel = str(doc.get("script_path") or script_rel(slug, episode))
+    path = resolve_safe(rel)
+    if path.is_file():
+        original = path.read_text(encoding="utf-8")
+        restored = restore_frozen_shots_markdown(original, doc)
+        if restored != original:
+            path.write_text(restored.rstrip() + "\n", encoding="utf-8")
     return doc
 
 
@@ -710,6 +736,8 @@ def render_shot_layers(
 
     wanted = [layer for layer in LAYERS if layer in layers]
     locked = set(shot.get("locked") or [])
+    if "shot" in locked:
+        locked = set(LAYERS) | locked
     wanted = [layer for layer in wanted if layer not in locked]
     if not wanted:
         return {"n": shot.get("n"), "rebuilt": [], "skipped": "locked_or_empty"}
@@ -845,6 +873,9 @@ def render_episode_video(
     rebuilt: list[int] = []
     skipped: list[int] = []
     for shot in doc.get("shots") or []:
+        if "shot" in (shot.get("locked") or []):
+            skipped.append(int(shot["n"]))
+            continue
         layers = list(LAYERS) if force else list(shot.get("dirty") or [])
         if not layers:
             clip_rel = (shot.get("assets") or {}).get("clip")
@@ -892,8 +923,21 @@ def rerender_shot(
     if patch:
         apply_patch(shot, patch)
 
-    requested = parse_layers(layers, allow_assemble=True) if layers else []
     locked = set(shot.get("locked") or [])
+    if "shot" in locked:
+        return _episode_result(
+            doc,
+            {
+                "rebuilt_shots": [],
+                "skipped_shots": [int(s["n"]) for s in doc.get("shots") or []],
+                "shot": public_shot(shot),
+                "rebuilt_layers": [],
+                "skipped_layers": ["shot"],
+                "assemble": str(doc.get("assemble") or "unchanged"),
+            },
+        )
+
+    requested = parse_layers(layers, extra=("assemble",)) if layers else []
     wanted = [layer for layer in requested if layer in LAYERS]
     assemble_only = bool(requested) and not wanted and "assemble" in requested
     if assemble_only:

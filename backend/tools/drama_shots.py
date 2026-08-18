@@ -16,12 +16,14 @@ from tools.workspace import resolve_safe
 
 LAYERS = ("scene", "overlay", "voice", "clip")
 RENDER_LAYERS = (*LAYERS, "assemble")
+LOCK_TOKENS = (*LAYERS, "shot")
 LAYER_LABELS = {
     "scene": "画面",
     "overlay": "字幕",
     "voice": "配音",
     "clip": "成片",
     "assemble": "整集拼接",
+    "shot": "整镜",
 }
 _CONTENT_KEYS = ("画面", "对白", "字幕", "duration", "timing")
 
@@ -226,7 +228,9 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
         if str(old.get("camera") or ""):
             dirty.extend(["clip"])
 
-    locked = set(_as_str_list(old.get("locked")))
+    locked = set(_as_str_list(old.get("locked"))) | set(_as_str_list(new_content.get("locked")))
+    if "shot" in locked:
+        return []
     ordered: list[str] = []
     for layer in LAYERS:
         if layer in dirty and layer not in locked and layer not in ordered:
@@ -234,8 +238,8 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
     return ordered
 
 
-def parse_layers(raw: Any, *, allow_assemble: bool = False) -> list[str]:
-    allowed = RENDER_LAYERS if allow_assemble else LAYERS
+def parse_layers(raw: Any, *, extra: tuple[str, ...] = ()) -> list[str]:
+    allowed = set(LAYERS) | set(extra)
     if raw is None or raw == "":
         return []
     if isinstance(raw, str):
@@ -262,6 +266,8 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
     if "timing" in patch or "duration" in patch or "camera" in patch:
         dirty.extend(["clip"])
     locked_set = set(_as_str_list(locked))
+    if "shot" in locked_set:
+        return []
     ordered: list[str] = []
     for layer in LAYERS:
         if layer in dirty and layer not in locked_set and layer not in ordered:
@@ -273,6 +279,8 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     """Apply field edits and return newly dirtied layers (minus locks)."""
     locked = set(_as_str_list(shot.get("locked")))
     patch = dict(patch or {})
+    if "shot" in locked:
+        return []
     if "scene" in locked:
         patch.pop("画面", None)
     if "overlay" in locked:
@@ -316,15 +324,21 @@ def set_shot_locks(
 ) -> list[str]:
     """Replace or incrementally update locked layers. Locked layers drop out of dirty."""
     current = _as_str_list(shot.get("locked"))
+    extra = ("shot",)
     if locked is not None:
-        current = parse_layers(locked)
+        current = parse_layers(locked, extra=extra)
     else:
-        for layer in parse_layers(lock):
+        for layer in parse_layers(lock, extra=extra):
             if layer not in current:
                 current.append(layer)
-        drop = set(parse_layers(unlock))
+        drop = set(parse_layers(unlock, extra=extra))
         current = [layer for layer in current if layer not in drop]
-    shot["locked"] = [layer for layer in LAYERS if layer in current]
+    shot["locked"] = [layer for layer in LOCK_TOKENS if layer in current]
+    if "shot" in shot["locked"]:
+        shot["dirty"] = []
+        if shot.get("status") == "dirty":
+            shot["status"] = "rendered"
+        return list(shot["locked"])
     shot["dirty"] = [layer for layer in _as_str_list(shot.get("dirty")) if layer not in shot["locked"]]
     if not shot["dirty"] and shot.get("status") == "dirty":
         shot["status"] = "rendered"
@@ -348,6 +362,11 @@ def merge_from_parsed(
     for raw in parsed.get("shots") or []:
         rec = empty_shot(slug, episode, raw)
         old = old_by_n.get(rec["n"])
+        if old and "shot" in _as_str_list(old.get("locked")):
+            frozen = dict(old)
+            frozen["locked"] = _as_str_list(old.get("locked"))
+            shots.append(normalize_shot(slug, episode, frozen))
+            continue
         if old:
             rec["locked"] = _as_str_list(old.get("locked"))
             locked = set(rec["locked"])
@@ -389,6 +408,16 @@ def merge_from_parsed(
                 if rec["status"] == "rendered":
                     rec["status"] = "dirty"
         shots.append(rec)
+
+    kept = {int(s["n"]) for s in shots}
+    for n, old in sorted(old_by_n.items()):
+        if n in kept:
+            continue
+        if "shot" in _as_str_list(old.get("locked")):
+            frozen = dict(old)
+            frozen["locked"] = _as_str_list(old.get("locked"))
+            shots.append(normalize_shot(slug, episode, frozen))
+    shots.sort(key=lambda s: int(s["n"]))
 
     return {
         "slug": slug,
@@ -443,4 +472,61 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "scene_source": shot.get("scene_source"),
         "assets": shot.get("assets") or {},
         "clip": (shot.get("assets") or {}).get("clip"),
+    }
+
+
+def script_impact(
+    existing: dict[str, Any] | None,
+    merged: dict[str, Any],
+    *,
+    old_meta: dict[str, Any] | None = None,
+    new_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare shots.json before/after a script sync. Frozen shots stay out of affected."""
+    old_by = {
+        int(s.get("n") or 0): s
+        for s in (existing or {}).get("shots") or []
+        if s.get("n") is not None
+    }
+    items: list[dict[str, Any]] = []
+    for shot in merged.get("shots") or []:
+        n = int(shot.get("n") or 0)
+        old = old_by.get(n)
+        frozen = "shot" in _as_str_list(shot.get("locked"))
+        changed: list[str] = []
+        if old is None:
+            changed = ["新增"]
+        else:
+            for key in ("画面", "对白", "字幕", "timing"):
+                if str(old.get(key) or "") != str(shot.get(key) or ""):
+                    changed.append(key)
+        items.append(
+            {
+                "n": n,
+                "frozen": frozen,
+                "changed": changed,
+                "dirty": list(shot.get("dirty") or []),
+                "locked": list(shot.get("locked") or []),
+                "status": shot.get("status"),
+            }
+        )
+    meta_changed: list[str] = []
+    for key in ("钩子", "悬念", "时长"):
+        if str((old_meta or {}).get(key) or "") != str((new_meta or {}).get(key) or ""):
+            meta_changed.append(key)
+    affected = [x["n"] for x in items if x["changed"] and not x["frozen"]]
+    frozen = [x["n"] for x in items if x["frozen"]]
+    parts: list[str] = []
+    if affected:
+        parts.append("影响 Shot " + "/".join(str(n) for n in affected))
+    if frozen:
+        parts.append("已锁 Shot " + "/".join(str(n) for n in frozen) + " 未改")
+    if meta_changed:
+        parts.append("元数据：" + "、".join(meta_changed))
+    return {
+        "meta_changed": meta_changed,
+        "shots": items,
+        "affected": affected,
+        "frozen": frozen,
+        "summary": "；".join(parts) or "没有分镜改动",
     }

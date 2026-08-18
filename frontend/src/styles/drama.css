@@ -122,6 +122,34 @@
   font-weight: 600;
 }
 
+.drama-board-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.drama-board-tabs button {
+  border: none;
+  background: var(--color-border-soft);
+  color: var(--color-text-muted);
+  border-radius: 8px;
+  padding: 7px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.drama-board-tabs button.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.drama-shot-item.frozen .drama-shot-flag {
+  color: var(--color-primary);
+}
+
 .drama-shot-item {
   width: 100%;
   display: flex;
@@ -191,6 +219,60 @@
   flex-direction: column;
   min-width: 0;
   background: #111827;
+}
+
+.drama-script {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 16px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.drama-script textarea {
+  flex: 1;
+  min-height: 240px;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text);
+  background: #fff;
+  resize: none;
+}
+
+.drama-impact-summary {
+  font-size: 13px;
+  color: var(--color-primary);
+}
+
+.drama-impact-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-y: auto;
+  max-height: 160px;
+}
+
+.drama-freeze {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.drama-actions--script {
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
 .drama-preview-tabs {

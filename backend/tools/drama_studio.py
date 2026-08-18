@@ -14,6 +14,7 @@ from tools.drama_shots import (
     load_doc,
     public_shot,
     save_doc,
+    script_impact,
     set_shot_locks,
 )
 from tools.workspace import resolve_safe, workspace_root
@@ -336,15 +337,18 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         )
     dirty: list[str] = []
     if body:
-        dirty = apply_patch(shot, body)
-        script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
-        script = _read_text(script_rel)
-        if script is not None:
-            from tools.drama_video import patch_shot_in_markdown
+        if "shot" in (shot.get("locked") or []):
+            dirty = []
+        else:
+            dirty = apply_patch(shot, body)
+            script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
+            script = _read_text(script_rel)
+            if script is not None:
+                from tools.drama_video import patch_shot_in_markdown
 
-            updated = patch_shot_in_markdown(script, shot_n, body)
-            if updated != script:
-                _write_text(script_rel, updated.rstrip() + "\n")
+                updated = patch_shot_in_markdown(script, shot_n, body)
+                if updated != script:
+                    _write_text(script_rel, updated.rstrip() + "\n")
     save_doc(doc)
 
     return {
@@ -364,4 +368,95 @@ def rerender_one_shot(slug: str, episode: int, shot_n: int, layers: list[str] | 
     from tools.drama_video import rerender_shot
 
     result = rerender_shot(slug, n, shot_n, layers=layers)
+    return result
+
+
+def preview_script(slug: str, episode: int, content: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    text = str(content or "")
+    if not text.strip():
+        raise DramaBadRequest("剧本不能为空")
+    from tools.drama_shots import merge_from_parsed
+    from tools.drama_video import parse_episode_markdown
+
+    existing = load_doc(slug, n)
+    parsed = parse_episode_markdown(text)
+    if not parsed.get("shots"):
+        raise DramaBadRequest("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
+    title = str(parsed.get("title") or "")
+    merged = merge_from_parsed(slug, n, parsed, title=title, existing=existing)
+    impact = script_impact(
+        existing,
+        merged,
+        old_meta=(existing or {}).get("meta") if existing else {},
+        new_meta=parsed.get("meta") or {},
+    )
+    return {"slug": slug, "episode": n, "impact": impact, "count": merged.get("count") or 0}
+
+
+def save_script(slug: str, episode: int, content: str, *, title: str | None = None) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    text = str(content or "")
+    if not text.strip():
+        raise DramaBadRequest("剧本不能为空")
+    from tools.drama_video import parse_episode_markdown, sync_shots_doc
+
+    project = load_project(slug)
+    existing = load_doc(slug, n)
+    parsed = parse_episode_markdown(text)
+    if not parsed.get("shots"):
+        raise DramaBadRequest("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
+    ep_title = str(title or parsed.get("title") or f"第{n}集").strip()
+    ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
+    _write_text(ep_rel, text.rstrip() + "\n")
+
+    episodes = [e for e in (project.get("episodes") or []) if int(e.get("n") or 0) != n]
+    meta = parsed.get("meta") or {}
+    seconds = 45
+    raw_sec = str(meta.get("时长") or "")
+    digits = "".join(ch for ch in raw_sec if ch.isdigit())
+    if digits:
+        seconds = max(15, min(int(digits), 90))
+    old_ep = next((e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n), {})
+    if old_ep.get("seconds") and not digits:
+        seconds = int(old_ep.get("seconds") or 45)
+    episodes.append({"n": n, "title": ep_title, "seconds": seconds, "path": ep_rel})
+    episodes.sort(key=lambda e: int(e.get("n") or 0))
+    project["episodes"] = episodes
+    save_project(slug, project)
+
+    merged = sync_shots_doc(slug, n, text, title=ep_title)
+    impact = script_impact(
+        existing,
+        merged,
+        old_meta=(existing or {}).get("meta") if existing else {},
+        new_meta=parsed.get("meta") or {},
+    )
+    payload = get_episode(slug, n)
+    payload["impact"] = impact
+    return payload
+
+
+def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    ep = get_episode(slug, n)
+    markdown = ep.get("script")
+    if not markdown:
+        raise DramaNotFound("没有分集剧本")
+    from tools.drama_video import render_episode_video
+
+    result = render_episode_video(slug, n, str(markdown), title=str(ep.get("title") or ""))
+    result["impact"] = {
+        "rebuilt_shots": result.get("rebuilt_shots") or [],
+        "skipped_shots": result.get("skipped_shots") or [],
+        "summary": (
+            "重渲 Shot "
+            + "/".join(str(x) for x in (result.get("rebuilt_shots") or []))
+            if result.get("rebuilt_shots")
+            else "没有脏镜头需要重渲"
+        ),
+    }
     return result

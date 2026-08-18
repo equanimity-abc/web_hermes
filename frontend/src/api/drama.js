@@ -73,3 +73,24 @@ export function lockShot(slug, episode, shot, { lock, unlock, locked } = {}) {
   if (unlock) body.unlock = unlock
   return patchShot(slug, episode, shot, body)
 }
+
+export function previewScript(slug, episode, content) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script/preview`,
+    { method: 'POST', body: JSON.stringify({ content }) },
+  )
+}
+
+export function saveScript(slug, episode, content, title) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script`, {
+    method: 'PUT',
+    body: JSON.stringify({ content, title }),
+  })
+}
+
+export function rerenderDirty(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/rerender-dirty`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}

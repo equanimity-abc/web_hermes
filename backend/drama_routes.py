@@ -15,7 +15,10 @@ from tools.drama_studio import (
     patch_episode,
     patch_project,
     patch_shot,
+    preview_script,
+    rerender_dirty_shots,
     rerender_one_shot,
+    save_script,
 )
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
@@ -57,6 +60,11 @@ class ShotPatch(BaseModel):
 
 class RerenderRequest(BaseModel):
     layers: list[str] | None = Field(default=None)
+
+
+class ScriptBody(BaseModel):
+    content: str
+    title: str | None = None
 
 
 @router.get("/projects")
@@ -125,5 +133,29 @@ async def drama_rerender_shot(slug: str, episode: int, shot: int, body: Rerender
     try:
         layers = (body.layers if body else None) or None
         return rerender_one_shot(slug, episode, shot, layers)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/script/preview")
+async def drama_preview_script(slug: str, episode: int, body: ScriptBody):
+    try:
+        return preview_script(slug, episode, body.content)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.put("/projects/{slug}/episodes/{episode}/script")
+async def drama_save_script(slug: str, episode: int, body: ScriptBody):
+    try:
+        return save_script(slug, episode, body.content, title=body.title)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/rerender-dirty")
+async def drama_rerender_dirty(slug: str, episode: int):
+    try:
+        return rerender_dirty_shots(slug, episode)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
         raise _http(e) from e
