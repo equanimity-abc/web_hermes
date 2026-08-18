@@ -42,6 +42,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 12. save_character 写角色卡（外形 look + 音色 voice）；工作台可上传并锁定妆图
 13. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 14. 锁参考图后无法覆盖已锁定的定妆 png
+15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -556,6 +557,47 @@ def _action_rerender_dirty(args: dict) -> str:
     return _ok(action="rerender_dirty", **result)
 
 
+def _action_generate_candidates(args: dict) -> str:
+    from tools.drama_studio import generate_candidates
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    try:
+        shot_n = int(args.get("shot"))
+    except (TypeError, ValueError):
+        return _err("需要 shot（镜头号）")
+    count = args.get("count")
+    try:
+        count_n = int(count) if count is not None else 4
+    except (TypeError, ValueError):
+        count_n = 4
+    result = generate_candidates(slug, n, shot_n, count_n)
+    return _ok(action="generate_candidates", **result)
+
+
+def _action_choose_candidate(args: dict) -> str:
+    from tools.drama_studio import choose_candidate
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    try:
+        shot_n = int(args.get("shot"))
+    except (TypeError, ValueError):
+        return _err("需要 shot（镜头号）")
+    cid = str(args.get("candidate_id") or args.get("id") or "").strip()
+    if not cid:
+        return _err("需要 candidate_id")
+    result = choose_candidate(slug, n, shot_n, cid)
+    return _ok(action="choose_candidate", **result)
+
+
+
 def _tiktok_drama(args: dict) -> str:
     action = str(args.get("action") or "").strip().lower()
     handlers = {
@@ -572,6 +614,8 @@ def _tiktok_drama(args: dict) -> str:
         "lock_shot": _action_lock_shot,
         "rerender_dirty": _action_rerender_dirty,
         "save_character": _action_save_character,
+        "generate_candidates": _action_generate_candidates,
+        "choose_candidate": _action_choose_candidate,
     }
     handler = handlers.get(action)
     if not handler:
@@ -599,7 +643,8 @@ def register_tiktok_drama() -> None:
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
-            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）。"
+            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
+            "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -607,7 +652,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate",
                     "enum": [
                         "guide",
                         "init",
@@ -622,6 +667,8 @@ def register_tiktok_drama() -> None:
                         "lock_shot",
                         "rerender_dirty",
                         "save_character",
+                        "generate_candidates",
+                        "choose_candidate",
                     ],
                 },
                 "slug": {
@@ -732,6 +779,14 @@ def register_tiktok_drama() -> None:
                     "type": "boolean",
                     "description": "save_character 时锁定参考图，禁止覆盖定妆 png",
                 },
+                "candidate_id": {
+                    "type": "string",
+                    "description": "choose_candidate 要锁定的候选 id，如 c1",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "generate_candidates 出图数量 2–4，默认 4",
+                },
             },
             "required": ["action"],
         },
@@ -745,6 +800,7 @@ def register_tiktok_drama() -> None:
         "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕；"
         "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
+        "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

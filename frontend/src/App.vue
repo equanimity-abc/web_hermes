@@ -56,6 +56,9 @@ const {
   lockSelectedRef,
   uploadSelectedRef,
   deleteSelectedCharacter,
+  generateShotCandidates,
+  chooseShotCandidate,
+  uploadShotScene,
 } = useDramaStudio()
 
 const {
@@ -242,6 +245,9 @@ onMounted(() => {
       @upload-ref="uploadSelectedRef"
       @delete-character="deleteSelectedCharacter"
       @toggle-role="toggleShotRole"
+      @generate-candidates="generateShotCandidates"
+      @choose-candidate="chooseShotCandidate"
+      @upload-scene="uploadShotScene"
     />
 
     <ApprovalModal

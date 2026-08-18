@@ -24,6 +24,9 @@ from tools.drama_studio import (
     save_character,
     save_script,
     upload_character_ref,
+    upload_shot_scene,
+    choose_candidate,
+    generate_candidates,
 )
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
@@ -66,6 +69,10 @@ class ShotPatch(BaseModel):
 
 class RerenderRequest(BaseModel):
     layers: list[str] | None = Field(default=None)
+
+
+class CandidateCount(BaseModel):
+    count: int | None = Field(default=4, ge=2, le=4)
 
 
 class ScriptBody(BaseModel):
@@ -154,6 +161,32 @@ async def drama_rerender_shot(slug: str, episode: int, shot: int, body: Rerender
     try:
         layers = (body.layers if body else None) or None
         return rerender_one_shot(slug, episode, shot, layers)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/candidates")
+async def drama_generate_candidates(slug: str, episode: int, shot: int, body: CandidateCount | None = None):
+    try:
+        count = (body.count if body else None) or 4
+        return generate_candidates(slug, episode, shot, count)
+    except (DramaNotFound, DramaBadRequest, ValueError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/choose/{cid}")
+async def drama_choose_candidate(slug: str, episode: int, shot: int, cid: str):
+    try:
+        return choose_candidate(slug, episode, shot, cid)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/scene")
+async def drama_upload_shot_scene(slug: str, episode: int, shot: int, file: UploadFile = File(...)):
+    try:
+        data = await file.read()
+        return upload_shot_scene(slug, episode, shot, data)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
         raise _http(e) from e
 

@@ -471,6 +471,76 @@
   opacity: 0.85;
 }
 
+.drama-candidates {
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0f172a;
+}
+
+.drama-candidates-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.drama-candidates-head h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #e5e7eb;
+}
+
+.drama-candidates-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.drama-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.drama-candidate {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 0;
+  background: #111827;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.drama-candidate img {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  display: block;
+}
+
+.drama-candidate em {
+  font-style: normal;
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 4px 6px;
+}
+
+.drama-candidate.chosen {
+  border-color: var(--color-primary);
+}
+
+.drama-candidate-empty {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 9 / 16;
+  color: #6b7280;
+  font-size: 12px;
+}
+
 .btn-primary {
   background: var(--color-primary);
   color: #fff;

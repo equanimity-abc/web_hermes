@@ -25,16 +25,21 @@ from tools.drama_characters import (
     resolve_shot_characters,
 )
 from tools.drama_shots import (
+    CANDIDATE_COUNT,
     LAYERS,
     apply_patch,
+    candidate_rel,
     clip_list,
+    find_candidate,
     find_shot,
     json_rel,
     layers_for_patch,
     load_doc,
     merge_from_parsed,
+    next_candidate_ids,
     output_rel,
     parse_layers,
+    prune_candidates,
     public_shot,
     save_doc,
     script_rel,
@@ -333,6 +338,8 @@ def _draw_fallback_scene(
     shot: dict[str, Any],
     dest: Path,
     characters: list[dict[str, Any]] | None = None,
+    *,
+    seed: int = 0,
 ) -> None:
     """Atmospheric still if image gen fails — not a subtitle document."""
     from PIL import Image, ImageDraw, ImageFilter
@@ -345,18 +352,24 @@ def _draw_fallback_scene(
         colors = [(18, 22, 64), (80, 50, 140), (220, 170, 70)]
     else:
         colors = [(10, 12, 28), (40, 28, 70), (180, 120, 50)]
+    shift = (int(seed) % 11 - 5) * 12
+    colors = [
+        tuple(max(0, min(255, c + shift + i * 8)) for c in rgb)
+        for i, rgb in enumerate(colors)
+    ]
 
     for i, color in enumerate(colors):
         layer = Image.new("RGB", (ZOOM_W, ZOOM_H), color)
         mask = Image.new("L", (ZOOM_W, ZOOM_H), 0)
         md = ImageDraw.Draw(mask)
-        cy = int(ZOOM_H * (0.25 + i * 0.22))
+        cy = int(ZOOM_H * (0.22 + ((seed + i * 3) % 5) * 0.08 + i * 0.18))
         md.ellipse((-400, cy - 500, ZOOM_W + 400, cy + 500), fill=180 - i * 40)
         mask = mask.filter(ImageFilter.GaussianBlur(80))
         img = Image.composite(layer, img, mask)
 
     draw = ImageDraw.Draw(img)
-    draw.ellipse((ZOOM_W // 2 - 90, 520, ZOOM_W // 2 + 90, 980), outline="#d4a017", width=8)
+    ox = (int(seed) % 7 - 3) * 30
+    draw.ellipse((ZOOM_W // 2 - 90 + ox, 520, ZOOM_W // 2 + 90 + ox, 980), outline="#d4a017", width=8)
     _paste_character_refs(img, characters or [])
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest, "PNG")
@@ -421,6 +434,108 @@ def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
         return dest.is_file() and dest.stat().st_size > 1000
     except Exception:
         return False
+
+
+def _write_scene_png(data: bytes, dest: Path) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.open(BytesIO(data)).convert("RGB")
+    img = _fit_cover(img, ZOOM_W, ZOOM_H)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest, "PNG")
+
+
+def apply_candidate_to_scene(shot: dict[str, Any], cand: dict[str, Any]) -> None:
+    src = resolve_safe(str(cand.get("path") or ""))
+    dest = _path_for(shot, "scene")
+    if not src.is_file():
+        raise FileNotFoundError(f"候选图不存在：{cand.get('path')}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    shot["chosen"] = str(cand.get("id") or "")
+    shot["scene_source"] = str(cand.get("source") or shot.get("scene_source") or "ai")
+    dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+    if "clip" not in dirty and "clip" not in (shot.get("locked") or []):
+        dirty.append("clip")
+    shot["dirty"] = dirty
+    shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
+
+
+def generate_shot_candidates(
+    slug: str,
+    episode: int,
+    shot: dict[str, Any],
+    *,
+    title: str = "",
+    count: int = CANDIDATE_COUNT,
+) -> list[dict[str, Any]]:
+    """Fill the candidate wall. Does not overwrite a locked scene.png."""
+    count = max(2, min(int(count or CANDIDATE_COUNT), 4))
+    locked = set(shot.get("locked") or [])
+    cards = load_characters(slug)
+    cast = resolve_shot_characters(shot, cards)
+    shot["camera"] = shot.get("camera") or _camera_style(shot)
+    prompt = _scene_prompt(title, shot, cast, slug=slug)
+    shot["prompt"] = prompt
+    base_seed = character_seed(slug, cast, int(shot.get("n") or 1))
+    ids = next_candidate_ids(shot, count)
+    created: list[dict[str, Any]] = []
+    used_ai = False
+    n = int(shot.get("n") or 0)
+    for i, cid in enumerate(ids):
+        seed = (base_seed + i * 97) & 0x7FFFFFFF
+        rel = candidate_rel(slug, episode, n, cid)
+        dest = resolve_safe(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ai_ok = _generate_scene_image(prompt, dest, seed=seed)
+        if not ai_ok:
+            _draw_fallback_scene(shot, dest, cast, seed=seed)
+        source = "ai" if ai_ok else "fallback"
+        used_ai = used_ai or ai_ok
+        rec = {"id": cid, "path": rel, "source": source, "seed": seed}
+        created.append(rec)
+    shot["candidates"] = list(shot.get("candidates") or []) + created
+    prune_candidates(shot)
+    if "shot" not in locked and "scene" not in locked and created:
+        apply_candidate_to_scene(shot, created[0])
+        if used_ai:
+            shot["scene_source"] = "ai"
+        shot["dirty"] = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+        if "clip" not in (shot.get("dirty") or []) and "clip" not in locked:
+            shot.setdefault("dirty", []).append("clip")
+            shot["status"] = "dirty"
+    return created
+
+
+def choose_shot_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any]:
+    if "shot" in (shot.get("locked") or []):
+        raise ValueError("整镜已锁定，不能换图")
+    cand = find_candidate(shot, cid)
+    if cand is None:
+        raise ValueError(f"找不到候选 {cid}")
+    apply_candidate_to_scene(shot, cand)
+    return cand
+
+
+def upload_shot_candidate(slug: str, episode: int, shot: dict[str, Any], data: bytes) -> dict[str, Any]:
+    if "shot" in (shot.get("locked") or []):
+        raise ValueError("整镜已锁定，不能换图")
+    if not data:
+        raise ValueError("图片不能为空")
+    cid = next_candidate_ids(shot, 1)[0]
+    rel = candidate_rel(slug, episode, int(shot.get("n") or 0), cid)
+    dest = resolve_safe(rel)
+    try:
+        _write_scene_png(data, dest)
+    except Exception as e:
+        raise ValueError("无法读取图片") from e
+    rec = {"id": cid, "path": rel, "source": "upload", "seed": 0}
+    shot["candidates"] = list(shot.get("candidates") or []) + [rec]
+    prune_candidates(shot)
+    apply_candidate_to_scene(shot, rec)
+    return rec
 
 
 def _draw_subtitle_overlay(shot: dict[str, Any], dest: Path) -> None:
@@ -827,15 +942,10 @@ def render_shot_layers(
     cast = resolve_shot_characters(shot, cards)
 
     if "scene" in wanted:
-        shot["camera"] = shot.get("camera") or _camera_style(shot)
-        prompt = _scene_prompt(title, shot, cast, slug=slug)
-        shot["prompt"] = prompt
-        seed = character_seed(slug, cast, int(shot.get("n") or 1))
-        ai_ok = _generate_scene_image(prompt, scene, seed=seed)
-        if not ai_ok:
-            _draw_fallback_scene(shot, scene, cast)
-        shot["scene_source"] = "ai" if ai_ok else "fallback"
-        used_ai = ai_ok
+        generated = generate_shot_candidates(slug, episode, shot, title=title)
+        used_ai = any(item.get("source") == "ai" for item in generated)
+        if not _path_for(shot, "scene").is_file() and generated:
+            apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
 
     if "overlay" in wanted:

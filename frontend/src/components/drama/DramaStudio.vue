@@ -46,10 +46,14 @@ const emit = defineEmits([
   'upload-ref',
   'delete-character',
   'toggle-role',
+  'generate-candidates',
+  'choose-candidate',
+  'upload-scene',
 ])
 
 const previewMode = ref('shot')
 const refInput = ref(null)
+const sceneInput = ref(null)
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
   { id: 'scene', label: '画面' },
@@ -83,6 +87,7 @@ function shotFlag(shot) {
   if (locked.includes('shot') || impact?.frozen) return '整锁'
   if (impact?.changed?.length) return '将改'
   if ((shot.dirty || []).length) return '脏'
+  if ((shot.candidates || []).length) return `${shot.candidates.length}候`
   if (locked.length) return '锁'
   return statusLabel(shot)
 }
@@ -127,6 +132,18 @@ function onRefFile(ev) {
   const file = ev.target.files?.[0]
   ev.target.value = ''
   if (file) emit('upload-ref', file)
+}
+
+function onSceneFile(ev) {
+  const file = ev.target.files?.[0]
+  ev.target.value = ''
+  if (file) emit('upload-scene', file)
+}
+
+function candUrl(cand) {
+  const url = cand?.url || ''
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 }
 
 function statusLabel(shot) {
@@ -287,6 +304,48 @@ function statusLabel(shot) {
           />
           <img v-else-if="previewKind === 'image'" class="drama-media" :src="previewUrl" alt="镜头画面" />
           <div v-else class="drama-stage-empty">尚无成片，保存后可重渲本镜</div>
+        </div>
+        <div v-if="boardMode === 'shots' && selected" class="drama-candidates">
+          <div class="drama-candidates-head">
+            <h3>候选墙</h3>
+            <div class="drama-candidates-actions">
+              <button
+                type="button"
+                class="btn-tiny"
+                :disabled="rendering || saving || shotFrozen || isLocked('scene')"
+                @click="emit('generate-candidates')"
+              >
+                {{ rendering ? '出图中…' : '重抽 4 张' }}
+              </button>
+              <button
+                type="button"
+                class="btn-tiny"
+                :disabled="rendering || saving || shotFrozen"
+                @click="sceneInput?.click()"
+              >
+                手传覆盖
+              </button>
+            </div>
+          </div>
+          <input ref="sceneInput" class="drama-file" type="file" accept="image/*" @change="onSceneFile" />
+          <p v-if="!(selected.candidates || []).length" class="drama-empty-hint">
+            点「重抽 4 张」生成候选，点缩略图锁定画面（只换图，不重配音）。
+          </p>
+          <div v-else class="drama-candidate-grid">
+            <button
+              v-for="cand in selected.candidates"
+              :key="cand.id"
+              type="button"
+              class="drama-candidate"
+              :class="{ chosen: cand.chosen || selected.chosen === cand.id }"
+              :disabled="rendering || saving || shotFrozen"
+              @click="emit('choose-candidate', cand.id)"
+            >
+              <img v-if="candUrl(cand)" :src="candUrl(cand)" :alt="`候选 ${cand.id}`" />
+              <span v-else class="drama-candidate-empty">无图</span>
+              <em>{{ cand.id }}{{ cand.source === 'upload' ? ' · 手传' : '' }}</em>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -476,7 +535,7 @@ function statusLabel(shot) {
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
-      <p>从左侧打开一个漫剧项目。分镜页改对白和运镜；剧本页改结局；角色页写外形、绑音色、锁参考图。</p>
+      <p>从左侧打开一个漫剧项目。分镜页可重抽候选、点选换图；剧本页改结局；角色页写外形、绑音色、锁参考图。</p>
     </div>
   </main>
 </template>

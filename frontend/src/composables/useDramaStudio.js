@@ -434,6 +434,58 @@ export function useDramaStudio() {
     }
   }
 
+  async function generateShotCandidates(count = 4) {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.generateCandidates(slug.value, episodeN.value, selectedN.value, count)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已生成 ${(result.created || []).length} 张候选`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function chooseShotCandidate(cid) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !cid) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.chooseCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      const rebuilt = (result.rebuilt_layers || []).join(' / ') || '无'
+      notice.value = `已锁定 ${cid}（只换画面，配音保留；重建：${rebuilt}）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function uploadShotScene(file) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !file) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.uploadShotScene(slug.value, episodeN.value, selectedN.value, file)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已用手传图覆盖 ${result.chosen || '画面'}（配音保留）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
   return {
     projects,
     slug,
@@ -479,5 +531,8 @@ export function useDramaStudio() {
     lockSelectedRef,
     uploadSelectedRef,
     deleteSelectedCharacter,
+    generateShotCandidates,
+    chooseShotCandidate,
+    uploadShotScene,
   }
 }

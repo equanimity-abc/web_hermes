@@ -155,6 +155,21 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
     pub["files"] = {layer: _asset_meta(str(rel or "")) for layer, rel in assets.items()}
     clip = pub["files"].get("clip") or {}
     pub["preview_url"] = clip.get("url") or (pub["files"].get("scene") or {}).get("url")
+    pub["chosen"] = shot.get("chosen") or ""
+    pub["candidates"] = []
+    for item in shot.get("candidates") or []:
+        meta = _asset_meta(str(item.get("path") or ""))
+        pub["candidates"].append(
+            {
+                "id": item.get("id"),
+                "path": item.get("path"),
+                "source": item.get("source"),
+                "seed": item.get("seed") or 0,
+                "url": meta.get("url"),
+                "exists": meta["exists"],
+                "chosen": item.get("id") == shot.get("chosen"),
+            }
+        )
     if slug:
         cards = load_characters(slug)
         cast = resolve_shot_characters(shot, cards)
@@ -393,6 +408,104 @@ def rerender_one_shot(slug: str, episode: int, shot_n: int, layers: list[str] | 
 
     result = rerender_shot(slug, n, shot_n, layers=layers)
     return result
+
+
+def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None = None) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    if "shot" in (shot.get("locked") or []):
+        raise DramaBadRequest("整镜已锁定，不能重抽出图")
+    from tools.drama_video import generate_shot_candidates
+
+    ep_title = str(doc.get("title") or f"第{n}集")
+    created = generate_shot_candidates(slug, n, shot, title=ep_title, count=count or 4)
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "shot": enrich_shot(shot, slug=slug),
+        "created": [c.get("id") for c in created],
+        "chosen": shot.get("chosen") or "",
+    }
+
+
+def _rebuild_clip_keep_voice(slug: str, episode: int, shot_n: int, doc: dict[str, Any], shot: dict[str, Any]) -> dict[str, Any]:
+    from tools.drama_video import ffmpeg_available, rerender_shot
+
+    save_doc(doc)
+    if "clip" in (shot.get("locked") or []):
+        return {"rebuilt_layers": [], "skipped_layers": ["clip"], "assemble": "unchanged"}
+    if not ffmpeg_available():
+        dirty = list(shot.get("dirty") or [])
+        if "clip" not in dirty:
+            dirty.append("clip")
+        shot["dirty"] = dirty
+        shot["status"] = "dirty"
+        save_doc(doc)
+        return {"rebuilt_layers": [], "skipped_layers": ["clip"], "assemble": "unchanged", "hint": "未找到 ffmpeg，已换图，成片待重渲"}
+    return rerender_shot(slug, episode, shot_n, layers=["clip"])
+
+
+def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_video import choose_shot_candidate
+
+    try:
+        cand = choose_shot_candidate(shot, cid)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    set_shot_locks(shot, lock=["scene"])
+    result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot)
+    payload = {
+        "slug": slug,
+        "episode": n,
+        "shot": enrich_shot(find_shot(load_doc(slug, n) or doc, shot_n) or shot, slug=slug),
+        "chosen": cand.get("id"),
+        "voice_rebuilt": False,
+        "rebuilt_layers": result.get("rebuilt_layers") or result.get("rebuilt") or [],
+    }
+    payload.update({k: result[k] for k in ("assemble", "hint") if k in result})
+    return payload
+
+
+def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_video import upload_shot_candidate
+
+    try:
+        cand = upload_shot_candidate(slug, n, shot, data)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    set_shot_locks(shot, lock=["scene"])
+    result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot)
+    payload = {
+        "slug": slug,
+        "episode": n,
+        "shot": enrich_shot(find_shot(load_doc(slug, n) or doc, shot_n) or shot, slug=slug),
+        "chosen": cand.get("id"),
+        "voice_rebuilt": False,
+        "rebuilt_layers": result.get("rebuilt_layers") or result.get("rebuilt") or [],
+    }
+    payload.update({k: result[k] for k in ("assemble", "hint") if k in result})
+    return payload
+
 
 
 def preview_script(slug: str, episode: int, content: str) -> dict[str, Any]:

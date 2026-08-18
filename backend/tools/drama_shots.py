@@ -24,6 +24,8 @@ from tools.workspace import resolve_safe
 LAYERS = ("scene", "overlay", "voice", "clip")
 RENDER_LAYERS = (*LAYERS, "assemble")
 LOCK_TOKENS = (*LAYERS, "shot")
+CANDIDATE_COUNT = 4
+WALL_MAX = 12
 LAYER_LABELS = {
     "scene": "画面",
     "overlay": "字幕",
@@ -68,6 +70,70 @@ def shot_assets(slug: str, episode: int, n: int) -> dict[str, str]:
         "voice": f"{base}/{stem}.mp3",
         "clip": f"{base}/{stem}.mp4",
     }
+
+
+def candidate_rel(slug: str, episode: int, n: int, cid: str) -> str:
+    return f"{work_rel(slug, episode)}/{shot_stem(n)}_cand_{cid}.png"
+
+
+def normalize_candidates(slug: str, episode: int, n: int, raw: Any) -> list[dict[str, Any]]:
+    rows = raw if isinstance(raw, list) else []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        cid = str(item.get("id") or "").strip()
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        rel = str(item.get("path") or candidate_rel(slug, episode, n, cid)).replace("\\", "/")
+        out.append(
+            {
+                "id": cid,
+                "path": rel,
+                "source": str(item.get("source") or "ai"),
+                "seed": int(item.get("seed") or 0),
+            }
+        )
+    return out
+
+
+def find_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any] | None:
+    needle = str(cid or "").strip()
+    for item in shot.get("candidates") or []:
+        if str(item.get("id") or "") == needle:
+            return item
+    return None
+
+
+def next_candidate_ids(shot: dict[str, Any], count: int) -> list[str]:
+    used = {str(c.get("id") or "") for c in (shot.get("candidates") or [])}
+    out: list[str] = []
+    i = 1
+    while len(out) < max(0, int(count)):
+        cid = f"c{i}"
+        i += 1
+        if cid not in used:
+            out.append(cid)
+    return out
+
+
+def prune_candidates(shot: dict[str, Any]) -> None:
+    rows = list(shot.get("candidates") or [])
+    chosen = str(shot.get("chosen") or "")
+    if len(rows) <= WALL_MAX:
+        shot["candidates"] = rows
+        return
+    keep: list[dict[str, Any]] = []
+    extras: list[dict[str, Any]] = []
+    for item in rows:
+        if item.get("id") == chosen or item.get("source") == "upload":
+            keep.append(item)
+        else:
+            extras.append(item)
+    need = max(0, WALL_MAX - len(keep))
+    shot["candidates"] = keep + extras[-need:]
 
 
 def load_doc(slug: str, episode: int) -> dict[str, Any] | None:
@@ -166,6 +232,8 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "dirty": dirty,
         "status": status,
         "scene_source": scene_source,
+        "chosen": str(raw.get("chosen") or ""),
+        "candidates": normalize_candidates(slug, episode, n, raw.get("candidates")),
         "assets": assets,
     }
 
@@ -208,6 +276,8 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "dirty": list(LAYERS),
         "status": "pending",
         "scene_source": str(raw.get("scene_source") or ""),
+        "chosen": str(raw.get("chosen") or ""),
+        "candidates": normalize_candidates(slug, episode, n, raw.get("candidates")),
         "assets": assets,
     }
 
@@ -396,6 +466,8 @@ def merge_from_parsed(
             rec["prompt"] = str(old.get("prompt") or "")
             rec["scene_source"] = str(old.get("scene_source") or "")
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
+            rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
+            rec["chosen"] = str(old.get("chosen") or "")
             if "scene" in locked:
                 rec["画面"] = str(old.get("画面") or rec["画面"])
                 rec["prompt"] = str(old.get("prompt") or rec.get("prompt") or "")
@@ -493,6 +565,8 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "dirty": shot.get("dirty") or [],
         "status": shot.get("status"),
         "scene_source": shot.get("scene_source"),
+        "chosen": shot.get("chosen") or "",
+        "candidates": list(shot.get("candidates") or []),
         "assets": shot.get("assets") or {},
         "clip": (shot.get("assets") or {}).get("clip"),
     }

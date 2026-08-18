@@ -146,3 +146,38 @@ export async function uploadCharacterRef(slug, cid, file) {
   }
   return data
 }
+
+export function generateCandidates(slug, episode, shot, count = 4) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/candidates`,
+    { method: 'POST', body: JSON.stringify({ count }) },
+  )
+}
+
+export function chooseCandidate(slug, episode, shot, cid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/choose/${encodeURIComponent(cid)}`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export async function uploadShotScene(slug, episode, shot, file) {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/scene`,
+    { method: 'POST', body: form },
+  )
+  const text = await resp.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { detail: text || `HTTP ${resp.status}` }
+  }
+  if (!resp.ok) {
+    const detail = data.detail || data.error || text || `HTTP ${resp.status}`
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return data
+}
