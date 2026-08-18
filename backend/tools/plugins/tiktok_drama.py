@@ -32,8 +32,10 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 2. save_bible 写入人设 bible.md
 3. save_outline 写入系列大纲 outline.md
 4. save_episode 按集写入 episodes/epNN.md
-5. render_episode 按分镜生成画面 + 运镜 + 配音，合成竖屏 mp4
-6. get / list 回看进度；视频在 videos/epNN.mp4
+5. parse_shots 解析分镜并写入 videos/epNN/shots.json（分镜真相源）
+6. render_episode 按镜生成 clip，再拼接竖屏 mp4
+7. 改某一镜（如字幕）用 rerender_shot，只重渲该镜再整集重拼
+8. get / list 回看进度；成片 videos/epNN.mp4
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -221,6 +223,12 @@ def _action_get(args: dict) -> str:
         payload["episode"] = n
         payload["episode_path"] = ep_rel
         payload["episode_content"] = content
+        from tools.drama_shots import json_rel, load_doc, public_shot
+
+        shots_doc = load_doc(slug, n)
+        if shots_doc:
+            payload["shots_json"] = json_rel(slug, n)
+            payload["shots"] = [public_shot(s) for s in shots_doc.get("shots") or []]
         video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
         video_path = resolve_safe(video_rel)
         if video_path.is_file():
@@ -276,14 +284,35 @@ def _action_save_episode(args: dict) -> str:
     episodes.sort(key=lambda e: int(e.get("n") or 0))
     project["episodes"] = episodes
     _save_project(slug, project)
-    return _ok(
-        action="save_episode",
-        slug=slug,
-        episode=n,
-        title=title,
-        seconds=seconds,
-        path=ep_rel,
-    )
+    synced = None
+    try:
+        from tools.drama_video import sync_shots_doc
+
+        if resolve_safe(_rel(slug, "videos", f"ep{n:02d}", "shots.json")).is_file():
+            from tools.drama_shots import json_rel as shots_json_rel
+
+            doc = sync_shots_doc(slug, n, str(content), title=title)
+            synced = {
+                "shots_json": shots_json_rel(slug, n),
+                "dirty": [
+                    {"n": s.get("n"), "dirty": s.get("dirty")}
+                    for s in doc.get("shots") or []
+                    if s.get("dirty")
+                ],
+            }
+    except ValueError:
+        synced = None
+    result: dict[str, Any] = {
+        "action": "save_episode",
+        "slug": slug,
+        "episode": n,
+        "title": title,
+        "seconds": seconds,
+        "path": ep_rel,
+    }
+    if synced:
+        result["shots"] = synced
+    return _ok(**result)
 
 
 def _episode_number(args: dict) -> tuple[str | None, int | None, str | None]:
@@ -300,7 +329,8 @@ def _episode_number(args: dict) -> tuple[str | None, int | None, str | None]:
 
 
 def _action_parse_shots(args: dict) -> str:
-    from tools.drama_video import parse_episode_markdown
+    from tools.drama_shots import public_shot
+    from tools.drama_video import sync_shots_doc
 
     slug, n, err = _episode_number(args)
     if err:
@@ -311,8 +341,37 @@ def _action_parse_shots(args: dict) -> str:
     content = _read_text(ep_rel)
     if content is None:
         return _err("该集剧本不存在", slug=slug, episode=n, path=ep_rel)
-    parsed = parse_episode_markdown(content)
-    return _ok(action="parse_shots", slug=slug, episode=n, path=ep_rel, **parsed)
+    doc = sync_shots_doc(slug, n, content)
+    return _ok(
+        action="parse_shots",
+        slug=slug,
+        episode=n,
+        path=ep_rel,
+        shots_json=f"{doc.get('work_dir')}/shots.json",
+        title=doc.get("title"),
+        meta=doc.get("meta") or {},
+        count=doc.get("count") or 0,
+        shots=[public_shot(s) for s in doc.get("shots") or []],
+    )
+
+
+def _record_video(project: dict[str, Any], result: dict[str, Any]) -> None:
+    slug = str(project.get("slug") or result["slug"])
+    n = int(result["episode"])
+    videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != n]
+    videos.append(
+        {
+            "n": n,
+            "path": result["path"],
+            "play_url": result["play_url"],
+            "shots": result["shots"],
+            "bytes": result["bytes"],
+            "shots_json": result.get("shots_json"),
+        }
+    )
+    videos.sort(key=lambda v: int(v.get("n") or 0))
+    project["videos"] = videos
+    _save_project(slug, project)
 
 
 def _action_render_episode(args: dict) -> str:
@@ -333,21 +392,73 @@ def _action_render_episode(args: dict) -> str:
         {},
     )
     title = str(args.get("title") or ep_meta.get("title") or "").strip()
-    result = render_episode_video(slug, n, content, title=title)
-    videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != n]
-    videos.append(
-        {
-            "n": n,
-            "path": result["path"],
-            "play_url": result["play_url"],
-            "shots": result["shots"],
-            "bytes": result["bytes"],
-        }
-    )
-    videos.sort(key=lambda v: int(v.get("n") or 0))
-    project["videos"] = videos
-    _save_project(slug, project)
+    force = bool(args.get("force"))
+    result = render_episode_video(slug, n, content, title=title, force=force)
+    _record_video(project, result)
     return _ok(action="render_episode", **result)
+
+
+def _parse_layers(raw: Any) -> list[str] | None:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, list):
+        parts = [str(x).strip() for x in raw]
+    else:
+        parts = [p.strip() for p in str(raw).split(",")]
+    layers = [p for p in parts if p]
+    return layers or None
+
+
+def _action_rerender_shot(args: dict) -> str:
+    from tools.drama_video import rerender_shot
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    project = _load_project(slug)
+    if not project:
+        return _err("项目不存在，请先 init", slug=slug)
+    try:
+        shot_n = int(args.get("shot"))
+    except (TypeError, ValueError):
+        return _err("需要 shot（镜头号，正整数）")
+    if shot_n < 1 or shot_n > 99:
+        return _err("shot 范围 1–99")
+
+    ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
+    content = _read_text(ep_rel)
+    patch: dict[str, Any] = {}
+    for key in ("画面", "对白", "字幕", "camera", "timing"):
+        if args.get(key) is not None:
+            patch[key] = args.get(key)
+    if args.get("duration") is not None:
+        try:
+            patch["duration"] = float(args.get("duration"))
+        except (TypeError, ValueError):
+            return _err("duration 须为数字")
+    ep_meta = next(
+        (e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n),
+        {},
+    )
+    title = str(args.get("title") or ep_meta.get("title") or "").strip()
+    result = rerender_shot(
+        slug,
+        n,
+        shot_n,
+        markdown=content,
+        title=title,
+        patch=patch or None,
+        layers=_parse_layers(args.get("layers")),
+    )
+    if patch and content:
+        from tools.drama_video import patch_shot_in_markdown
+
+        updated = patch_shot_in_markdown(content, shot_n, patch)
+        if updated != content:
+            _write_text(ep_rel, updated.rstrip() + "\n")
+            result["episode_md"] = ep_rel
+    _record_video(project, result)
+    return _ok(action="rerender_shot", **result)
 
 
 def _tiktok_drama(args: dict) -> str:
@@ -362,6 +473,7 @@ def _tiktok_drama(args: dict) -> str:
         "save_episode": _action_save_episode,
         "parse_shots": _action_parse_shots,
         "render_episode": _action_render_episode,
+        "rerender_shot": _action_rerender_shot,
     }
     handler = handlers.get(action)
     if not handler:
@@ -387,7 +499,8 @@ def register_tiktok_drama() -> None:
             "抖音竖屏漫剧项目工具。action: "
             "guide（规范与剧本格式）、init（建项目）、list、get、"
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
-            "parse_shots（解析分镜）、render_episode（分镜出画面+运镜+配音，生成竖屏视频）。"
+            "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
+            "rerender_shot（只重渲一镜再整集重拼）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -395,7 +508,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot",
                     "enum": [
                         "guide",
                         "init",
@@ -406,6 +519,7 @@ def register_tiktok_drama() -> None:
                         "save_episode",
                         "parse_shots",
                         "render_episode",
+                        "rerender_shot",
                     ],
                 },
                 "slug": {
@@ -426,7 +540,39 @@ def register_tiktok_drama() -> None:
                 },
                 "episode": {
                     "type": "integer",
-                    "description": "集数 1–99，get / save_episode / parse_shots / render_episode 使用",
+                    "description": "集数 1–99，get / save_episode / parse_shots / render_episode / rerender_shot 使用",
+                },
+                "shot": {
+                    "type": "integer",
+                    "description": "镜头号，rerender_shot 使用",
+                },
+                "layers": {
+                    "type": "string",
+                    "description": "rerender_shot 要重做的层，逗号分隔：scene,overlay,voice,clip；默认按改动推断",
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "render_episode 时强制重渲全部镜头（忽略已有 clip）",
+                },
+                "字幕": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖该镜字幕",
+                },
+                "对白": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖该镜对白",
+                },
+                "画面": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖该镜画面描述",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖运镜：punch_in / pan_right / rise 等",
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "rerender_shot 时覆盖该镜秒数",
                 },
                 "seconds": {
                     "type": "integer",
@@ -444,8 +590,9 @@ def register_tiktok_drama() -> None:
     add_plugin_prompt_hint(
         "抖音漫剧请调用 tiktok_drama：先 guide 看规范，再 init 建项目，"
         "save_bible / save_outline / save_episode 落盘到 workspace/dramas/{slug}/。"
-        "写完分集后立刻 render_episode：会按「画面」生成镜头画面并加运镜/配音，"
-        "不要再用 write_file 手动画字幕卡。回复里用返回的 play_url 做成 markdown 链接，"
+        "写完分集后先 parse_shots 落盘 shots.json，再 render_episode。"
+        "只改某一镜（例如字幕）请用 rerender_shot，不要整集重渲。"
+        "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )
 

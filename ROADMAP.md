@@ -170,7 +170,9 @@ P0–P7 骨架已齐。之后按痛点加能力即可：业务工具继续丢进
 
 P7 已完成：插件 `tiktok_drama`（guide / init / list / get / save_bible / save_outline / save_episode），项目落在 `workspace/dramas/{slug}/`；system prompt 动态列出工具 + 插件 hint。
 
-P8 已完成：`parse_shots` / `render_episode` 按分镜生成画面（Pollinations）+ Ken Burns 运镜 + edge-tts 配音，合成 9:16 mp4。成片：`workspace/dramas/{slug}/videos/epNN.mp4`。
+P8 已完成：`parse_shots` / `render_episode` 按分镜生成画面（Pollinations）+ 运镜 + edge-tts 配音，合成 9:16 mp4。成片：`workspace/dramas/{slug}/videos/epNN.mp4`。
+
+D0 已完成：`videos/epNN/shots.json` 为分镜真相源；每镜独立 `shotNN.mp4`；`rerender_shot` 只重建该镜再整集重拼。
 
 ---
 
@@ -203,6 +205,7 @@ P8 已完成：`parse_shots` / `render_episode` 按分镜生成画面（Pollinat
 | 上下文压缩 | ✅ DONE |
 | 抖音漫剧插件 | ✅ DONE |
 | 分镜成片（配音 mp4） | ✅ DONE |
+| 分镜资产 / 单镜重渲（D0） | ✅ DONE |
 
 ---
 

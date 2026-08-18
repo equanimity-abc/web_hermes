@@ -6,7 +6,6 @@ Used by tiktok_drama action=render_episode. Does not touch agent/loop.py.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import shutil
@@ -18,13 +17,29 @@ from pathlib import Path
 from typing import Any
 
 from config import config
+from tools.drama_shots import (
+    LAYERS,
+    apply_patch,
+    clip_list,
+    find_shot,
+    json_rel,
+    layers_for_patch,
+    load_doc,
+    merge_from_parsed,
+    output_rel,
+    public_shot,
+    save_doc,
+    work_rel,
+)
 from tools.workspace import resolve_safe
 
 WIDTH = 1080
 HEIGHT = 1920
 FPS = 25
-ZOOM_W = 1350
-ZOOM_H = 2400
+# Oversized still so pan/zoom has travel — Ken Burns needs extra pixels.
+ZOOM_W = 1620
+ZOOM_H = 2880
+XFADE_SEC = 0.32
 
 _SHOT_HEAD = re.compile(
     r"^###\s*Shot\s+(\d+)\s*(?:\(([^)]*)\))?\s*$",
@@ -104,6 +119,31 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
     return {"title": title, "meta": meta, "shots": shots, "count": len(shots)}
 
 
+def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str:
+    """Write 画面/对白/字幕 back into the episode markdown for one shot."""
+    fields = {k: str(v) for k, v in patch.items() if k in ("画面", "对白", "字幕") and v is not None}
+    if not fields:
+        return text
+    lines = str(text or "").replace("\r\n", "\n").split("\n")
+    in_target = False
+    out: list[str] = []
+    for line in lines:
+        stripped = line.rstrip()
+        m_shot = _SHOT_HEAD.match(stripped)
+        if m_shot:
+            in_target = int(m_shot.group(1)) == int(shot_n)
+            out.append(line)
+            continue
+        if in_target:
+            m_field = _FIELD.match(stripped)
+            if m_field and m_field.group(1) in fields:
+                key = m_field.group(1)
+                out.append(f"- {key}: {fields[key]}")
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def _parse_timing(timing: str) -> tuple[float, float, float]:
     m = _RANGE.search(timing or "")
     if not m:
@@ -164,14 +204,57 @@ def _wrap(draw, text: str, font, max_width: int) -> list[str]:
 
 def _scene_prompt(title: str, shot: dict[str, Any]) -> str:
     scene = (shot.get("画面") or "").strip() or "cinematic Chinese myth scene"
+    style = _camera_style(shot)
+    kinetic = {
+        "punch_in": "dynamic action pose, motion implied, wind-blown cloth, sparks",
+        "punch_shake": "explosive action, flying debris, impact freeze, dramatic angle",
+        "pan_right": "wide moving scene, characters mid-stride, trailing motion",
+        "pan_left": "wide chasing scene, dust and speed lines implied",
+        "rise": "low angle looking up, towering architecture, clouds rushing",
+        "fall": "high angle descending, ground rushing closer",
+        "pull_out": "epic establishing shot, vast landscape, tiny figure",
+    }.get(style, "cinematic staging, strong silhouette")
     return (
-        "vertical 9:16 cinematic Chinese animation still frame, "
-        f"{title or 'Journey to the West'}, {scene}, "
+        "vertical 9:16 cinematic Chinese animation keyframe, "
+        f"{title or 'Journey to the West'}, {scene}, {kinetic}, "
         "classic 西游记 manhua / anime illustration, Monkey King Sun Wukong "
         "gold headband tiger-skin skirt Ruyi Jingu Bang, heavenly palace clouds, "
-        "dramatic lighting, highly detailed, character in frame, "
+        "dramatic rim lighting, highly detailed, character in frame, "
         "no text, no letters, no subtitles, no watermark, no UI"
     )
+
+
+def _camera_style(shot: dict[str, Any]) -> str:
+    """Pick a visible camera move from shot text — not a tiny Ken Burns."""
+    scene = shot.get("画面") or ""
+    n = int(shot.get("n") or 1)
+    if any(k in scene for k in ("打", "战", "棒", "怒", "砸", "翻", "炸", "劈")):
+        return "punch_shake"
+    if any(k in scene for k in ("冲", "追", "跑", "逃", "飞", "射")):
+        return "pan_right" if n % 2 else "pan_left"
+    if any(k in scene for k in ("天", "宫", "云", "升", "凌空")):
+        return "rise"
+    if any(k in scene for k in ("坠", "落", "俯冲", "砸向")):
+        return "fall"
+    if any(k in scene for k in ("远", "全景", "俯瞰", "建立")):
+        return "pull_out"
+    if any(k in scene for k in ("近", "特写", "脸", "眼")):
+        return "punch_in"
+    return ("punch_in", "pan_right", "rise", "pull_out", "pan_left")[(n - 1) % 5]
+
+
+def _transition_name(style: str, index: int) -> str:
+    if style == "punch_shake":
+        return "wipeleft"
+    if style in ("pan_right", "pan_left"):
+        return "slideleft" if style == "pan_right" else "slideright"
+    if style == "rise":
+        return "slidedown"
+    if style == "fall":
+        return "slideup"
+    if index % 3 == 0:
+        return "fadeblack"
+    return "fade"
 
 
 def _fit_cover(img, width: int, height: int):
@@ -227,7 +310,7 @@ def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
     model = config.IMAGE_GEN_MODEL or "flux"
     url = (
         f"https://image.pollinations.ai/prompt/{quoted}"
-        f"?width=768&height=1344&model={urllib.parse.quote(model)}"
+        f"?width=1024&height=1792&model={urllib.parse.quote(model)}"
         f"&nologo=true&enhance=true&seed={seed}"
     )
     try:
@@ -286,33 +369,57 @@ def _draw_subtitle_overlay(shot: dict[str, Any], dest: Path) -> None:
 
 
 def _motion_expr(shot: dict[str, Any], frames: int) -> str:
-    """Ken Burns: zoom / pan so stills feel like camera moves."""
-    scene = shot.get("画面") or ""
-    z_inc = max(0.0006, 0.14 / max(frames, 1))
-    n = int(shot.get("n") or 1)
-    if any(k in scene for k in ("天", "宫", "云", "冲")):
-        return (
-            f"zoompan=z='min(1.0+{z_inc}*on,1.16)':"
-            f"x='iw/2-(iw/zoom/2)':"
-            f"y='max(0,ih/2-(ih/zoom/2)-on*0.45)':"
-            f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
-        )
-    if n % 2 == 0:
-        return (
-            f"zoompan=z='max(1.16-{z_inc}*on,1.0)':"
-            f"x='iw/2-(iw/zoom/2)':"
-            f"y='ih/2-(ih/zoom/2)':"
-            f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
-        )
+    """Large travel zoom/pan. Tiny 1.0→1.16 zoom reads as a still."""
+    style = _camera_style(shot)
+    n = max(frames - 1, 1)
+    # zoompan x/y must stay inside [0, iw-iw/zoom]
+    z_in = f"min(1.10+0.42*on/{n},1.52)"
+    z_out = f"max(1.52-0.42*on/{n},1.10)"
+    z_hold = "1.34"
+    x_ctr = "iw/2-(iw/zoom/2)"
+    y_ctr = "ih/2-(ih/zoom/2)"
+    x_max = f"max(0,min({x_ctr}*2,(iw-iw/zoom)*on/{n}))"
+    x_min = f"max(0,(iw-iw/zoom)*(1-on/{n}))"
+    y_up = f"max(0,(ih-ih/zoom)*(1-on/{n}))"
+    y_down = f"max(0,min(ih-ih/zoom,(ih-ih/zoom)*on/{n}))"
+    if style == "pull_out":
+        z, x, y = z_out, x_ctr, y_ctr
+    elif style == "pan_right":
+        z, x, y = z_hold, x_max, f"(ih-ih/zoom)*0.32"
+    elif style == "pan_left":
+        z, x, y = z_hold, x_min, f"(ih-ih/zoom)*0.38"
+    elif style == "rise":
+        z, x, y = z_hold, x_ctr, y_up
+    elif style == "fall":
+        z, x, y = z_hold, x_ctr, y_down
+    else:
+        # punch_in / punch_shake
+        z, x, y = z_in, x_ctr, f"{y_ctr}-0.12*(ih-ih/zoom)*on/{n}"
     return (
-        f"zoompan=z='min(1.0+{z_inc}*on,1.16)':"
-        f"x='iw/2-(iw/zoom/2)':"
-        f"y='ih/2-(ih/zoom/2)':"
+        f"zoompan=z='{z}':x='{x}':y='{y}':"
         f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
     )
 
 
-def _run_ffmpeg(args: list[str], *, cwd: Path | None = None) -> None:
+def _look_filters(shot: dict[str, Any]) -> str:
+    """Grade + grain + vignette so it doesn't look like a PNG slideshow."""
+    style = _camera_style(shot)
+    shake = ""
+    if style == "punch_shake":
+        shake = (
+            f"crop=iw-64:ih-64:'32+30*sin(n*2.3)':'32+24*cos(n*2.9)',"
+            f"scale={WIDTH}:{HEIGHT},"
+        )
+    return (
+        f"{shake}"
+        "eq=contrast=1.12:saturation=1.22:gamma=0.98:brightness=0.02,"
+        "vignette=PI/3.4:mode=forward,"
+        "noise=alls=8:allf=t+u,"
+        "unsharp=5:5:0.75:5:5:0.0"
+    )
+
+
+def _run_ffmpeg(args: list[str], *, cwd: Path | None = None, timeout: int = 240) -> None:
     creationflags = 0
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -321,7 +428,7 @@ def _run_ffmpeg(args: list[str], *, cwd: Path | None = None) -> None:
         cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=timeout,
         creationflags=creationflags,
     )
     if proc.returncode != 0:
@@ -400,19 +507,31 @@ def _encode_clip(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Ken Burns on the scene still, then burn subtitles. Always output AAC."""
+    """Camera move on the still, grade it, burn subtitles. Always output AAC."""
     frames = max(int(round(duration * FPS)), FPS)
-    fade = min(0.28, max(duration * 0.08, 0.12))
-    fade_out_at = max(duration - fade, 0.05)
     motion = _motion_expr(shot, frames)
+    look = _look_filters(shot)
     vf = (
         f"[0:v]scale={ZOOM_W}:{ZOOM_H}:force_original_aspect_ratio=increase,"
-        f"crop={ZOOM_W}:{ZOOM_H},{motion},"
-        f"fade=t=in:st=0:d={fade:.2f},"
-        f"fade=t=out:st={fade_out_at:.2f}:d={fade:.2f}[v];"
+        f"crop={ZOOM_W}:{ZOOM_H},{motion},{look},fps={FPS}[v];"
         f"[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
     )
-    args = ["-y", "-loop", "1", "-i", str(scene), "-i", str(overlay)]
+    # Input framerate is required or zoompan often emits a single still.
+    args = [
+        "-y",
+        "-framerate",
+        str(FPS),
+        "-loop",
+        "1",
+        "-i",
+        str(scene),
+        "-framerate",
+        str(FPS),
+        "-loop",
+        "1",
+        "-i",
+        str(overlay),
+    ]
     if audio is not None:
         args += ["-i", str(audio)]
     else:
@@ -431,6 +550,8 @@ def _encode_clip(
         "2:a",
         "-t",
         f"{duration:.2f}",
+        "-r",
+        str(FPS),
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -448,7 +569,265 @@ def _encode_clip(
         "+faststart",
         str(clip),
     ]
-    _run_ffmpeg(args)
+    _run_ffmpeg(args, timeout=240)
+
+
+def _assemble_clips(
+    clips: list[tuple[Path, float, str]],
+    out_path: Path,
+) -> str:
+    """Crossfade shots. Hard concat reads as a slideshow."""
+    if not clips:
+        raise ValueError("没有可拼接的镜头")
+    if len(clips) == 1:
+        _run_ffmpeg(
+            ["-y", "-i", str(clips[0][0]), "-c", "copy", "-movflags", "+faststart", str(out_path)],
+            timeout=60,
+        )
+        return "copy"
+
+    fade = XFADE_SEC
+    min_dur = min(d for _, d, _ in clips)
+    if min_dur <= fade + 0.2:
+        fade = max(0.12, min_dur * 0.22)
+
+    inputs: list[str] = []
+    for path, _, _ in clips:
+        inputs += ["-i", str(path)]
+
+    parts: list[str] = []
+    last_v = "[0:v]"
+    last_a = "[0:a]"
+    offset = clips[0][1] - fade
+    for i in range(1, len(clips)):
+        trans = _transition_name(clips[i][2], i)
+        v_out = f"[v{i}]"
+        a_out = f"[a{i}]"
+        parts.append(
+            f"{last_v}[{i}:v]xfade=transition={trans}:duration={fade:.2f}:offset={offset:.3f}{v_out}"
+        )
+        parts.append(f"{last_a}[{i}:a]acrossfade=d={fade:.2f}{a_out}")
+        last_v, last_a = v_out, a_out
+        offset += clips[i][1] - fade
+
+    args = [
+        "-y",
+        *inputs,
+        "-filter_complex",
+        ";".join(parts),
+        "-map",
+        last_v,
+        "-map",
+        last_a,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        str(out_path),
+    ]
+    try:
+        _run_ffmpeg(args, timeout=400)
+        return "xfade"
+    except RuntimeError:
+        list_file = out_path.parent / "concat.txt"
+        list_file.write_text(
+            "\n".join(f"file '{p.name}'" for p, _, _ in clips) + "\n",
+            encoding="utf-8",
+        )
+        _run_ffmpeg(
+            [
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(list_file.name),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            cwd=out_path.parent,
+        )
+        return "concat-fallback"
+
+
+def sync_shots_doc(
+    slug: str,
+    episode: int,
+    markdown: str,
+    *,
+    title: str = "",
+) -> dict[str, Any]:
+    parsed = parse_episode_markdown(markdown)
+    if not parsed.get("shots"):
+        raise ValueError("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
+    doc = merge_from_parsed(
+        slug,
+        episode,
+        parsed,
+        title=title,
+        existing=load_doc(slug, episode),
+    )
+    resolve_safe(work_rel(slug, episode)).mkdir(parents=True, exist_ok=True)
+    save_doc(doc)
+    return doc
+
+
+def _path_for(shot: dict[str, Any], layer: str) -> Path:
+    rel = (shot.get("assets") or {}).get(layer)
+    if not rel:
+        raise ValueError(f"镜头 {shot.get('n')} 缺少 {layer} 路径")
+    path = resolve_safe(rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def render_shot_layers(
+    slug: str,
+    episode: int,
+    shot: dict[str, Any],
+    layers: list[str],
+    *,
+    title: str,
+) -> dict[str, Any]:
+    """Rebuild selected layers for one shot. Unspecified layers are reused on disk."""
+    if not ffmpeg_available():
+        raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
+
+    wanted = [layer for layer in LAYERS if layer in layers]
+    locked = set(shot.get("locked") or [])
+    wanted = [layer for layer in wanted if layer not in locked]
+    if not wanted:
+        return {"n": shot.get("n"), "rebuilt": [], "skipped": "locked_or_empty"}
+
+    assets = shot.setdefault("assets", {})
+    scene = _path_for(shot, "scene")
+    overlay = _path_for(shot, "overlay")
+    voice = _path_for(shot, "voice")
+    clip = _path_for(shot, "clip")
+
+    rebuilt: list[str] = []
+    used_tts = False
+    used_ai = False
+
+    if "scene" in wanted:
+        shot["camera"] = shot.get("camera") or _camera_style(shot)
+        prompt = _scene_prompt(title, shot)
+        shot["prompt"] = prompt
+        seed = zlib.crc32(
+            f"{slug}:{episode}:{shot['n']}:{shot.get('画面')}".encode()
+        ) & 0x7FFFFFFF
+        ai_ok = _generate_scene_image(prompt, scene, seed=seed)
+        if not ai_ok:
+            _draw_fallback_scene(shot, scene)
+        shot["scene_source"] = "ai" if ai_ok else "fallback"
+        used_ai = ai_ok
+        rebuilt.append("scene")
+
+    if "overlay" in wanted:
+        _draw_subtitle_overlay(shot, overlay)
+        rebuilt.append("overlay")
+
+    duration = float(shot.get("duration") or 5)
+    if "voice" in wanted:
+        speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
+        has_audio = _tts_to_file(speech, voice) if speech else False
+        if has_audio:
+            used_tts = True
+            duration = max(duration, _probe_duration(voice) + 0.25)
+            shot["duration"] = round(duration, 2)
+        elif voice.exists():
+            try:
+                voice.unlink()
+            except OSError:
+                pass
+        rebuilt.append("voice")
+    elif voice.is_file() and voice.stat().st_size > 0:
+        duration = max(duration, _probe_duration(voice) + 0.25)
+        shot["duration"] = round(duration, 2)
+
+    if "clip" in wanted:
+        if not scene.is_file():
+            raise RuntimeError(f"镜头 {shot.get('n')} 没有画面，请先生成 scene")
+        if not overlay.is_file():
+            _draw_subtitle_overlay(shot, overlay)
+            if "overlay" not in rebuilt:
+                rebuilt.append("overlay")
+        shot["camera"] = shot.get("camera") or _camera_style(shot)
+        audio = voice if voice.is_file() and voice.stat().st_size > 0 else None
+        _encode_clip(scene, overlay, clip, duration, audio, shot)
+        rebuilt.append("clip")
+        assets["clip"] = assets.get("clip") or str(clip)
+
+    remaining = [layer for layer in (shot.get("dirty") or []) if layer not in rebuilt]
+    shot["dirty"] = remaining
+    shot["status"] = "rendered" if not remaining and clip.is_file() else "dirty"
+    return {
+        "n": shot.get("n"),
+        "rebuilt": rebuilt,
+        "duration": shot.get("duration"),
+        "camera": shot.get("camera"),
+        "scene_source": shot.get("scene_source"),
+        "ai": used_ai,
+        "tts": used_tts,
+        "clip": assets.get("clip"),
+    }
+
+
+def assemble_episode(doc: dict[str, Any]) -> str:
+    out_rel = doc.get("output") or output_rel(str(doc["slug"]), int(doc["episode"]))
+    out_path = resolve_safe(out_rel)
+    assemble = _assemble_clips(clip_list(doc), out_path)
+    doc["assemble"] = assemble
+    save_doc(doc)
+    return assemble
+
+
+def _voice_file_exists(shot: dict[str, Any]) -> bool:
+    rel = (shot.get("assets") or {}).get("voice")
+    if not rel:
+        return False
+    path = resolve_safe(rel)
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _episode_result(doc: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    out_rel = str(doc.get("output") or output_rel(str(doc["slug"]), int(doc["episode"])))
+    out_path = resolve_safe(out_rel)
+    shots = doc.get("shots") or []
+    payload = {
+        "slug": doc.get("slug"),
+        "episode": doc.get("episode"),
+        "title": doc.get("title"),
+        "path": out_rel,
+        "play_url": f"/api/workspace/file?path={out_rel}",
+        "bytes": out_path.stat().st_size if out_path.is_file() else 0,
+        "shots": len(shots),
+        "shots_json": json_rel(str(doc["slug"]), int(doc["episode"])),
+        "ai_scenes": sum(1 for s in shots if s.get("scene_source") == "ai"),
+        "tts": any(
+            _voice_file_exists(s) for s in shots
+        ),
+        "assemble": doc.get("assemble"),
+        "workspace": str(config.WORKSPACE_DIR),
+        "shot_list": [public_shot(s) for s in shots],
+    }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def render_episode_video(
@@ -457,95 +836,77 @@ def render_episode_video(
     markdown: str,
     *,
     title: str = "",
+    force: bool = False,
 ) -> dict[str, Any]:
-    if not ffmpeg_available():
-        raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
+    """Render dirty (or all) shots independently, then assemble epNN.mp4."""
+    doc = sync_shots_doc(slug, episode, markdown, title=title)
+    ep_title = str(title or doc.get("title") or f"第{episode}集")
+    rebuilt: list[int] = []
+    skipped: list[int] = []
+    for shot in doc.get("shots") or []:
+        layers = list(LAYERS) if force else list(shot.get("dirty") or [])
+        if not layers:
+            clip_rel = (shot.get("assets") or {}).get("clip")
+            if clip_rel and resolve_safe(clip_rel).is_file():
+                skipped.append(int(shot["n"]))
+                continue
+            layers = list(LAYERS)
+        info = render_shot_layers(slug, episode, shot, layers, title=ep_title)
+        rebuilt.append(int(shot["n"]))
+        shot["status"] = "rendered" if not shot.get("dirty") else shot.get("status")
+        _ = info
+    out_path = resolve_safe(str(doc.get("output") or output_rel(slug, episode)))
+    if rebuilt or not out_path.is_file():
+        assemble = assemble_episode(doc)
+    else:
+        assemble = str(doc.get("assemble") or "unchanged")
+        save_doc(doc)
+    return _episode_result(doc, {"rebuilt_shots": rebuilt, "skipped_shots": skipped, "assemble": assemble})
 
-    parsed = parse_episode_markdown(markdown)
-    shots = parsed["shots"]
-    if not shots:
-        raise ValueError("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
 
-    ep_title = title or parsed["title"] or f"第{episode}集"
-    rel_dir = f"dramas/{slug}/videos/ep{episode:02d}"
-    out_rel = f"dramas/{slug}/videos/ep{episode:02d}.mp4"
-    work = resolve_safe(rel_dir)
-    work.mkdir(parents=True, exist_ok=True)
-    out_path = resolve_safe(out_rel)
+def rerender_shot(
+    slug: str,
+    episode: int,
+    shot_n: int,
+    *,
+    markdown: str | None = None,
+    title: str = "",
+    patch: dict[str, Any] | None = None,
+    layers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Patch one shot, rebuild only requested layers, then reassemble the episode."""
+    doc = load_doc(slug, episode)
+    if doc is None:
+        if not markdown:
+            raise ValueError("没有 shots.json，请先 parse_shots 或 render_episode")
+        doc = sync_shots_doc(slug, episode, markdown, title=title)
 
-    clips: list[str] = []
-    used_tts = False
-    used_ai = 0
-    for shot in shots:
-        stem = f"shot{int(shot['n']):02d}"
-        scene = work / f"{stem}_scene.png"
-        overlay = work / f"{stem}_overlay.png"
-        mp3 = work / f"{stem}.mp3"
-        clip = work / f"{stem}.mp4"
-        prompt = _scene_prompt(ep_title, shot)
-        seed = zlib.crc32(f"{slug}:{episode}:{shot['n']}:{shot.get('画面')}".encode()) & 0x7FFFFFFF
-        ai_ok = _generate_scene_image(prompt, scene, seed=seed)
-        if ai_ok:
-            used_ai += 1
-        else:
-            _draw_fallback_scene(shot, scene)
-        shot["scene"] = "ai" if ai_ok else "fallback"
-        _draw_subtitle_overlay(shot, overlay)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise ValueError(f"找不到 Shot {shot_n}")
 
-        speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
-        has_audio = _tts_to_file(speech, mp3) if speech else False
-        duration = float(shot.get("duration") or 5)
-        if has_audio:
-            used_tts = True
-            audio_dur = _probe_duration(mp3)
-            duration = max(duration, audio_dur + 0.25)
-            _encode_clip(scene, overlay, clip, duration, mp3, shot)
-        else:
-            _encode_clip(scene, overlay, clip, duration, None, shot)
-        clips.append(clip.name)
-        shot["clip"] = f"{rel_dir}/{clip.name}"
-        shot["duration"] = round(duration, 2)
-        shot["scene"] = "ai" if scene.exists() and used_ai else "fallback"
+    patch = {k: v for k, v in (patch or {}).items() if v is not None}
+    if patch:
+        apply_patch(shot, patch)
 
-    list_file = work / "concat.txt"
-    list_file.write_text(
-        "\n".join(f"file '{name}'" for name in clips) + "\n",
-        encoding="utf-8",
+    wanted = layers
+    if not wanted:
+        wanted = list(shot.get("dirty") or []) or layers_for_patch(patch) or ["clip"]
+    if "clip" not in wanted and any(layer in wanted for layer in ("scene", "overlay", "voice")):
+        wanted = [*wanted, "clip"]
+
+    ep_title = str(title or doc.get("title") or f"第{episode}集")
+    info = render_shot_layers(slug, episode, shot, wanted, title=ep_title)
+    assemble = assemble_episode(doc)
+    return _episode_result(
+        doc,
+        {
+            "rebuilt_shots": [shot_n],
+            "skipped_shots": [
+                int(s["n"]) for s in doc.get("shots") or [] if int(s["n"]) != shot_n
+            ],
+            "shot": public_shot(shot),
+            "rebuilt_layers": info.get("rebuilt"),
+            "assemble": assemble,
+        },
     )
-    _run_ffmpeg(
-        [
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(list_file.name),
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            str(out_path),
-        ],
-        cwd=work,
-    )
-
-    shots_json = work / "shots.json"
-    shots_json.write_text(
-        json.dumps(parsed, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    play_url = f"/api/workspace/file?path={out_rel}"
-    return {
-        "slug": slug,
-        "episode": episode,
-        "title": ep_title,
-        "path": out_rel,
-        "play_url": play_url,
-        "bytes": out_path.stat().st_size if out_path.is_file() else 0,
-        "shots": len(shots),
-        "ai_scenes": used_ai,
-        "tts": used_tts,
-        "workspace": str(config.WORKSPACE_DIR),
-    }

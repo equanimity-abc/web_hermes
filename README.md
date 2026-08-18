@@ -83,7 +83,8 @@ npm run dev
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
 记忆文件：`backend/data/memory/MEMORY.md`（跨会话；新会话 system 会注入，每轮会刷新）。
 漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
-成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（按分镜出画面 + 运镜 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
+成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（分镜静图 + 运镜/转场/调色 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
+分镜资产：`videos/epNN/shots.json` + `shotNN.mp4`（改一镜用 `rerender_shot`，其它镜不重渲）。
 
 ## 开发路线
 
@@ -98,3 +99,4 @@ npm run dev
 - [x] P6: 记忆与压缩（MEMORY.md + 上下文摘要）
 - [x] P7: 抖音漫剧插件（`tiktok_drama`，不改 agent loop）
 - [x] P8: 分镜成片（`render_episode` → 竖屏配音 mp4）
+- [x] D0: 分镜资产化（`shots.json` + `rerender_shot` 单镜重渲）
