@@ -18,9 +18,11 @@ from agent.memory_store import memory_path, read_memory, write_memory
 from config import config
 from session_store import SessionStore, refresh_system_prompt
 from stream_manager import BusyError, streams
+from drama_routes import router as drama_router
 from tools.workspace import resolve_safe, save_upload, workspace_root
 
 app = FastAPI(title="Agent Chat API", version="0.6.0")
+app.include_router(drama_router)
 
 app.add_middleware(
     CORSMiddleware,

@@ -78,6 +78,13 @@ npm run dev
 | GET | `/api/sessions` | 会话列表（摘要） |
 | GET | `/api/sessions/{id}` | 获取会话历史 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
+| GET | `/api/drama/projects` | 漫剧项目列表 |
+| GET | `/api/drama/projects/{slug}` | 项目详情（分集、bible、outline） |
+| PATCH | `/api/drama/projects/{slug}` | 改标题 / logline |
+| GET | `/api/drama/projects/{slug}/episodes/{n}` | 分集 + 分镜 + 预览 URL |
+| PATCH | `/api/drama/projects/{slug}/episodes/{n}` | 改分集标题 / 时长 |
+| PATCH | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}` | 改对白 / 画面 / 字幕 / 运镜 / 时长（不经 Agent） |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/rerender` | 只重渲该镜再整集重拼 |
 
 会话落盘目录：`backend/data/sessions/{id}.json`（重启后仍可恢复）。
 工作区目录：`backend/data/workspace/`（工具与上传均限制在此沙箱内）。
@@ -85,6 +92,7 @@ npm run dev
 漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
 成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（分镜静图 + 运镜/转场/调色 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
 分镜资产：`videos/epNN/shots.json` + `shotNN.mp4`（改一镜用 `rerender_shot`，其它镜不重渲）。
+工作台：前端侧栏切到「漫剧」，REST `/api/drama/*` 直接改分镜（对白 / 运镜 / 时长），不走 Agent loop。
 
 ## 开发路线
 
@@ -100,3 +108,4 @@ npm run dev
 - [x] P7: 抖音漫剧插件（`tiktok_drama`，不改 agent loop）
 - [x] P8: 分镜成片（`render_episode` → 竖屏配音 mp4）
 - [x] D0: 分镜资产化（`shots.json` + `rerender_shot` 单镜重渲）
+- [x] D1: 漫剧工作台（分镜台 UI + `/api/drama` REST，不靠聊天改镜）

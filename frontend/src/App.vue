@@ -1,15 +1,42 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
+import DramaStudio from '@/components/drama/DramaStudio.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
+import { useDramaStudio } from '@/composables/useDramaStudio'
 import { useSessions } from '@/composables/useSessions'
 import { useSidebarResize } from '@/composables/useSidebarResize'
 import { useClipboardToast } from '@/composables/useClipboardToast'
 
 const chatViewRef = ref(null)
+const view = ref('chat')
+const {
+  projects: dramaProjects,
+  slug: dramaSlug,
+  project: dramaProject,
+  episodeN: dramaEpisodeN,
+  episode: dramaEpisode,
+  selectedN: dramaSelectedN,
+  selected: dramaSelected,
+  shots: dramaShots,
+  episodes: dramaEpisodes,
+  draft: dramaDraft,
+  dirty: dramaDirty,
+  saving: dramaSaving,
+  rendering: dramaRendering,
+  error: dramaError,
+  notice: dramaNotice,
+  bust: dramaBust,
+  refreshProjects,
+  openProject,
+  openEpisode,
+  selectShot,
+  saveShot,
+  rerenderSelected,
+} = useDramaStudio()
 
 const {
   currentSessionId,
@@ -51,12 +78,14 @@ const {
 })
 
 function newChat() {
+  view.value = 'chat'
   clearCurrentSession()
   resetConversation()
   nextTick(() => chatViewRef.value?.focusComposer?.())
 }
 
 async function switchSession(sessionId) {
+  view.value = 'chat'
   setCurrentSessionId(sessionId)
   try {
     const list = await loadSessionMessages(sessionId)
@@ -91,6 +120,30 @@ async function onAttach(file) {
   }
 }
 
+function setView(next) {
+  view.value = next
+}
+
+async function openDramaProject(slug) {
+  view.value = 'drama'
+  try {
+    await openProject(slug)
+  } catch (e) {
+    console.error('打开漫剧项目失败:', e)
+    showToast(e.message || '打开项目失败')
+  }
+}
+
+watch(view, async (next) => {
+  if (next !== 'drama') return
+  try {
+    await refreshProjects()
+  } catch (e) {
+    console.error('加载漫剧项目失败:', e)
+    showToast(e.message || '加载项目失败')
+  }
+})
+
 onMounted(() => {
   refreshSessionList()
 })
@@ -100,15 +153,21 @@ onMounted(() => {
   <div class="app-shell">
     <AppSidebar
       :width="sidebarWidth"
+      :view="view"
       :sessions="sessionList"
       :current-session-id="currentSessionId"
+      :projects="dramaProjects"
+      :current-slug="dramaSlug"
       @new-chat="newChat"
       @select-session="switchSession"
       @delete-session="deleteSession"
       @resize-start="startResize"
+      @set-view="setView"
+      @select-project="openDramaProject"
     />
 
     <ChatView
+      v-if="view === 'chat'"
       ref="chatViewRef"
       v-model="userInput"
       :messages="messages"
@@ -121,6 +180,28 @@ onMounted(() => {
       @regenerate="regenerateResponse"
       @like="toggleLike"
       @dislike="toggleDislike"
+    />
+
+    <DramaStudio
+      v-else
+      :project="dramaProject"
+      :episode="dramaEpisode"
+      :episode-n="dramaEpisodeN"
+      :episodes="dramaEpisodes"
+      :shots="dramaShots"
+      :selected-n="dramaSelectedN"
+      :selected="dramaSelected"
+      :draft="dramaDraft"
+      :dirty="dramaDirty"
+      :saving="dramaSaving"
+      :rendering="dramaRendering"
+      :error="dramaError"
+      :notice="dramaNotice"
+      :bust="dramaBust"
+      @open-episode="openEpisode"
+      @select-shot="selectShot"
+      @save="saveShot"
+      @rerender="rerenderSelected"
     />
 
     <ApprovalModal
