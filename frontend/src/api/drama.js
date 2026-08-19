@@ -296,6 +296,48 @@ export function qcShot(slug, episode, shot) {
   )
 }
 
+export function generateKeys(slug, episode, shot, count = 3) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/keys`,
+    { method: 'POST', body: JSON.stringify({ count }) },
+  )
+}
+
+export function chooseKey(slug, episode, shot, kid, cid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/keys/${encodeURIComponent(kid)}/choose/${encodeURIComponent(cid)}`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export async function uploadKey(slug, episode, shot, kid, file) {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/keys/${encodeURIComponent(kid)}/upload`,
+    { method: 'POST', body: form },
+  )
+  const text = await resp.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { detail: text || `HTTP ${resp.status}` }
+  }
+  if (!resp.ok) {
+    const detail = data.detail || data.error || text || `HTTP ${resp.status}`
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return data
+}
+
+export function lockKey(slug, episode, shot, kid, locked = true) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/keys/${encodeURIComponent(kid)}/lock`,
+    { method: 'POST', body: JSON.stringify({ locked }) },
+  )
+}
+
 export function suggestCoverage(slug, episode) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage`,

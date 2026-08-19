@@ -738,6 +738,66 @@ export function useDramaStudio() {
     }
   }
 
+  async function generateShotKeys() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.generateKeys(slug.value, episodeN.value, selectedN.value, 3)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = `Shot ${selectedN.value} 关键帧已加入后台队列`
+        return
+      }
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `关键帧完成（${result.count || 3} 张，未重配音）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function chooseShotKey(kid, cid) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !kid || !cid) return
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.chooseKey(slug.value, episodeN.value, selectedN.value, kid, cid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已锁姿态 ${kid}（不重配音）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function uploadShotKey(kid, file) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !kid || !file) return
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.uploadKey(slug.value, episodeN.value, selectedN.value, kid, file)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已上传姿态 ${kid}（不重配音）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function lockShotKey(kid, locked) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !kid) return
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.lockKey(slug.value, episodeN.value, selectedN.value, kid, locked)
+      await openEpisode(episodeN.value)
+      notice.value = locked ? `已锁定姿态 ${kid}` : `已解锁姿态 ${kid}`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
   async function qcSelectedShot() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
     error.value = ''
@@ -997,6 +1057,10 @@ export function useDramaStudio() {
     uploadShotScene,
     generateShotI2v,
     generateShotLip,
+    generateShotKeys,
+    chooseShotKey,
+    uploadShotKey,
+    lockShotKey,
     qcSelectedShot,
     suggestEpisodeCoverage,
     applyCoverageSuggestion,

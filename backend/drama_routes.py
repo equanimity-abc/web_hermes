@@ -37,6 +37,10 @@ from tools.drama_studio import (
     generate_candidates,
     generate_i2v_shot,
     generate_lip_shot,
+    generate_keys_shot,
+    choose_key,
+    upload_key,
+    lock_key,
     qc_shot,
     suggest_coverage,
     apply_coverage,
@@ -132,7 +136,7 @@ class RefLockBody(BaseModel):
 
 
 class JobCreate(BaseModel):
-    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode | i2v_shot | lip_shot")
+    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode | i2v_shot | lip_shot | keys_shot")
     shot: int | None = None
     layers: list[str] | None = None
     force: bool | None = None
@@ -140,6 +144,10 @@ class JobCreate(BaseModel):
 
 class ClassifyBody(BaseModel):
     force: bool = False
+
+
+class KeysBody(BaseModel):
+    count: int | None = None
 
 
 class ModelsPatch(BaseModel):
@@ -339,6 +347,40 @@ async def drama_generate_lip(slug: str, episode: int, shot: int):
     try:
         return generate_lip_shot(slug, episode, shot)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/keys")
+async def drama_generate_keys(slug: str, episode: int, shot: int, body: KeysBody | None = None):
+    try:
+        return generate_keys_shot(slug, episode, shot, count=body.count if body else None)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/keys/{kid}/choose/{cid}")
+async def drama_choose_key(slug: str, episode: int, shot: int, kid: str, cid: str):
+    try:
+        return choose_key(slug, episode, shot, kid, cid)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/keys/{kid}/upload")
+async def drama_upload_key(slug: str, episode: int, shot: int, kid: str, file: UploadFile = File(...)):
+    try:
+        data = await file.read()
+        return upload_key(slug, episode, shot, kid, data)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/keys/{kid}/lock")
+async def drama_lock_key(slug: str, episode: int, shot: int, kid: str, body: RefLockBody | None = None):
+    try:
+        locked = True if body is None else bool(body.locked)
+        return lock_key(slug, episode, shot, kid, locked)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 
 

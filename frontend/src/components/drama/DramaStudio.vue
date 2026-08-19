@@ -64,6 +64,10 @@ const emit = defineEmits([
   'upload-scene',
   'generate-i2v',
   'generate-lip',
+  'generate-keys',
+  'choose-key',
+  'upload-key',
+  'lock-key',
   'qc-shot',
   'suggest-coverage',
   'apply-coverage',
@@ -85,7 +89,9 @@ const emit = defineEmits([
 const previewMode = ref('shot')
 const refInput = ref(null)
 const sceneInput = ref(null)
+const keyInput = ref(null)
 const bgmInput = ref(null)
+const selectedKeyId = ref(null)
 const dragFromN = ref(null)
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
@@ -149,6 +155,13 @@ const kindLocked = computed(() => (props.selected?.locked || []).includes('kind'
 
 const canGenerateLip = computed(() => Boolean(props.selected?.lip?.ok || props.selected?.lip?.will_run))
 
+const canGenerateKeys = computed(() => Boolean(props.selected?.keys_gate?.ok || props.selected?.keys_gate?.will_run))
+
+const selectedKey = computed(() => {
+  const keys = props.selected?.keys || []
+  return keys.find((k) => k.id === selectedKeyId.value) || keys[0] || null
+})
+
 const i2vCostLabel = computed(() => {
   const route = props.selected?.route
   const lip = props.selected?.lip
@@ -164,6 +177,8 @@ const i2vCostLabel = computed(() => {
   if (route.ladder === 'L0') return `${planned} 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`
   const bits = [`${planned}→${route.ladder} 估 ${cur} ${shotCost}`, `本集 ${cur} ${epCost}`, cap]
   if (lip?.will_run) bits.push(`口型 ${cur} ${lipCost} / 本集 ${epLip}`)
+  const keys = props.selected?.keys_gate
+  if (keys?.will_run) bits.push(`关键帧 L4 ${cur} ${Number(keys.cost_per_shot || 0)}`)
   if (route.reason) bits.push(route.reason)
   return bits.join(' · ')
 })
@@ -173,6 +188,7 @@ const i2vSourceLabel = computed(() => {
   const lipSrc = props.selected?.lip_source || ''
   const parts = []
   if (src === 'ai') parts.push('已生成 I2V 运动')
+  else if (src === 'keys') parts.push('已用稀疏关键帧补间')
   else if (src === 'fallback') parts.push('I2V 失败，已回退静图运镜')
   else parts.push('尚未生成 I2V')
   if (lipSrc === 'mock' || lipSrc === 'http') parts.push(`口型 ${lipSrc}`)
@@ -268,6 +284,13 @@ function onSceneFile(ev) {
   if (file) emit('upload-scene', file)
 }
 
+function onKeyFile(ev) {
+  const file = ev.target.files?.[0]
+  ev.target.value = ''
+  const kid = selectedKey.value?.id
+  if (file && kid) emit('upload-key', kid, file)
+}
+
 function onBgmFile(ev) {
   const file = ev.target.files?.[0]
   ev.target.value = ''
@@ -278,6 +301,10 @@ function candUrl(cand) {
   const url = cand?.url || ''
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+}
+
+function keyUrl(key) {
+  return candUrl(key)
 }
 
 function kindLabel(kind) {
@@ -943,6 +970,14 @@ function onDrop(n) {
             <button
               type="button"
               class="btn-ghost"
+              :disabled="rendering || saving || !canGenerateKeys"
+              @click="emit('generate-keys')"
+            >
+              {{ rendering ? '处理中…' : '生成关键帧' }}
+            </button>
+            <button
+              type="button"
+              class="btn-ghost"
               :disabled="rendering || saving || !selected"
               @click="emit('qc-shot')"
             >
@@ -950,6 +985,60 @@ function onDrop(n) {
             </button>
           </div>
           <p v-if="boardMode === 'shots'" class="drama-empty-hint" :class="identityClass">{{ identityLabel }}</p>
+          <p v-if="boardMode === 'shots' && !canGenerateKeys && selected?.keys_gate?.reason" class="drama-empty-hint">
+            {{ selected.keys_gate.reason }}
+          </p>
+          <div v-if="boardMode === 'shots' && (selected?.keys || []).length" class="drama-keys">
+            <h3 class="drama-layers-title">姿态关键帧</h3>
+            <div class="drama-keys-strip">
+              <button
+                v-for="key in selected.keys"
+                :key="key.id"
+                type="button"
+                class="drama-key"
+                :class="{ active: selectedKey?.id === key.id, locked: key.locked }"
+                @click="selectedKeyId = key.id"
+              >
+                <img v-if="keyUrl(key)" :src="keyUrl(key)" :alt="key.pose" />
+                <span v-else class="drama-candidate-empty">无图</span>
+                <em>{{ key.pose }} · {{ key.t }}s{{ key.locked ? ' · 锁' : '' }}</em>
+              </button>
+            </div>
+            <input ref="keyInput" class="drama-file" type="file" accept="image/*" @change="onKeyFile" />
+            <div v-if="selectedKey" class="drama-actions">
+              <button
+                type="button"
+                class="btn-tiny"
+                :disabled="saving || rendering || selectedKey.locked"
+                @click="keyInput?.click()"
+              >
+                手传姿态
+              </button>
+              <button
+                type="button"
+                class="btn-tiny"
+                :disabled="saving || rendering"
+                @click="emit('lock-key', selectedKey.id, !selectedKey.locked)"
+              >
+                {{ selectedKey.locked ? '解锁姿态' : '锁定姿态' }}
+              </button>
+            </div>
+            <div v-if="selectedKey?.candidates?.length" class="drama-candidate-grid drama-key-cands">
+              <button
+                v-for="cand in selectedKey.candidates"
+                :key="cand.id"
+                type="button"
+                class="drama-candidate"
+                :class="{ chosen: cand.chosen || selectedKey.chosen === cand.id }"
+                :disabled="rendering || saving || selectedKey.locked || shotFrozen"
+                @click="emit('choose-key', selectedKey.id, cand.id)"
+              >
+                <img v-if="candUrl(cand)" :src="candUrl(cand)" :alt="cand.id" />
+                <span v-else class="drama-candidate-empty">无图</span>
+                <em>{{ cand.id }}{{ cand.source === 'upload' ? ' · 手传' : '' }}</em>
+              </button>
+            </div>
+          </div>
           <p v-if="boardMode === 'shots' && i2vCostLabel" class="drama-empty-hint">{{ i2vCostLabel }}</p>
           <template v-if="boardMode === 'shots'">
             <h3 class="drama-layers-title">分层</h3>

@@ -36,6 +36,8 @@ def should_try_i2v(shot: dict[str, Any], *, slug: str | None = None) -> bool:
     ladder = i2v_run_ladder(shot, slug=slug or str(shot.get("_slug") or "") or None)
     if ladder == "L0":
         return False
+    if ladder == "L4":
+        return True
     if mode == "on":
         return True
     locked = set(shot.get("locked") or [])
@@ -359,6 +361,12 @@ def try_generate_i2v(
     planned = effective_motion_ladder(shot, slug=str(shot.get("_slug") or "") or None)
     provider = _resolved_i2v_provider(shot)
     ok = False
+    if planned == "L4":
+        from tools.drama_keys import compose_keys_motion
+
+        if compose_keys_motion(scene, dest, shot, max(sec, 3.0)):
+            shot["i2v_ladder"] = "L4"
+            return "keys"
     if planned == "L3":
         ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
         if ok:
@@ -407,13 +415,13 @@ def generate_shot_i2v(
     shot.pop("_slug", None)
     # keep _episode? pop it
     shot.pop("_episode", None)
-    if source == "ai":
+    if source in ("ai", "keys"):
         return {
             "tried": True,
-            "i2v_source": "ai",
+            "i2v_source": source,
             "motion": rel,
             "seconds": i2v_seconds(shot),
-            "ladder": shot.get("i2v_ladder") or "L1",
+            "ladder": shot.get("i2v_ladder") or ("L4" if source == "keys" else "L1"),
             "deferred": bool(shot.get("i2v_deferred")),
         }
     return {"tried": True, "i2v_source": "none", "motion": None, "fallback": "still_zoompan"}

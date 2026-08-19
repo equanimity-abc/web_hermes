@@ -739,9 +739,9 @@ def _encode_clip(
             info = generate_shot_i2v(slug, episode, shot)
             motion_rel = (shot.get("assets") or {}).get("motion") or ""
             motion_path = resolve_safe(motion_rel) if motion_rel else None
-            if info.get("i2v_source") == "ai" and motion_path and motion_path.is_file():
+            if info.get("i2v_source") in ("ai", "keys") and motion_path and motion_path.is_file():
                 used_motion = True
-        elif motion_path and motion_path.is_file() and shot.get("i2v_source") == "ai":
+        elif motion_path and motion_path.is_file() and shot.get("i2v_source") in ("ai", "keys"):
             used_motion = True
 
     if used_motion and motion_path:

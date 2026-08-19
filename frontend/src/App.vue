@@ -62,6 +62,10 @@ const {
   uploadShotScene,
   generateShotI2v,
   generateShotLip,
+  generateShotKeys,
+  chooseShotKey,
+  uploadShotKey,
+  lockShotKey,
   qcSelectedShot,
   suggestEpisodeCoverage,
   applyCoverageSuggestion,
@@ -297,6 +301,10 @@ onMounted(() => {
       @upload-scene="uploadShotScene"
       @generate-i2v="generateShotI2v"
       @generate-lip="generateShotLip"
+      @generate-keys="generateShotKeys"
+      @choose-key="chooseShotKey"
+      @upload-key="uploadShotKey"
+      @lock-key="lockShotKey"
       @qc-shot="qcSelectedShot"
       @suggest-coverage="suggestEpisodeCoverage"
       @apply-coverage="applyCoverageSuggestion"

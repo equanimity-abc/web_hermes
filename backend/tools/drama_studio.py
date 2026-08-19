@@ -198,6 +198,28 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
         pub["identity"] = shot.get("identity") if isinstance(shot.get("identity"), dict) else None
         pub["identity_hint"] = str(shot.get("identity_hint") or "")
         pub["identity_passed"] = qc_passed(pub["identity"])
+        from tools.drama_keys import estimate_keys
+
+        pub["keys"] = []
+        for item in shot.get("keys") or []:
+            if not isinstance(item, dict):
+                continue
+            meta = _asset_meta(str(item.get("file") or ""))
+            cands = []
+            for cand in item.get("candidates") or []:
+                if not isinstance(cand, dict):
+                    continue
+                cm = _asset_meta(str(cand.get("path") or ""))
+                cands.append(
+                    {
+                        **cand,
+                        "url": cm.get("url"),
+                        "exists": cm["exists"],
+                        "chosen": cand.get("id") == item.get("chosen"),
+                    }
+                )
+            pub["keys"].append({**item, "url": meta.get("url"), "exists": meta["exists"], "candidates": cands})
+        pub["keys_gate"] = estimate_keys(slug, shot)
     return pub
 
 
@@ -984,6 +1006,85 @@ def generate_lip_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     job = enqueue_job(slug, n, "lip_shot", params={"shot": shot_n})
     job["estimate"] = estimate_lip(slug, shot)
     return job
+
+
+def generate_keys_shot(slug: str, episode: int, shot_n: int, count: int | None = None) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_keys import estimate_keys, keys_count, keys_eligible
+
+    gate = keys_eligible(shot, slug=slug)
+    if not gate["ok"]:
+        raise DramaBadRequest(gate["reason"])
+    scene = (shot.get("assets") or {}).get("scene") or ""
+    try:
+        scene_ok = bool(scene) and resolve_safe(scene).is_file()
+    except ValueError:
+        scene_ok = False
+    if not scene_ok:
+        raise DramaBadRequest("请先锁定/生成画面再钉关键帧")
+    job = enqueue_job(slug, n, "keys_shot", params={"shot": shot_n, "count": keys_count(count)})
+    job["estimate"] = estimate_keys(slug, shot)
+    return job
+
+
+def choose_key(slug: str, episode: int, shot_n: int, kid: str, cid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_keys import choose_key_pose
+
+    try:
+        choose_key_pose(shot, kid, cid)
+    except (ValueError, FileNotFoundError) as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return {"slug": slug, "episode": n, "shot": enrich_shot(shot, slug=slug), "voice_rebuilt": False}
+
+
+def upload_key(slug: str, episode: int, shot_n: int, kid: str, data: bytes) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_keys import upload_key_pose
+
+    try:
+        upload_key_pose(slug, n, shot, kid, data)
+    except (ValueError, FileNotFoundError) as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return {"slug": slug, "episode": n, "shot": enrich_shot(shot, slug=slug), "voice_rebuilt": False}
+
+
+def lock_key(slug: str, episode: int, shot_n: int, kid: str, locked: bool = True) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_keys import lock_key_pose
+
+    try:
+        lock_key_pose(shot, kid, locked)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return {"slug": slug, "episode": n, "shot": enrich_shot(shot, slug=slug)}
 
 
 def get_models(slug: str) -> dict[str, Any]:

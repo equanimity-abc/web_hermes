@@ -50,6 +50,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 20. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；失败回退闭口静图）
 21. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
 22. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
+23. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -764,6 +765,34 @@ def _action_suggest_coverage(args: dict) -> str:
     )
 
 
+def _action_generate_keys(args: dict) -> str:
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, generate_keys_shot
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要 slug")
+    try:
+        n = int(args.get("episode") or 1)
+        shot_n = int(args.get("shot") or 0)
+    except (TypeError, ValueError):
+        return _err("episode / shot 须为整数")
+    if shot_n < 1:
+        return _err("需要 shot")
+    count = args.get("count")
+    try:
+        result = generate_keys_shot(slug, n, shot_n, count=int(count) if count is not None else None)
+    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
+        return _err(str(e))
+    return _ok(
+        action="generate_keys",
+        slug=slug,
+        episode=n,
+        shot=shot_n,
+        **result,
+        hint="后台钉关键帧 + 补间 motion，只重合成 clip，不重配音",
+    )
+
+
 def _action_export_timeline(args: dict) -> str:
     from tools.drama_studio import export_episode
 
@@ -847,6 +876,7 @@ def _tiktok_drama(args: dict) -> str:
         "generate_lip": _action_generate_lip,
         "qc_shot": _action_qc_shot,
         "suggest_coverage": _action_suggest_coverage,
+        "generate_keys": _action_generate_keys,
         "classify_shots": _action_classify_shots,
         "poll_job": _action_poll_job,
     }
@@ -878,7 +908,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、suggest_coverage（导演覆盖建议，不改镜不加锁）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -886,7 +916,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | suggest_coverage | classify_shots | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | suggest_coverage | generate_keys | classify_shots | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -909,6 +939,7 @@ def register_tiktok_drama() -> None:
                         "generate_lip",
                         "qc_shot",
                         "suggest_coverage",
+                        "generate_keys",
                         "classify_shots",
                         "poll_job",
                     ],
@@ -1027,7 +1058,7 @@ def register_tiktok_drama() -> None:
                 },
                 "count": {
                     "type": "integer",
-                    "description": "generate_candidates 出图数量 2–4，默认 4",
+                    "description": "generate_candidates 出图数量 2–4；generate_keys 姿态数 3–5",
                 },
                 "job_id": {
                     "type": "string",
@@ -1070,6 +1101,7 @@ def register_tiktok_drama() -> None:
         "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
         "分镜分类用 classify_shots（定场 L0 / 对话 L1）；锁 kind 后不会被覆盖。"
         "导演覆盖用 suggest_coverage（钩子/景别/最多2条反应镜），只建议不改镜；人在工作台采纳或锁定。"
+        "单人 action 稀疏关键帧用 generate_keys（3–5 姿态补间，改姿态不重配音；多角色同框会拒绝）。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

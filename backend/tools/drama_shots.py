@@ -71,6 +71,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_shot_keys(slug: str, episode: int, raw: dict[str, Any]) -> list[dict[str, Any]]:
+    from tools.drama_keys import normalize_keys
+
+    return normalize_keys(slug, episode, raw)
+
+
 def normalize_shot_timeline(raw: dict[str, Any]) -> dict[str, float | str]:
     trim_in = max(0.0, float(raw.get("trim_in") or 0))
     trim_out = max(0.0, float(raw.get("trim_out") or 0))
@@ -333,7 +339,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "i2v_deferred": bool(raw.get("i2v_deferred")),
         "lip_source": str(raw.get("lip_source") or ""),
         "lip_score": raw.get("lip_score") if isinstance(raw.get("lip_score"), dict) else None,
-        "keys": [item for item in (raw.get("keys") or []) if isinstance(item, dict)] if isinstance(raw.get("keys"), list) else [],
+        "keys": _normalize_shot_keys(slug, episode, raw),
         "identity": raw.get("identity") if isinstance(raw.get("identity"), dict) else None,
         "identity_hint": str(raw.get("identity_hint") or ""),
         "locked": locked,
