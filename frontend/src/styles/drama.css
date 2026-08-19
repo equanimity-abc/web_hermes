@@ -513,6 +513,18 @@
   line-height: 1.6;
 }
 
+.drama-qc-pass {
+  color: #86efac;
+}
+
+.drama-qc-fail {
+  color: #fca5a5;
+}
+
+.drama-qc-skip {
+  color: #fbbf24;
+}
+
 .drama-stage-empty {
   color: #9ca3af;
 }

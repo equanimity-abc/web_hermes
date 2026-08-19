@@ -192,8 +192,12 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
         pub["voice_id"] = primary_voice(cast) if cast else ""
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
+        from tools.drama_qc import qc_passed
 
         pub["lip"] = estimate_lip(slug, shot)
+        pub["identity"] = shot.get("identity") if isinstance(shot.get("identity"), dict) else None
+        pub["identity_hint"] = str(shot.get("identity_hint") or "")
+        pub["identity_passed"] = qc_passed(pub["identity"])
     return pub
 
 
@@ -851,6 +855,28 @@ def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     job = enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
     job["estimate"] = estimate_i2v(slug, shot)
     return job
+
+
+def qc_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_qc import qc_passed, qc_shot_identity
+
+    identity = qc_shot_identity(slug, n, shot, apply=True)
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "n": shot_n,
+        "identity": identity,
+        "passed": qc_passed(identity),
+        "shot": enrich_shot(shot, slug=slug),
+    }
 
 
 def generate_lip_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:

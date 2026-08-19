@@ -64,6 +64,7 @@ const emit = defineEmits([
   'upload-scene',
   'generate-i2v',
   'generate-lip',
+  'qc-shot',
   'classify-shots',
   'save-timeline-shot',
   'save-timeline-all',
@@ -174,6 +175,27 @@ const i2vSourceLabel = computed(() => {
   else if (lipSrc === 'fallback') parts.push('口型失败，闭口静图')
   else if (props.selected?.lip && !props.selected.lip.ok) parts.push(props.selected.lip.reason || '本镜不开口型')
   return parts.join(' · ')
+})
+
+const identityLabel = computed(() => {
+  const id = props.selected?.identity
+  const hint = props.selected?.identity_hint || ''
+  if (!id) return hint || '尚未抽检身份'
+  const threshold = id.threshold ?? 0.65
+  if (id.status === 'skipped') {
+    return hint || id.hint || `身份未出分（${id.reason || 'skipped'}），不得记为通过`
+  }
+  const score = id.cosine == null ? '—' : Number(id.cosine).toFixed(2)
+  if (id.pass) return `身份 ${score} / ${threshold} · 通过`
+  return `身份 ${score} / ${threshold} · 未通过 · ${hint || id.hint || '低于 0.65，请重抽首帧（不重配音）'}`
+})
+
+const identityClass = computed(() => {
+  const id = props.selected?.identity
+  if (!id) return ''
+  if (id.status === 'skipped') return 'drama-qc-skip'
+  if (id.status === 'ok' && id.pass) return 'drama-qc-pass'
+  return 'drama-qc-fail'
 })
 
 const previewUrl = computed(() => {
@@ -882,7 +904,16 @@ function onDrop(n) {
             >
               {{ rendering ? '处理中…' : '生成口型' }}
             </button>
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || !selected"
+              @click="emit('qc-shot')"
+            >
+              {{ rendering ? '处理中…' : '抽检身份' }}
+            </button>
           </div>
+          <p v-if="boardMode === 'shots'" class="drama-empty-hint" :class="identityClass">{{ identityLabel }}</p>
           <p v-if="boardMode === 'shots' && i2vCostLabel" class="drama-empty-hint">{{ i2vCostLabel }}</p>
           <template v-if="boardMode === 'shots'">
             <h3 class="drama-layers-title">分层</h3>

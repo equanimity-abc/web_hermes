@@ -289,6 +289,13 @@ export function generateLip(slug, episode, shot) {
   )
 }
 
+export function qcShot(slug, episode, shot) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/qc`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 export function classifyShots(slug, episode, force = false) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/classify`,

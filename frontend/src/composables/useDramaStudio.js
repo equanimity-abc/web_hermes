@@ -738,6 +738,25 @@ export function useDramaStudio() {
     }
   }
 
+  async function qcSelectedShot() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.qcShot(slug.value, episodeN.value, selectedN.value)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      const id = result.identity || {}
+      if (id.status === 'skipped' || !result.passed) {
+        notice.value = id.hint || '身份抽检未出分或未通过，不得记为通过'
+      } else {
+        notice.value = `身份通过（余弦 ${id.cosine}）`
+      }
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
   async function exportTimeline() {
     if (!slug.value || !episodeN.value) return
     if (mixUnlicensed.value) {
@@ -912,6 +931,7 @@ export function useDramaStudio() {
     uploadShotScene,
     generateShotI2v,
     generateShotLip,
+    qcSelectedShot,
     classifyEpisodeShots,
     saveTimelineShot,
     saveTimelineOrder,

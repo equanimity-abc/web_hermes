@@ -64,10 +64,27 @@ def _provider() -> str:
 def _motion_prompt(shot: dict[str, Any]) -> str:
     scene = str(shot.get("画面") or "").strip()
     camera = str(shot.get("camera") or "punch_in")
-    return (
-        f"cinematic subtle motion, {camera}, vertical 9:16, "
-        f"{scene or 'character portrait'}, gentle movement, no text"
-    )
+    slug = str(shot.get("_slug") or "")
+    look = ""
+    if slug:
+        from tools.drama_characters import (
+            character_prompt_clause,
+            load_characters,
+            resolve_shot_characters,
+        )
+
+        cast = resolve_shot_characters(shot, load_characters(slug))
+        look = character_prompt_clause(cast, slug=slug)
+    bits = [
+        "cinematic subtle motion",
+        camera,
+        "vertical 9:16",
+        scene or "character portrait",
+    ]
+    if look:
+        bits.append(look)
+    bits.extend(["gentle movement", "no text", "same face as locked character reference"])
+    return ", ".join(bits)
 
 
 def _kenburns_motion_mp4(scene: Path, dest: Path, shot: dict[str, Any], seconds: float) -> None:
@@ -133,18 +150,27 @@ def _provider_http(scene: Path, dest: Path, shot: dict[str, Any], seconds: float
         import httpx
 
         prompt = _motion_prompt(shot)
+        files: dict[str, tuple[str, bytes, str]] = {
+            "image": (scene.name, scene.read_bytes(), "image/png"),
+        }
+        slug = str(shot.get("_slug") or "")
+        if slug:
+            from tools.drama_qc import locked_ref_path
+
+            ref = locked_ref_path(slug, shot)
+            if ref is not None:
+                files["ref"] = (ref.name, ref.read_bytes(), "image/png")
         with httpx.Client(timeout=120.0, follow_redirects=True) as client:
-            with scene.open("rb") as fh:
-                resp = client.post(
-                    url,
-                    files={"image": (scene.name, fh, "image/png")},
-                    data={
-                        "prompt": prompt,
-                        "duration": str(seconds),
-                        "model": config.I2V_MODEL or "default",
-                    },
-                    headers={"User-Agent": "my-tiktok-video-agent/0.8"},
-                )
+            resp = client.post(
+                url,
+                files=files,
+                data={
+                    "prompt": prompt,
+                    "duration": str(seconds),
+                    "model": config.I2V_MODEL or "default",
+                },
+                headers={"User-Agent": "my-tiktok-video-agent/0.8"},
+            )
             resp.raise_for_status()
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(resp.content)

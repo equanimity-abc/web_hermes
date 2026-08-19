@@ -37,6 +37,7 @@ from tools.drama_studio import (
     generate_candidates,
     generate_i2v_shot,
     generate_lip_shot,
+    qc_shot,
     classify_shots,
     get_models,
     get_mix,
@@ -301,6 +302,14 @@ async def drama_generate_i2v(slug: str, episode: int, shot: int):
 async def drama_generate_lip(slug: str, episode: int, shot: int):
     try:
         return generate_lip_shot(slug, episode, shot)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/qc")
+async def drama_qc_shot(slug: str, episode: int, shot: int):
+    try:
+        return qc_shot(slug, episode, shot)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 
