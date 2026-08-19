@@ -20,7 +20,18 @@ from tools.drama_characters import (
     suggest_character_id,
     upsert_character,
 )
+from tools.drama_models import (
+    SHOT_KINDS,
+    SHOT_SIZES,
+    estimate_episode_i2v,
+    estimate_i2v,
+    load_models,
+    public_models,
+    save_models,
+    set_provider_available,
+)
 from tools.drama_shots import (
+    apply_shot_class,
     apply_patch,
     find_shot,
     json_rel,
@@ -179,6 +190,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
         cast = resolve_shot_characters(shot, cards)
         pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
         pub["voice_id"] = primary_voice(cast) if cast else ""
+        pub["route"] = estimate_i2v(slug, shot)
     return pub
 
 
@@ -280,6 +292,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     from tools.drama_video import _probe_duration
 
     timeline = public_timeline(doc, probe_duration=_probe_duration) if doc else None
+    models = load_models(slug)
     return {
         "slug": slug,
         "episode": n,
@@ -299,6 +312,10 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "layer_ids": ["scene", "overlay", "voice", "clip"],
         "transitions": list(TRANSITIONS),
         "i2v_modes": list(I2V_MODES),
+        "shot_kinds": list(SHOT_KINDS),
+        "shot_sizes": list(SHOT_SIZES),
+        "models": public_models(models),
+        "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or []),
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -353,7 +370,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
@@ -379,7 +396,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     if "i2v" in body:
         body["i2v"] = normalize_i2v_mode(body["i2v"])
     if not body and not timeline_body and not has_lock:
-        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / 时间线 / locked）")
+        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
 
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
@@ -397,7 +414,10 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         if "shot" in (shot.get("locked") or []):
             dirty = []
         else:
-            dirty = apply_patch(shot, body)
+            try:
+                dirty = apply_patch(shot, body)
+            except ValueError as e:
+                raise DramaBadRequest(str(e)) from e
             script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
             script = _read_text(script_rel)
             if script is not None:
@@ -737,9 +757,69 @@ def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     from tools.drama_i2v import should_try_i2v
 
-    if not should_try_i2v(shot):
+    if not should_try_i2v(shot, slug=slug):
+        est = estimate_i2v(slug, shot)
+        if est.get("ladder") == "L0":
+            raise DramaBadRequest("该镜为 L0（定场类），强制静图运镜，不能生成 I2V")
         raise DramaBadRequest("请先将 I2V 设为 on，或在 auto 模式下锁定画面（scene）")
-    return enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
+    job = enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
+    job["estimate"] = estimate_i2v(slug, shot)
+    return job
+
+
+def get_models(slug: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    load_project(slug)
+    doc = load_models(slug)
+    return {"slug": slug, "path": f"dramas/{slug}/models.json", "models": public_models(doc)}
+
+
+def patch_models(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    load_project(slug)
+    if "provider" in patch and "available" in patch:
+        try:
+            doc = set_provider_available(slug, str(patch.get("provider") or ""), bool(patch.get("available")))
+        except ValueError as e:
+            raise DramaBadRequest(str(e)) from e
+        return {"slug": slug, "models": public_models(doc)}
+    current = load_models(slug)
+    if "currency" in patch and patch["currency"]:
+        current["currency"] = str(patch["currency"]).strip().upper()
+    doc = save_models(slug, current)
+    return {"slug": slug, "models": public_models(doc)}
+
+
+def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    load_models(slug)
+    doc = _ensure_shots_doc(slug, n)
+    changed: list[int] = []
+    for shot in doc.get("shots") or []:
+        before = (shot.get("kind"), shot.get("size"), shot.get("speaker"))
+        apply_shot_class(shot, force=force)
+        after = (shot.get("kind"), shot.get("size"), shot.get("speaker"))
+        if before != after:
+            changed.append(int(shot.get("n") or 0))
+            if before[0] != after[0] or before[1] != after[1]:
+                dirty = list(shot.get("dirty") or [])
+                locked = set(shot.get("locked") or [])
+                for layer in ("clip", "motion"):
+                    if layer not in locked and layer not in dirty:
+                        dirty.append(layer)
+                shot["dirty"] = dirty
+                if dirty:
+                    shot["status"] = "dirty"
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "classified": len(doc.get("shots") or []),
+        "changed": [n for n in changed if n],
+        "shots": [enrich_shot(s, slug=slug) for s in (doc.get("shots") or [])],
+        "cost": estimate_episode_i2v(slug, doc.get("shots") or []),
+    }
 
 
 def rerender_dirty_shots_sync(slug: str, episode: int) -> dict[str, Any]:

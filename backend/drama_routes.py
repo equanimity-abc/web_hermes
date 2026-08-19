@@ -36,6 +36,9 @@ from tools.drama_studio import (
     choose_candidate,
     generate_candidates,
     generate_i2v_shot,
+    classify_shots,
+    get_models,
+    patch_models,
 )
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
@@ -76,6 +79,9 @@ class ShotPatch(BaseModel):
     volume: float | None = None
     transition: str | None = None
     i2v: str | None = None
+    kind: str | None = None
+    size: str | None = None
+    speaker: str | None = None
     locked: list[str] | None = None
     lock: list[str] | str | None = None
     unlock: list[str] | str | None = None
@@ -122,6 +128,16 @@ class JobCreate(BaseModel):
     force: bool | None = None
 
 
+class ClassifyBody(BaseModel):
+    force: bool = False
+
+
+class ModelsPatch(BaseModel):
+    provider: str | None = None
+    available: bool | None = None
+    currency: str | None = None
+
+
 class ExportBody(BaseModel):
     background: bool = True
 
@@ -144,6 +160,31 @@ async def drama_patch_project(slug: str, body: ProjectPatch):
     try:
         return patch_project(slug, body.model_dump(exclude_unset=True))
     except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/models")
+async def drama_get_models(slug: str):
+    try:
+        return get_models(slug)
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.patch("/projects/{slug}/models")
+async def drama_patch_models(slug: str, body: ModelsPatch):
+    try:
+        return patch_models(slug, body.model_dump(exclude_unset=True))
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/classify")
+async def drama_classify_shots(slug: str, episode: int, body: ClassifyBody | None = None):
+    try:
+        force = bool(body.force) if body else False
+        return classify_shots(slug, episode, force=force)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 
 

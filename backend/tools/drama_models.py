@@ -1,0 +1,435 @@
+"""Shot-kind model router (Q0).
+
+Project-level `models.json` is the research card + routing table.
+Q0 only decides L0 vs L1: establishing-class shots stay Ken Burns;
+dialogue/action class may try I2V. L2+ is recorded but capped until Q2/Q3.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from tools.workspace import resolve_safe
+
+SHOT_KINDS = (
+    "establishing",
+    "insert",
+    "dialogue",
+    "reaction",
+    "action",
+    "crowd",
+    "title",
+)
+SHOT_SIZES = ("WS", "MS", "MCU", "CU", "ECU")
+KIND_DEFAULT_SIZE = {
+    "establishing": "WS",
+    "insert": "CU",
+    "dialogue": "MCU",
+    "reaction": "CU",
+    "action": "MS",
+    "crowd": "WS",
+    "title": "WS",
+}
+# Q0 built-in ladder before models.json overlay (L2/L3 still cap to L1).
+KIND_LADDER = {
+    "establishing": "L0",
+    "insert": "L0",
+    "dialogue": "L1",
+    "reaction": "L1",
+    "action": "L1",
+    "crowd": "L0",
+    "title": "L0",
+}
+L0_KINDS = frozenset(k for k, v in KIND_LADDER.items() if v == "L0")
+LADDER_RANK = {"L0": 0, "L1": 1, "L2": 2, "L3": 3, "L4": 4, "L5": 5}
+Q0_MAX_LADDER = "L1"
+CURRENCY = "CNY"
+
+_RESEARCH_FIELDS = ("cost_per_shot", "fallback", "notes")
+
+
+def models_rel(slug: str) -> str:
+    return f"dramas/{slug}/models.json"
+
+
+def normalize_kind(raw: Any) -> str:
+    kind = str(raw or "").strip().lower()
+    return kind if kind in SHOT_KINDS else ""
+
+
+def normalize_size(raw: Any) -> str:
+    size = str(raw or "").strip().upper()
+    return size if size in SHOT_SIZES else ""
+
+
+def normalize_ladder(raw: Any) -> str:
+    ladder = str(raw or "").strip().upper()
+    if ladder in LADDER_RANK:
+        return ladder
+    return ""
+
+
+def infer_kind(shot: dict[str, Any]) -> str:
+    existing = normalize_kind(shot.get("kind"))
+    if existing:
+        return existing
+    dialogue = str(shot.get("对白") or "").strip()
+    return "dialogue" if dialogue else "establishing"
+
+
+def infer_size(shot: dict[str, Any]) -> str:
+    existing = normalize_size(shot.get("size"))
+    if existing:
+        return existing
+    return KIND_DEFAULT_SIZE.get(infer_kind(shot), "MS")
+
+
+def infer_speaker(shot: dict[str, Any]) -> str:
+    existing = str(shot.get("speaker") or "").strip()
+    if existing:
+        return existing
+    roles = shot.get("角色") or []
+    if isinstance(roles, list) and roles:
+        return str(roles[0] or "").strip()
+    if isinstance(roles, str) and roles.strip():
+        return roles.split(",")[0].strip()
+    return ""
+
+
+def apply_shot_class(shot: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    """Fill kind/size/speaker. Locked kind is not overwritten unless force."""
+    locked = set(shot.get("locked") or [])
+    kind_locked = ("kind" in locked or "shot" in locked) and not force
+    if kind_locked:
+        shot["kind"] = normalize_kind(shot.get("kind")) or infer_kind({**shot, "kind": ""})
+        shot["size"] = normalize_size(shot.get("size")) or infer_size(shot)
+    else:
+        seed = {**shot, "kind": "" if force else shot.get("kind"), "size": "" if force else shot.get("size")}
+        shot["kind"] = infer_kind(seed)
+        shot["size"] = infer_size({**seed, "kind": shot["kind"]})
+    if not str(shot.get("speaker") or "").strip():
+        shot["speaker"] = infer_speaker({**shot, "speaker": ""})
+    else:
+        shot["speaker"] = str(shot.get("speaker") or "").strip()
+    return shot
+
+
+def default_providers() -> dict[str, dict[str, Any]]:
+    """Research cards. Only mock/l0 are available until a complete card is marked."""
+    return {
+        "l0": {
+            "available": True,
+            "cost_per_shot": 0,
+            "rpm": 0,
+            "timeout_s": 30,
+            "fallback": "l0",
+            "notes": "静图 Ken Burns（ffmpeg）。Q0 定场/群像/标题默认。",
+        },
+        "mock": {
+            "available": True,
+            "cost_per_shot": 0,
+            "rpm": 0,
+            "timeout_s": 180,
+            "fallback": "l0",
+            "notes": "本地 ffmpeg 模拟 I2V，仅验收链路。无商用输出。",
+        },
+        "http": {
+            "available": False,
+            "cost_per_shot": 0.5,
+            "rpm": 20,
+            "timeout_s": 120,
+            "fallback": "mock",
+            "notes": "自定义 I2V_API_URL。Q0 未接真服务，禁止 available=true 除非填调研卡。",
+        },
+        "pollinations": {
+            "available": False,
+            "cost_per_shot": 0,
+            "rpm": 10,
+            "timeout_s": 90,
+            "fallback": "mock",
+            "notes": "免费图生，非稳定 I2V。Q0 不作为运动主路径。",
+        },
+        "kling": {
+            "available": False,
+            "cost_per_shot": 2.5,
+            "rpm": 10,
+            "timeout_s": 180,
+            "fallback": "mock",
+            "notes": "可灵类动作 I2V，需商务 API。Q0 未开通。",
+        },
+        "hailuo": {
+            "available": False,
+            "cost_per_shot": 2.0,
+            "rpm": 10,
+            "timeout_s": 180,
+            "fallback": "mock",
+            "notes": "海螺/MiniMax 类 I2V。Q0 未开通。",
+        },
+        "musetalk": {
+            "available": False,
+            "cost_per_shot": 0.8,
+            "rpm": 6,
+            "timeout_s": 180,
+            "fallback": "mock",
+            "notes": "对话特写口型。Q2 再接，Q0 禁止 available。",
+        },
+        "wav2lip": {
+            "available": False,
+            "cost_per_shot": 0.4,
+            "rpm": 6,
+            "timeout_s": 180,
+            "fallback": "mock",
+            "notes": "开源口型，画质不稳。Q2 候选，Q0 未接。",
+        },
+    }
+
+
+def default_models() -> dict[str, Any]:
+    return {
+        "currency": CURRENCY,
+        "providers": default_providers(),
+        "image": {
+            "establishing": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.05},
+            "insert": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.05},
+            "dialogue": {"provider": "http", "model": "char-lora", "refs": ["character"], "cost_per_shot": 0.08},
+            "reaction": {"provider": "http", "model": "char-lora", "refs": ["character"], "cost_per_shot": 0.08},
+            "action": {"provider": "http", "model": "char-lora", "cost_per_shot": 0.08},
+            "crowd": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.05},
+            "title": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.02},
+        },
+        "motion": {
+            "establishing": {"ladder": "L0", "provider": "l0"},
+            "insert": {"ladder": "L0", "provider": "l0"},
+            "dialogue": {"ladder": "L2", "provider": "mock", "fallback": "L1"},
+            "reaction": {"ladder": "L1", "provider": "mock", "fallback": "L0"},
+            "action": {"ladder": "L3", "provider": "kling", "fallback": "L1"},
+            "crowd": {"ladder": "L0", "provider": "l0"},
+            "title": {"ladder": "L0", "provider": "l0"},
+        },
+        "lip": {"provider": "musetalk", "only_kinds": ["dialogue"]},
+        "bgm": {"provider": "library", "duck_db": -12, "license": "user_upload"},
+        "sfx": {"provider": "library"},
+        "qc": {
+            "identity_min": 0.65,
+            "ssim_min": 0.85,
+            "lufs_target": -14,
+            "lufs_min": -16,
+            "lufs_max": -12,
+            "true_peak_dbtp": -1,
+        },
+    }
+
+
+def research_complete(card: dict[str, Any]) -> bool:
+    if not isinstance(card, dict):
+        return False
+    notes = str(card.get("notes") or "").strip()
+    fallback = str(card.get("fallback") or "").strip()
+    try:
+        cost = float(card.get("cost_per_shot"))
+    except (TypeError, ValueError):
+        return False
+    if cost < 0:
+        return False
+    return bool(notes and fallback)
+
+
+def _coerce_providers(raw: Any) -> dict[str, dict[str, Any]]:
+    base = default_providers()
+    incoming = raw if isinstance(raw, dict) else {}
+    out: dict[str, dict[str, Any]] = {}
+    ids = list(base.keys()) + [k for k in incoming if k not in base]
+    for pid in ids:
+        card = {**base.get(pid, {}), **(incoming.get(pid) if isinstance(incoming.get(pid), dict) else {})}
+        card["cost_per_shot"] = float(card.get("cost_per_shot") or 0)
+        card["rpm"] = int(card.get("rpm") or 0)
+        card["timeout_s"] = int(card.get("timeout_s") or 60)
+        card["fallback"] = str(card.get("fallback") or "mock").strip() or "mock"
+        card["notes"] = str(card.get("notes") or "").strip()
+        available = bool(card.get("available"))
+        if available and not research_complete(card):
+            available = False
+        # Q0: never auto-enable unpaid commercial endpoints.
+        if pid in ("kling", "hailuo", "musetalk", "wav2lip") and not research_complete(card):
+            available = False
+        card["available"] = available
+        out[pid] = card
+    return out
+
+
+def normalize_models(raw: Any) -> dict[str, Any]:
+    data = raw if isinstance(raw, dict) else {}
+    base = default_models()
+    motion_in = data.get("motion") if isinstance(data.get("motion"), dict) else {}
+    image_in = data.get("image") if isinstance(data.get("image"), dict) else {}
+    motion: dict[str, Any] = {}
+    image: dict[str, Any] = {}
+    for kind in SHOT_KINDS:
+        md = {**(base["motion"].get(kind) or {}), **(motion_in.get(kind) if isinstance(motion_in.get(kind), dict) else {})}
+        md["ladder"] = normalize_ladder(md.get("ladder")) or KIND_LADDER[kind]
+        md["provider"] = str(md.get("provider") or ("l0" if KIND_LADDER[kind] == "L0" else "mock"))
+        if md.get("fallback"):
+            md["fallback"] = str(md["fallback"])
+        motion[kind] = md
+        im = {**(base["image"].get(kind) or {}), **(image_in.get(kind) if isinstance(image_in.get(kind), dict) else {})}
+        image[kind] = im
+    currency = str(data.get("currency") or CURRENCY).strip().upper() or CURRENCY
+    return {
+        "currency": currency,
+        "providers": _coerce_providers(data.get("providers")),
+        "image": image,
+        "motion": motion,
+        "lip": {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})},
+        "bgm": {**base["bgm"], **(data.get("bgm") if isinstance(data.get("bgm"), dict) else {})},
+        "sfx": {**base["sfx"], **(data.get("sfx") if isinstance(data.get("sfx"), dict) else {})},
+        "qc": {**base["qc"], **(data.get("qc") if isinstance(data.get("qc"), dict) else {})},
+    }
+
+
+def load_models(slug: str) -> dict[str, Any]:
+    rel = models_rel(slug)
+    path = resolve_safe(rel)
+    if not path.is_file():
+        doc = default_models()
+        save_models(slug, doc)
+        return doc
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+    doc = normalize_models(raw)
+    return doc
+
+
+def save_models(slug: str, doc: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_models(doc)
+    path = resolve_safe(models_rel(slug))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return normalized
+
+
+def set_provider_available(slug: str, provider_id: str, available: bool) -> dict[str, Any]:
+    doc = load_models(slug)
+    pid = str(provider_id or "").strip()
+    card = (doc.get("providers") or {}).get(pid)
+    if not isinstance(card, dict):
+        raise ValueError(f"未知 provider：{pid}")
+    if available and not research_complete(card):
+        raise ValueError(f"{pid} 调研卡不完整（需要 notes / fallback / cost_per_shot），不能标 available")
+    card["available"] = bool(available)
+    doc["providers"][pid] = card
+    return save_models(slug, doc)
+
+
+def cap_ladder_q0(ladder: str) -> str:
+    rank = LADDER_RANK.get(normalize_ladder(ladder) or "L1", 1)
+    max_rank = LADDER_RANK[Q0_MAX_LADDER]
+    if rank <= 0:
+        return "L0"
+    if rank > max_rank:
+        return Q0_MAX_LADDER
+    return "L0" if rank == 0 else "L1" if rank >= 1 else "L0"
+
+
+def planned_ladder(shot: dict[str, Any], models: dict[str, Any] | None = None) -> str:
+    kind = infer_kind(shot)
+    route = ((models or {}).get("motion") or {}).get(kind) or {}
+    return normalize_ladder(route.get("ladder")) or KIND_LADDER.get(kind, "L1")
+
+
+def effective_motion_ladder(shot: dict[str, Any], *, slug: str | None = None, models: dict[str, Any] | None = None) -> str:
+    """Q0: L0 kinds stay L0; everything else caps at L1."""
+    kind = infer_kind(shot)
+    if kind in L0_KINDS:
+        return "L0"
+    if models is None and slug:
+        models = load_models(str(slug))
+    planned = planned_ladder(shot, models)
+    if planned == "L0":
+        return "L0"
+    return cap_ladder_q0(planned)
+
+
+def provider_usable(models: dict[str, Any], provider_id: str) -> bool:
+    card = (models.get("providers") or {}).get(provider_id) or {}
+    return bool(card.get("available")) and research_complete(card)
+
+
+def resolve_provider(models: dict[str, Any], provider_id: str, *, hops: int = 0) -> str:
+    pid = str(provider_id or "mock").strip() or "mock"
+    if hops > 6:
+        return "l0"
+    if provider_usable(models, pid):
+        return pid
+    card = (models.get("providers") or {}).get(pid) or {}
+    fallback = str(card.get("fallback") or "mock")
+    if fallback == pid:
+        return "l0"
+    return resolve_provider(models, fallback, hops=hops + 1)
+
+
+def provider_cost(models: dict[str, Any], provider_id: str) -> float:
+    card = (models.get("providers") or {}).get(provider_id) or {}
+    try:
+        return max(0.0, float(card.get("cost_per_shot") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def estimate_i2v(slug: str, shot: dict[str, Any], *, models: dict[str, Any] | None = None) -> dict[str, Any]:
+    models = models or load_models(slug)
+    kind = infer_kind(shot)
+    ladder = effective_motion_ladder(shot, models=models)
+    currency = str(models.get("currency") or CURRENCY)
+    route = (models.get("motion") or {}).get(kind) or {}
+    if ladder == "L0":
+        return {
+            "kind": kind,
+            "ladder": "L0",
+            "planned_ladder": planned_ladder(shot, models),
+            "provider": "l0",
+            "cost_per_shot": 0,
+            "currency": currency,
+            "will_run": False,
+            "reason": "定场类镜头强制 L0 静图运镜",
+        }
+    wanted = str(route.get("provider") or "mock")
+    provider = resolve_provider(models, wanted)
+    return {
+        "kind": kind,
+        "ladder": "L1",
+        "planned_ladder": planned_ladder(shot, models),
+        "provider": provider,
+        "cost_per_shot": round(provider_cost(models, provider), 4),
+        "currency": currency,
+        "will_run": True,
+        "reason": "",
+    }
+
+
+def estimate_episode_i2v(slug: str, shots: list[dict[str, Any]]) -> dict[str, Any]:
+    models = load_models(slug)
+    currency = str(models.get("currency") or CURRENCY)
+    total = 0.0
+    l1 = 0
+    l0 = 0
+    for shot in shots:
+        info = estimate_i2v(slug, shot, models=models)
+        if info.get("will_run"):
+            total += float(info.get("cost_per_shot") or 0)
+            l1 += 1
+        else:
+            l0 += 1
+    return {
+        "currency": currency,
+        "i2v_estimate": round(total, 4),
+        "l1_shots": l1,
+        "l0_shots": l0,
+        "shot_count": len(shots),
+    }
+
+
+def public_models(doc: dict[str, Any]) -> dict[str, Any]:
+    return normalize_models(doc)

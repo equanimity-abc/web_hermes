@@ -27,9 +27,14 @@ def motion_rel(slug: str, episode: int, n: int) -> str:
     return f"dramas/{slug}/videos/ep{episode:02d}/{shot_stem(n)}_motion.mp4"
 
 
-def should_try_i2v(shot: dict[str, Any]) -> bool:
+def should_try_i2v(shot: dict[str, Any], *, slug: str | None = None) -> bool:
     mode = normalize_i2v_mode(shot.get("i2v"))
     if mode == "off":
+        return False
+    from tools.drama_models import effective_motion_ladder
+
+    ladder = effective_motion_ladder(shot, slug=slug or str(shot.get("_slug") or "") or None)
+    if ladder == "L0":
         return False
     if mode == "on":
         return True

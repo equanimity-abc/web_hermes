@@ -30,6 +30,8 @@ const props = defineProps({
   orderedShots: { type: Array, default: () => [] },
   transitions: { type: Array, default: () => [] },
   i2vModes: { type: Array, default: () => ['off', 'auto', 'on'] },
+  shotKinds: { type: Array, default: () => [] },
+  shotSizes: { type: Array, default: () => [] },
   timelineDirty: { type: Boolean, default: false },
   orderDirty: { type: Boolean, default: false },
 })
@@ -58,6 +60,7 @@ const emit = defineEmits([
   'choose-candidate',
   'upload-scene',
   'generate-i2v',
+  'classify-shots',
   'save-timeline-shot',
   'save-timeline-all',
   'save-timeline-order',
@@ -100,6 +103,8 @@ function impactFor(n) {
 function shotFlag(shot) {
   const locked = shot.locked || []
   const impact = impactFor(shot.n)
+  if (shot.route?.ladder === 'L0') return 'L0'
+  if (shot.route?.ladder === 'L1') return 'L1'
   if (shot.i2v_source === 'ai') return 'I2V'
   if (shot.i2v_source === 'fallback') return '静图'
   if (locked.includes('shot') || impact?.frozen) return '整锁'
@@ -113,11 +118,25 @@ function shotFlag(shot) {
 const canGenerateI2v = computed(() => {
   const shot = props.selected
   if (!shot) return false
+  if ((shot.route && shot.route.will_run === false) || shot.route?.ladder === 'L0') return false
   const mode = props.draft?.i2v || shot.i2v || 'auto'
   if (mode === 'off') return false
   if (mode === 'on') return true
   const locked = shot.locked || []
   return locked.includes('scene') || locked.includes('shot')
+})
+
+const kindLocked = computed(() => (props.selected?.locked || []).includes('kind') || shotFrozen.value)
+
+const i2vCostLabel = computed(() => {
+  const route = props.selected?.route
+  const cost = props.episode?.cost || {}
+  const cur = route?.currency || cost.currency || 'CNY'
+  const shotCost = Number(route?.cost_per_shot || 0)
+  const epCost = Number(cost.i2v_estimate || 0)
+  if (!route) return ''
+  if (route.ladder === 'L0') return `L0 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`
+  return `估 ${cur} ${shotCost} / 本集 ${cur} ${epCost}`
 })
 
 const i2vSourceLabel = computed(() => {
@@ -185,6 +204,19 @@ function candUrl(cand) {
   const url = cand?.url || ''
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+}
+
+function kindLabel(kind) {
+  const map = {
+    establishing: '定场',
+    insert: '插入',
+    dialogue: '对白',
+    reaction: '反应',
+    action: '动作',
+    crowd: '群像',
+    title: '标题',
+  }
+  return map[kind] || kind
 }
 
 function statusLabel(shot) {
@@ -355,6 +387,11 @@ function onDrop(n) {
         </button>
         <p v-if="!shots.length" class="drama-empty-hint">
           还没有 shots.json。请先在对话里 parse_shots 或 render_episode。
+        </p>
+        <p v-else-if="boardMode === 'shots'" class="drama-empty-hint">
+          <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('classify-shots')">
+            按对白推断类型
+          </button>
         </p>
         </template>
       </section>
@@ -647,6 +684,25 @@ function onDrop(n) {
             <em v-if="boundVoice">配音：{{ boundVoice }}</em>
           </div>
           <label>
+            镜头类型
+            <select v-model="draft.kind" :disabled="kindLocked || saving">
+              <option v-for="k in shotKinds" :key="k" :value="k">{{ kindLabel(k) }}</option>
+            </select>
+          </label>
+          <label>
+            景别
+            <select v-model="draft.size" :disabled="kindLocked || saving">
+              <option v-for="s in shotSizes" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </label>
+          <label>
+            说话人 speaker
+            <select v-model="draft.speaker" :disabled="shotFrozen || saving">
+              <option value="">（未指定）</option>
+              <option v-for="char in characters" :key="char.id" :value="char.id">{{ char.name }}</option>
+            </select>
+          </label>
+          <label>
             画面
             <textarea v-model="draft.画面" rows="3" :disabled="shotFrozen || isLocked('scene')" />
           </label>
@@ -693,6 +749,7 @@ function onDrop(n) {
               {{ rendering ? '处理中…' : '生成 I2V' }}
             </button>
           </div>
+          <p v-if="boardMode === 'shots' && i2vCostLabel" class="drama-empty-hint">{{ i2vCostLabel }}</p>
           <template v-if="boardMode === 'shots'">
             <h3 class="drama-layers-title">分层</h3>
             <div class="drama-layers">

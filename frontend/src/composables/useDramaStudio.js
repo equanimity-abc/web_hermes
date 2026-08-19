@@ -55,6 +55,10 @@ export function useDramaStudio() {
   const timelineItems = computed(() => episode.value?.timeline?.items || [])
   const transitions = computed(() => episode.value?.transitions || episode.value?.timeline?.transitions || [])
   const i2vModes = computed(() => episode.value?.i2v_modes || ['off', 'auto', 'on'])
+  const shotKinds = computed(
+    () => episode.value?.shot_kinds || ['establishing', 'insert', 'dialogue', 'reaction', 'action', 'crowd', 'title'],
+  )
+  const shotSizes = computed(() => episode.value?.shot_sizes || ['WS', 'MS', 'MCU', 'CU', 'ECU'])
   const orderedShots = computed(() => {
     const order = timelineOrder.value.length ? timelineOrder.value : timelineItems.value.map((i) => i.n)
     const byN = Object.fromEntries((shots.value || []).map((s) => [s.n, s]))
@@ -77,6 +81,9 @@ export function useDramaStudio() {
       String(draft.value.camera || '') !== String(shot.camera || '') ||
       Number(draft.value.duration || 0) !== Number(shot.duration || 0) ||
       String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto') ||
+      String(draft.value.kind || '') !== String(shot.kind || '') ||
+      String(draft.value.size || '') !== String(shot.size || '') ||
+      String(draft.value.speaker || '') !== String(shot.speaker || '') ||
       rolesKey(draft.value.角色) !== rolesKey(shot.角色)
     )
   })
@@ -98,7 +105,7 @@ export function useDramaStudio() {
   })
 
   function emptyDraft() {
-    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3, i2v: 'auto' }
+    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3, i2v: 'auto', kind: 'establishing', size: 'WS', speaker: '' }
   }
 
   function emptyCharDraft() {
@@ -123,6 +130,9 @@ export function useDramaStudio() {
       camera: shot?.camera || 'punch_in',
       duration: Number(shot?.duration || 3),
       i2v: shot?.i2v || 'auto',
+      kind: shot?.kind || 'establishing',
+      size: shot?.size || 'WS',
+      speaker: shot?.speaker || '',
     }
     fillTlDraft(shot)
   }
@@ -223,6 +233,11 @@ export function useDramaStudio() {
       }
       if (String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto')) {
         body.i2v = draft.value.i2v || 'auto'
+      }
+      if (String(draft.value.kind || '') !== String(shot.kind || '')) body.kind = draft.value.kind
+      if (String(draft.value.size || '') !== String(shot.size || '')) body.size = draft.value.size
+      if (String(draft.value.speaker || '') !== String(shot.speaker || '')) {
+        body.speaker = draft.value.speaker || ''
       }
       if (!Object.keys(body).length) {
         notice.value = '没有改动'
@@ -636,6 +651,24 @@ export function useDramaStudio() {
     if (timelineDirty.value) await saveTimelineShot()
   }
 
+  async function classifyEpisodeShots(force = false) {
+    if (!slug.value || !episodeN.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.classifyShots(slug.value, episodeN.value, force)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      const n = (result.changed || []).length
+      notice.value = n ? `已分类 ${result.classified} 镜，更新 ${n} 镜` : '镜头类型已是最新'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function generateShotI2v() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
     error.value = ''
@@ -707,6 +740,8 @@ export function useDramaStudio() {
     orderedShots,
     transitions,
     i2vModes,
+    shotKinds,
+    shotSizes,
     timelineDirty,
     orderDirty,
     assetUrl,
@@ -733,6 +768,7 @@ export function useDramaStudio() {
     chooseShotCandidate,
     uploadShotScene,
     generateShotI2v,
+    classifyEpisodeShots,
     saveTimelineShot,
     saveTimelineOrder,
     saveTimelineAll,

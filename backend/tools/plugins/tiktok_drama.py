@@ -628,8 +628,30 @@ def _action_choose_candidate(args: dict) -> str:
     return _ok(action="choose_candidate", **result)
 
 
+def _action_classify_shots(args: dict) -> str:
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, classify_shots
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要 slug")
+    try:
+        n = int(args.get("episode") or 1)
+    except (TypeError, ValueError):
+        return _err("episode 须为整数")
+    force = bool(args.get("force"))
+    try:
+        result = classify_shots(slug, n, force=force)
+    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
+        return _err(str(e))
+    return _ok(
+        action="classify_shots",
+        **{k: result[k] for k in result if k != "shots"},
+        hint="已按对白推断 kind/speaker；锁 kind 的镜未改",
+    )
+
+
 def _action_generate_i2v(args: dict) -> str:
-    from tools.drama_studio import generate_i2v_shot
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, generate_i2v_shot
 
     slug = _slug(str(args.get("slug") or ""))
     if not slug:
@@ -643,7 +665,7 @@ def _action_generate_i2v(args: dict) -> str:
         return _err("需要 shot")
     try:
         result = generate_i2v_shot(slug, n, shot_n)
-    except (FileNotFoundError, ValueError, RuntimeError) as e:
+    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
         return _err(str(e))
     return _ok(
         action="generate_i2v",
@@ -700,6 +722,7 @@ def _tiktok_drama(args: dict) -> str:
         "choose_candidate": _action_choose_candidate,
         "export_timeline": _action_export_timeline,
         "generate_i2v": _action_generate_i2v,
+        "classify_shots": _action_classify_shots,
         "poll_job": _action_poll_job,
     }
     handler = handlers.get(action)
@@ -730,7 +753,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、generate_i2v（对已锁关键帧试 I2V 运动）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、generate_i2v（对已锁关键帧试 I2V 运动）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -738,7 +761,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | generate_i2v | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | generate_i2v | classify_shots | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -757,6 +780,7 @@ def register_tiktok_drama() -> None:
                         "choose_candidate",
                         "export_timeline",
                         "generate_i2v",
+                        "classify_shots",
                         "poll_job",
                     ],
                 },
@@ -895,6 +919,7 @@ def register_tiktok_drama() -> None:
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
         "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
         "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
+        "分镜分类用 classify_shots（定场 L0 / 对话 L1）；锁 kind 后不会被覆盖。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )
