@@ -72,11 +72,18 @@ const {
   shotSizes: dramaShotSizes,
   timelineDirty: dramaTimelineDirty,
   orderDirty: dramaOrderDirty,
+  mixDraft: dramaMixDraft,
+  mixDirty: dramaMixDirty,
+  mixUnlicensed: dramaMixUnlicensed,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
   reorderTimeline,
   exportTimeline,
+  saveMix,
+  uploadBgm,
+  applyMix,
+  clearBgm,
   renderJobs: dramaRenderJobs,
   cancelRenderJob,
   retryRenderJob,
@@ -260,6 +267,9 @@ onMounted(() => {
       :shot-sizes="dramaShotSizes"
       :timeline-dirty="dramaTimelineDirty"
       :order-dirty="dramaOrderDirty"
+      :mix-draft="dramaMixDraft"
+      :mix-dirty="dramaMixDirty"
+      :mix-unlicensed="dramaMixUnlicensed"
       @open-episode="openEpisode"
       @select-shot="selectShot"
       @save="saveShot"
@@ -286,6 +296,10 @@ onMounted(() => {
       @move-timeline-shot="(n, d) => moveTimelineShot(n, d)"
       @reorder-timeline="reorderTimeline"
       @export-timeline="exportTimeline"
+      @save-mix="saveMix"
+      @upload-bgm="uploadBgm"
+      @apply-mix="applyMix"
+      @clear-bgm="clearBgm"
     />
 
     <ApprovalModal

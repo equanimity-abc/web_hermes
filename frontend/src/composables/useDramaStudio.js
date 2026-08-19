@@ -22,6 +22,7 @@ export function useDramaStudio() {
   const charDraft = ref(emptyCharDraft())
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
+  const mixDraft = ref(emptyMixDraft())
 
   const {
     jobs: renderJobs,
@@ -103,6 +104,21 @@ export function useDramaStudio() {
     if (saved.length !== cur.length) return true
     return saved.some((n, i) => n !== cur[i])
   })
+  const mixUnlicensed = computed(() => {
+    const mix = episode.value?.mix
+    return Boolean(mix?.has_bgm && mix?.license && !mix.license.ok)
+  })
+  const mixDirty = computed(() => {
+    const bgm = episode.value?.mix?.bgm || {}
+    const catalogId = mixDraft.value.catalog_id || ''
+    const savedCatalog = bgm.id && bgm.id !== 'upload' ? String(bgm.id) : ''
+    return (
+      Number(mixDraft.value.volume ?? 0.22) !== Number(bgm.volume ?? 0.22) ||
+      Number(mixDraft.value.duck_db ?? -12) !== Number(bgm.duck_db ?? -12) ||
+      Boolean(mixDraft.value.license_ok) !== Boolean(bgm.license_ok) ||
+      catalogId !== savedCatalog
+    )
+  })
 
   function emptyDraft() {
     return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3, i2v: 'auto', kind: 'establishing', size: 'WS', speaker: '' }
@@ -114,6 +130,10 @@ export function useDramaStudio() {
 
   function emptyTlDraft() {
     return { trim_in: 0, trim_out: 0, volume: 1, transition: 'auto' }
+  }
+
+  function emptyMixDraft() {
+    return { volume: 0.22, duck_db: -12, license_ok: false, catalog_id: '' }
   }
 
   function rolesKey(raw) {
@@ -143,6 +163,16 @@ export function useDramaStudio() {
       trim_out: Number(shot?.trim_out || 0),
       volume: Number(shot?.volume ?? 1),
       transition: shot?.transition || 'auto',
+    }
+  }
+
+  function fillMixDraft(data) {
+    const bgm = data?.mix?.bgm || {}
+    mixDraft.value = {
+      volume: Number(bgm.volume ?? 0.22),
+      duck_db: Number(bgm.duck_db ?? -12),
+      license_ok: Boolean(bgm.license_ok),
+      catalog_id: bgm.id && bgm.id !== 'upload' ? String(bgm.id) : '',
     }
   }
 
@@ -201,6 +231,7 @@ export function useDramaStudio() {
     episode.value = data
     scriptDraft.value = data.script || ''
     syncTimelineFromEpisode(data)
+    fillMixDraft(data)
     void refreshJobs(slug.value)
     const keep = (data.shots || []).some((s) => s.n === selectedN.value)
     const next = keep ? selectedN.value : data.shots?.[0]?.n || null
@@ -690,8 +721,13 @@ export function useDramaStudio() {
 
   async function exportTimeline() {
     if (!slug.value || !episodeN.value) return
+    if (mixUnlicensed.value) {
+      error.value = episode.value?.mix?.license?.reason || '上传 BGM 需要勾选「我有商用权」'
+      return
+    }
     if (orderDirty.value) await saveTimelineOrder()
     if (timelineDirty.value && selectedN.value) await saveTimelineShot()
+    if (mixDirty.value) await saveMix()
     error.value = ''
     notice.value = ''
     try {
@@ -703,9 +739,94 @@ export function useDramaStudio() {
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = `整集已导出（${result.assemble || 'assemble'}，约 ${result.timeline?.total_duration || '?'}s）`
+      notice.value = `整集已导出（${result.assemble || 'assemble'} / ${result.mix_mode || 'mix'}，约 ${result.timeline?.total_duration || '?'}s）`
     } catch (e) {
       error.value = e.message || String(e)
+    }
+  }
+
+  async function saveMix() {
+    if (!slug.value || !episodeN.value) return
+    error.value = ''
+    saving.value = true
+    try {
+      const body = {
+        volume: mixDraft.value.volume,
+        duck_db: mixDraft.value.duck_db,
+        license_ok: mixDraft.value.license_ok,
+      }
+      if (mixDraft.value.catalog_id) body.catalog_id = mixDraft.value.catalog_id
+      const data = await dramaApi.patchMix(slug.value, episodeN.value, body)
+      episode.value = data
+      fillMixDraft(data)
+      notice.value = '混音参数已保存（未烧进各镜 clip）'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function uploadBgm(file, licenseOk) {
+    if (!slug.value || !episodeN.value || !file) return
+    error.value = ''
+    saving.value = true
+    try {
+      const data = await dramaApi.uploadEpisodeBgm(slug.value, episodeN.value, file, {
+        licenseOk: Boolean(licenseOk),
+        title: file.name || '',
+      })
+      episode.value = data
+      fillMixDraft(data)
+      notice.value = licenseOk ? 'BGM 已上传并标记商用权' : 'BGM 已上传，勾选「我有商用权」后才能导出'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function applyMix() {
+    if (!slug.value || !episodeN.value) return
+    if (mixUnlicensed.value) {
+      error.value = episode.value?.mix?.license?.reason || '上传 BGM 需要勾选「我有商用权」'
+      return
+    }
+    if (mixDirty.value) await saveMix()
+    error.value = ''
+    notice.value = ''
+    rendering.value = true
+    try {
+      const result = await dramaApi.mixEpisode(slug.value, episodeN.value, false)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = '混音已加入后台队列'
+        return
+      }
+      bust.value = Date.now()
+      episode.value = result
+      fillMixDraft(result)
+      notice.value = `已混音（${result.mix_mode || 'mix'}），各镜 clip 未改`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function clearBgm() {
+    if (!slug.value || !episodeN.value) return
+    error.value = ''
+    saving.value = true
+    try {
+      const data = await dramaApi.patchMix(slug.value, episodeN.value, { clear: true })
+      episode.value = data
+      fillMixDraft(data)
+      notice.value = '已清除 BGM'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
     }
   }
 
@@ -736,6 +857,7 @@ export function useDramaStudio() {
     charDraft,
     timelineOrder,
     tlDraft,
+    mixDraft,
     timelineItems,
     orderedShots,
     transitions,
@@ -744,6 +866,8 @@ export function useDramaStudio() {
     shotSizes,
     timelineDirty,
     orderDirty,
+    mixDirty,
+    mixUnlicensed,
     assetUrl,
     refreshProjects,
     openProject,
@@ -775,6 +899,10 @@ export function useDramaStudio() {
     moveTimelineShot,
     reorderTimeline,
     exportTimeline,
+    saveMix,
+    uploadBgm,
+    applyMix,
+    clearBgm,
     renderJobs,
     activeJobs,
     cancelRenderJob: cancelJob,

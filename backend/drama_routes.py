@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from tools.drama_studio import (
@@ -38,7 +38,11 @@ from tools.drama_studio import (
     generate_i2v_shot,
     classify_shots,
     get_models,
+    get_mix,
+    mix_episode,
+    patch_mix_episode,
     patch_models,
+    upload_episode_bgm,
 )
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
@@ -140,6 +144,27 @@ class ModelsPatch(BaseModel):
 
 class ExportBody(BaseModel):
     background: bool = True
+
+
+class MixPatch(BaseModel):
+    bgm: dict | None = None
+    volume: float | None = None
+    duck_db: float | None = None
+    fade_in: float | None = None
+    fade_out: float | None = None
+    start: float | None = None
+    license_ok: bool | None = None
+    license: str | None = None
+    catalog_id: str | None = None
+    clear: bool | None = None
+    sfx: list[dict] | None = None
+    title: str | None = None
+    id: str | None = None
+    path: str | None = None
+
+
+class MixApplyBody(BaseModel):
+    background: bool = False
 
 
 @router.get("/projects")
@@ -316,6 +341,53 @@ async def drama_export_episode(slug: str, episode: int, body: ExportBody | None 
     try:
         background = body.background if body else True
         return export_episode(slug, episode, background=background)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/episodes/{episode}/mix")
+async def drama_get_mix(slug: str, episode: int):
+    try:
+        return get_mix(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.patch("/projects/{slug}/episodes/{episode}/mix")
+async def drama_patch_mix(slug: str, episode: int, body: MixPatch):
+    try:
+        return patch_mix_episode(slug, episode, body.model_dump(exclude_unset=True))
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/mix/bgm")
+async def drama_upload_episode_bgm(
+    slug: str,
+    episode: int,
+    file: UploadFile = File(...),
+    license_ok: bool = Form(False),
+    title: str = Form(""),
+):
+    try:
+        data = await file.read()
+        return upload_episode_bgm(
+            slug,
+            episode,
+            data,
+            filename=file.filename or "bgm.mp3",
+            license_ok=bool(license_ok),
+            title=title or "",
+        )
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/mix")
+async def drama_mix_episode(slug: str, episode: int, body: MixApplyBody | None = None):
+    try:
+        background = body.background if body else False
+        return mix_episode(slug, episode, background=background)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 

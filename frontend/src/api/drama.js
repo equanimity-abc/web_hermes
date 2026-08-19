@@ -200,6 +200,47 @@ export function exportEpisode(slug, episode, background = true) {
   })
 }
 
+export function getMix(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`)
+}
+
+export function patchMix(slug, episode, body) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export function mixEpisode(slug, episode, background = false) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`, {
+    method: 'POST',
+    body: JSON.stringify({ background }),
+  })
+}
+
+export async function uploadEpisodeBgm(slug, episode, file, { licenseOk = false, title = '' } = {}) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('license_ok', licenseOk ? 'true' : 'false')
+  if (title) form.append('title', title)
+  const resp = await fetch(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix/bgm`,
+    { method: 'POST', body: form },
+  )
+  const text = await resp.text()
+  let data = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { detail: text || `HTTP ${resp.status}` }
+  }
+  if (!resp.ok) {
+    const detail = data.detail || data.error || text || `HTTP ${resp.status}`
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return data
+}
+
 export function createJob(slug, episode, body) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/jobs`,

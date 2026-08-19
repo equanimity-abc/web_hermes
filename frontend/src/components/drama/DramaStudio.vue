@@ -34,6 +34,9 @@ const props = defineProps({
   shotSizes: { type: Array, default: () => [] },
   timelineDirty: { type: Boolean, default: false },
   orderDirty: { type: Boolean, default: false },
+  mixDraft: { type: Object, required: true },
+  mixDirty: { type: Boolean, default: false },
+  mixUnlicensed: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -67,11 +70,16 @@ const emit = defineEmits([
   'move-timeline-shot',
   'reorder-timeline',
   'export-timeline',
+  'save-mix',
+  'upload-bgm',
+  'apply-mix',
+  'clear-bgm',
 ])
 
 const previewMode = ref('shot')
 const refInput = ref(null)
 const sceneInput = ref(null)
+const bgmInput = ref(null)
 const dragFromN = ref(null)
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
@@ -163,6 +171,14 @@ const episodePreviewUrl = computed(() => {
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
 
+const mix = computed(() => props.episode?.mix || null)
+const bgmPreviewUrl = computed(() => {
+  const url = mix.value?.file?.url || ''
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+})
+const catalogTracks = computed(() => mix.value?.catalog || [])
+
 const previewKind = computed(() => {
   const url = previewUrl.value
   if (!url) return 'empty'
@@ -198,6 +214,12 @@ function onSceneFile(ev) {
   const file = ev.target.files?.[0]
   ev.target.value = ''
   if (file) emit('upload-scene', file)
+}
+
+function onBgmFile(ev) {
+  const file = ev.target.files?.[0]
+  ev.target.value = ''
+  if (file) emit('upload-bgm', file, Boolean(props.mixDraft.license_ok))
 }
 
 function candUrl(cand) {
@@ -438,6 +460,7 @@ function onDrop(n) {
           <div v-else class="drama-stage-empty">导出后在此预览整集 mp4</div>
         </div>
         <div v-if="timelineItems.length" class="drama-timeline-track">
+          <span class="drama-timeline-rail-label">画面</span>
           <div
             v-for="item in timelineItems"
             :key="item.n"
@@ -450,8 +473,23 @@ function onDrop(n) {
             <em>{{ item.play_duration }}s</em>
           </div>
         </div>
+        <div v-if="timelineItems.length" class="drama-timeline-track drama-timeline-track--bgm">
+          <span class="drama-timeline-rail-label">BGM</span>
+          <div
+            class="drama-timeline-bgm"
+            :class="{
+              empty: !mix?.has_bgm,
+              blocked: mixUnlicensed,
+              licensed: mix?.has_bgm && !mixUnlicensed,
+            }"
+          >
+            <span v-if="!mix?.has_bgm">无配乐（导出仅对白）</span>
+            <span v-else-if="mixUnlicensed">{{ mix?.bgm?.title || 'BGM' }} · 无版权，禁止导出</span>
+            <span v-else>{{ mix?.bgm?.title || 'BGM' }} · duck {{ mix?.bgm?.duck_db }} dB</span>
+          </div>
+        </div>
         <p v-if="episode?.timeline?.total_duration" class="drama-timeline-meta">
-          整集约 {{ episode.timeline.total_duration }}s · 改切点/转场/音量后点导出，不重渲源 clip
+          整集约 {{ episode.timeline.total_duration }}s · BGM 只在导出/混音时叠上，不烧进各镜 clip
         </p>
       </section>
 
@@ -606,6 +644,57 @@ function onDrop(n) {
           </template>
         </template>
         <template v-else-if="boardMode === 'timeline'">
+          <label>
+            曲库
+            <select v-model="mixDraft.catalog_id" :disabled="saving || !catalogTracks.length">
+              <option value="">{{ catalogTracks.length ? '不选曲库（用手传）' : '项目尚无曲库条目' }}</option>
+              <option v-for="track in catalogTracks" :key="track.id" :value="track.id">
+                {{ track.title || track.id }}
+              </option>
+            </select>
+          </label>
+          <div class="drama-freeze">
+            <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="bgmInput?.click()">
+              上传 BGM
+            </button>
+            <button type="button" class="btn-tiny" :disabled="saving || !mix?.has_bgm" @click="emit('clear-bgm')">
+              清除
+            </button>
+            <span>{{ mix?.bgm?.title || '未挂配乐' }}</span>
+          </div>
+          <input ref="bgmInput" class="drama-file" type="file" accept="audio/*" @change="onBgmFile" />
+          <label class="drama-check">
+            <input v-model="mixDraft.license_ok" type="checkbox" />
+            我有商用权
+          </label>
+          <p v-if="mixUnlicensed" class="drama-empty-hint drama-warn">
+            {{ mix?.license?.reason || '没有 license 的曲子禁止导出' }}
+          </p>
+          <audio v-if="bgmPreviewUrl" class="drama-audio" :src="bgmPreviewUrl" controls />
+          <label>
+            BGM 音量
+            <input v-model.number="mixDraft.volume" type="range" min="0" max="1" step="0.02" />
+            <span>{{ mixDraft.volume }}</span>
+          </label>
+          <label>
+            对白 duck（dB）
+            <input v-model.number="mixDraft.duck_db" type="range" min="-24" max="0" step="1" />
+            <span>{{ mixDraft.duck_db }}</span>
+          </label>
+          <p class="drama-empty-hint">音效点（SFX）本刀仅占位，mix.json 可写空数组。</p>
+          <div class="drama-actions">
+            <button type="button" class="btn-ghost" :disabled="saving || !mixDirty" @click="emit('save-mix')">
+              {{ saving ? '保存中…' : '保存混音' }}
+            </button>
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || mixUnlicensed"
+              @click="emit('apply-mix')"
+            >
+              {{ rendering ? '混音中…' : '应用混音' }}
+            </button>
+          </div>
           <p v-if="!selected" class="drama-empty-hint">选一条镜头改切点、转场或音量。</p>
           <template v-else>
             <div class="drama-actions drama-actions--script">
@@ -651,11 +740,26 @@ function onDrop(n) {
               >
                 {{ saving ? '保存中…' : '保存时间线' }}
               </button>
-              <button type="button" class="btn-ghost" :disabled="rendering || saving" @click="emit('export-timeline')">
+              <button
+                type="button"
+                class="btn-ghost"
+                :disabled="rendering || saving || mixUnlicensed"
+                @click="emit('export-timeline')"
+              >
                 {{ rendering ? '导出中…' : '导出整集' }}
               </button>
             </div>
           </template>
+          <div v-if="!selected" class="drama-actions">
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || mixUnlicensed"
+              @click="emit('export-timeline')"
+            >
+              {{ rendering ? '导出中…' : '导出整集' }}
+            </button>
+          </div>
         </template>
         <template v-else-if="selected">
           <div class="drama-freeze">

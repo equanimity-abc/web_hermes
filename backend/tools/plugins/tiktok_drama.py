@@ -46,6 +46,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 16. export_timeline 按时间线设置拼接整集（改镜序/切点/转场/音量不重渲源 clip）
 17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
 18. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
+19. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -699,7 +700,41 @@ def _action_export_timeline(args: dict) -> str:
             "shots_json": result.get("shots_json"),
         },
     )
-    return _ok(action="export_timeline", slug=slug, episode=n, assemble=result.get("assemble"), play_url=result.get("play_url"))
+    return _ok(action="export_timeline", slug=slug, episode=n, assemble=result.get("assemble"), mix=result.get("mix_mode"), play_url=result.get("play_url"))
+
+
+def _action_mix_episode(args: dict) -> str:
+    from tools.drama_studio import mix_episode, patch_mix_episode
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    project = _load_project(slug)
+    if not project:
+        return _err("项目不存在，请先 init", slug=slug)
+    patch: dict[str, Any] = {}
+    if args.get("catalog_id"):
+        patch["catalog_id"] = str(args.get("catalog_id")).strip()
+    if args.get("volume") is not None:
+        patch["volume"] = args.get("volume")
+    if args.get("duck_db") is not None:
+        patch["duck_db"] = args.get("duck_db")
+    if args.get("license_ok") is not None:
+        patch["license_ok"] = bool(args.get("license_ok"))
+    if args.get("clear"):
+        patch["clear"] = True
+    if patch:
+        patch_mix_episode(slug, n, patch)
+    result = mix_episode(slug, n)
+    return _ok(
+        action="mix_episode",
+        slug=slug,
+        episode=n,
+        mix=result.get("mix_mode"),
+        play_url=result.get("play_url"),
+        license=(result.get("mix") or {}).get("license"),
+        hint="已从 VO stem 混音，各镜 clip 未改",
+    )
 
 
 def _tiktok_drama(args: dict) -> str:
@@ -721,6 +756,7 @@ def _tiktok_drama(args: dict) -> str:
         "generate_candidates": _action_generate_candidates,
         "choose_candidate": _action_choose_candidate,
         "export_timeline": _action_export_timeline,
+        "mix_episode": _action_mix_episode,
         "generate_i2v": _action_generate_i2v,
         "classify_shots": _action_classify_shots,
         "poll_job": _action_poll_job,
@@ -753,7 +789,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、generate_i2v（对已锁关键帧试 I2V 运动）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -761,7 +797,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | generate_i2v | classify_shots | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | classify_shots | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -779,6 +815,7 @@ def register_tiktok_drama() -> None:
                         "generate_candidates",
                         "choose_candidate",
                         "export_timeline",
+                        "mix_episode",
                         "generate_i2v",
                         "classify_shots",
                         "poll_job",
@@ -903,6 +940,26 @@ def register_tiktok_drama() -> None:
                 "job_id": {
                     "type": "string",
                     "description": "poll_job 要查询的后台任务 id",
+                },
+                "catalog_id": {
+                    "type": "string",
+                    "description": "mix_episode 选用项目曲库条目 id（license=catalog:<id>）",
+                },
+                "volume": {
+                    "type": "number",
+                    "description": "mix_episode BGM 音量 0–1",
+                },
+                "duck_db": {
+                    "type": "number",
+                    "description": "mix_episode 对白时 BGM 压低分贝，约 -10～-14",
+                },
+                "license_ok": {
+                    "type": "boolean",
+                    "description": "mix_episode 用户上传曲确认「我有商用权」",
+                },
+                "clear": {
+                    "type": "boolean",
+                    "description": "mix_episode 时清除 BGM 后再混（成片仅 VO）",
                 },
             },
             "required": ["action"],

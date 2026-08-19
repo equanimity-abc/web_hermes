@@ -143,6 +143,65 @@
   align-items: stretch;
 }
 
+.drama-timeline-track--bgm {
+  min-height: 36px;
+  padding-top: 6px;
+  padding-bottom: 8px;
+}
+
+.drama-timeline-rail-label {
+  flex: 0 0 36px;
+  color: #9ca3af;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.drama-timeline-bgm {
+  flex: 1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 11px;
+  color: #e5e7eb;
+  background: #1e3a5f;
+}
+
+.drama-timeline-bgm.empty {
+  background: #1f2937;
+  color: #9ca3af;
+}
+
+.drama-timeline-bgm.blocked {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.drama-timeline-bgm.licensed {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.drama-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drama-check input {
+  width: auto;
+}
+
+.drama-warn {
+  color: #fca5a5;
+}
+
+.drama-audio {
+  width: 100%;
+  height: 32px;
+}
+
 .drama-timeline-block {
   min-width: 36px;
   border-radius: 6px;

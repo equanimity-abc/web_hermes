@@ -1140,16 +1140,22 @@ def render_shot_layers(
 
 
 def assemble_episode(doc: dict[str, Any]) -> str:
+    from tools.drama_audio import mix_assembled, vo_stem_rel
     from tools.drama_timeline import build_assemble_specs
 
-    out_rel = doc.get("output") or output_rel(str(doc["slug"]), int(doc["episode"]))
+    slug = str(doc["slug"])
+    episode = int(doc["episode"])
+    out_rel = doc.get("output") or output_rel(slug, episode)
     out_path = resolve_safe(out_rel)
+    stem_path = resolve_safe(vo_stem_rel(slug, episode))
     specs, fade_sec = build_assemble_specs(doc, probe_duration=_probe_duration)
     ready = [s for s in specs if not s.get("missing")]
     if not ready:
         raise FileNotFoundError("没有可拼接的镜头成片")
-    assemble = _assemble_clips(ready, out_path, fade_sec=fade_sec)
+    assemble = _assemble_clips(ready, stem_path, fade_sec=fade_sec)
+    mix_mode = mix_assembled(slug, episode, stem=stem_path, dest=out_path)
     doc["assemble"] = assemble
+    doc["mix"] = mix_mode
     save_doc(doc)
     return assemble
 

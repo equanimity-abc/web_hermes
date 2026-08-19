@@ -293,6 +293,8 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
 
     timeline = public_timeline(doc, probe_duration=_probe_duration) if doc else None
     models = load_models(slug)
+    from tools.drama_audio import public_mix
+
     return {
         "slug": slug,
         "episode": n,
@@ -304,6 +306,8 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "shots": shots,
         "count": len(shots),
         "timeline": timeline,
+        "mix": public_mix(slug, n),
+        "mix_mode": (doc or {}).get("mix"),
         "video_path": video_rel if video["exists"] else None,
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
@@ -585,13 +589,92 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
     if background:
         return enqueue_job(slug, n, "export")
     doc = _ensure_shots_doc(slug, n)
+    from tools.drama_audio import assert_export_licensed, load_mix
     from tools.drama_video import assemble_episode, ffmpeg_available
 
     if not ffmpeg_available():
         raise DramaBadRequest("未找到 ffmpeg，无法导出整集")
-    mode = assemble_episode(doc)
+    try:
+        assert_export_licensed(slug, load_mix(slug, n))
+        mode = assemble_episode(doc)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
     ep = get_episode(slug, n)
     ep["assemble"] = mode
+    ep["mix_mode"] = (load_doc(slug, n) or {}).get("mix")
+    return ep
+
+
+def get_mix(slug: str, episode: int) -> dict[str, Any]:
+    from tools.drama_audio import public_mix
+
+    load_project(slug)
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    return {"slug": slug, "episode": n, **public_mix(slug, n)}
+
+
+def patch_mix_episode(slug: str, episode: int, body: dict[str, Any]) -> dict[str, Any]:
+    from tools.drama_audio import patch_mix
+
+    load_project(slug)
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        patch_mix(slug, n, body or {})
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    return get_episode(slug, n)
+
+
+def upload_episode_bgm(
+    slug: str,
+    episode: int,
+    data: bytes,
+    *,
+    filename: str = "bgm.mp3",
+    license_ok: bool = False,
+    title: str = "",
+) -> dict[str, Any]:
+    from tools.drama_audio import save_uploaded_bgm
+
+    load_project(slug)
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        save_uploaded_bgm(slug, n, data, filename=filename, license_ok=license_ok, title=title)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    return get_episode(slug, n)
+
+
+def mix_episode(slug: str, episode: int, *, background: bool = False) -> dict[str, Any]:
+    """Remix epNN.mp4 from VO stem + mix.json. Does not rebuild per-shot clips."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    if background:
+        return enqueue_job(slug, n, "export")
+    from tools.drama_audio import mix_assembled, vo_stem_rel
+    from tools.drama_video import assemble_episode, ffmpeg_available, output_rel
+
+    if not ffmpeg_available():
+        raise DramaBadRequest("未找到 ffmpeg，无法混音")
+    stem = resolve_safe(vo_stem_rel(slug, n))
+    dest = resolve_safe(output_rel(slug, n))
+    try:
+        if not stem.is_file():
+            doc = _ensure_shots_doc(slug, n)
+            assemble_episode(doc)
+        else:
+            mode = mix_assembled(slug, n, stem=stem, dest=dest)
+            doc = load_doc(slug, n)
+            if doc:
+                doc["mix"] = mode
+                save_doc(doc)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    ep = get_episode(slug, n)
+    ep["mix_mode"] = (load_doc(slug, n) or {}).get("mix")
     return ep
 
 

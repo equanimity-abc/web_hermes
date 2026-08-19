@@ -136,4 +136,5 @@ npm run dev
 - [x] D7: 任务条（后台渲染队列 + 进度/取消/重试；渲 8 镜时聊天仍可用）
 - [x] D8: I2V 运动（对已锁关键帧试 2–3s 运动；失败回退静图 zoompan；工作台可选 off/auto/on）
 - [x] Q0: 镜头分类 + 模型路由（kind/size/speaker、models.json 调研卡、L0/L1、I2V 估费）
-- [ ] Q1–Q8: 专业成片其余刀（BGM 分轨 → 口型 → 稀疏关键帧；见 ROADMAP）
+- [x] Q1: 音频分轨 + 版权（BGM 只在 assemble/export 混入；无 license 拒绝导出；换曲 clip 哈希不变）
+- [ ] Q2–Q8: 专业成片其余刀（口型 → 稀疏关键帧；见 ROADMAP）

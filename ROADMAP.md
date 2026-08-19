@@ -12,7 +12,7 @@
 
 **漫剧草稿成片（P7–P8 + D0–D8）已齐：** 可改、可锁、可单镜重渲的竖屏草稿流水线；I2V 失败回退静图运镜。
 
-**下一刀：Q1 音频分轨 + 版权。** Q0 已交付 kind/speaker 路由与调研卡。Q1 起 BGM 只在 assemble 混入，无 license 禁止导出。
+**下一刀：Q2 口型（仅 dialogue CU）。** Q1 已交付 BGM 分轨、license 闸门、assemble/export 混音。
 
 ---
 
@@ -179,7 +179,7 @@ Tool Registry
 
 P0–P8 + D0–D8 已齐。业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。
 
-下一刀 **Q1**：BGM 分轨、cue、duck、license。换曲出新 mp4，各镜 clip 哈希不变；无版权标记拒绝导出。
+下一刀 **Q2**：仅 dialogue 特写口型；失败回退闭口静图。没有 speaker 不准接口型。
 
 ---
 
@@ -515,7 +515,7 @@ Plugin：tiktok_drama 扩 action
 | 代号 | 周期 | 做什么 | 验收（完整 / 降级） | 状态 |
 |--|--|--|--|--|
 | **Q0** | 约 3–5 天 | **闸门：** 填 `providers` 调研卡。`kind`/`size`/`speaker`；`models.json`（含 `cost_per_shot`）；检查器下拉；现有 I2V 按钮显示估费；未接新模型时路由只决定 L0/L1 | 对话镜 L1、定场 L0；有对白必能选 speaker；改 kind 只脏 motion/clip；无调研卡不准标 available | ✅ |
-| **Q1** | 约 3–5 天 | BGM 上传或曲库条目；`license`；cue；duck；export 混音；时间线 BGM 轨 | 换有 license 的 BGM 立刻出新 mp4，clip 哈希不变；无 license 拒绝导出 | 计划 |
+| **Q1** | 约 3–5 天 | BGM 上传或曲库条目；`license`；cue；duck；export 混音；时间线 BGM 轨 | 换有 license 的 BGM 立刻出新 mp4，clip 哈希不变；无 license 拒绝导出 | ✅ |
 | **Q2** | 约 3–4 周 | 仅 `dialogue` 口型适配器；失败回退；`lip_source`；LSE 脚本能出分 | **完整：** 真口型模型 + 特写开口。**降级：** mock 口型链路 + 回退 + 远景不开口，仍算出片 | 计划 |
 | **Q3** | 约 3–4 周 | 运动档 L0–L3 与 kind 绑定；估费；action 默认真 I2V、定场禁止 | **完整：** 8 镜最多 2 镜打贵 I2V。**降级：** 路由与预算 UI 正确，贵模型 available=false 时走 mock/L1 | 计划 |
 | **Q4** | 约 1 周 | 运动仍吃角色参考；identity 脚本（ArcFace）；抽检入口 | 同角色连续镜可跑余弦分；低于 0.65 提示重抽首帧且不重配音 | 计划 |
