@@ -13,7 +13,7 @@ import subprocess
 import threading
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from config import config
 from tools.drama_characters import (
@@ -1106,12 +1106,15 @@ def render_episode_video(
     *,
     title: str = "",
     force: bool = False,
+    cancel_check: Callable[[], None] | None = None,
+    on_progress: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Render dirty (or all) shots independently, then assemble epNN.mp4."""
     doc = sync_shots_doc(slug, episode, markdown, title=title)
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     rebuilt: list[int] = []
     skipped: list[int] = []
+    pending: list[dict[str, Any]] = []
     for shot in doc.get("shots") or []:
         if "shot" in (shot.get("locked") or []):
             skipped.append(int(shot["n"]))
@@ -1123,12 +1126,38 @@ def render_episode_video(
                 skipped.append(int(shot["n"]))
                 continue
             layers = list(LAYERS)
+        pending.append(shot)
+
+    total = len(pending)
+    if on_progress:
+        on_progress(current=0, total=total, message="准备重渲…")
+
+    for index, shot in enumerate(pending):
+        if cancel_check:
+            cancel_check()
+        n = int(shot["n"])
+        if on_progress:
+            on_progress(
+                current=index,
+                total=total,
+                shot=n,
+                message=f"Shot {n} ({index + 1}/{total})",
+            )
+        layers = list(LAYERS) if force else list(shot.get("dirty") or []) or list(LAYERS)
         info = render_shot_layers(slug, episode, shot, layers, title=ep_title)
         if info.get("rebuilt"):
-            rebuilt.append(int(shot["n"]))
+            rebuilt.append(n)
         else:
-            skipped.append(int(shot["n"]))
+            skipped.append(n)
         shot["status"] = "rendered" if not shot.get("dirty") else shot.get("status")
+        save_doc(doc)
+        if cancel_check:
+            cancel_check()
+
+    if on_progress:
+        on_progress(current=total, total=total, message="拼接整集…")
+    if cancel_check:
+        cancel_check()
     out_path = resolve_safe(str(doc.get("output") or output_rel(slug, episode)))
     if rebuilt or not out_path.is_file():
         assemble = assemble_episode(doc)

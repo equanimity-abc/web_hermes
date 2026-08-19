@@ -9,12 +9,16 @@ from tools.drama_studio import (
     CAMERAS,
     DramaBadRequest,
     DramaNotFound,
+    cancel_render_job,
+    enqueue_job,
     export_episode,
     get_characters,
     get_episode,
     get_project,
+    get_render_job,
     get_timeline,
     list_projects,
+    list_render_jobs,
     lock_character_ref,
     patch_episode,
     patch_project,
@@ -24,6 +28,7 @@ from tools.drama_studio import (
     remove_character,
     rerender_dirty_shots,
     rerender_one_shot,
+    retry_render_job,
     save_character,
     save_script,
     upload_character_ref,
@@ -106,6 +111,17 @@ class CharacterBody(BaseModel):
 
 class RefLockBody(BaseModel):
     locked: bool = True
+
+
+class JobCreate(BaseModel):
+    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode")
+    shot: int | None = None
+    layers: list[str] | None = None
+    force: bool | None = None
+
+
+class ExportBody(BaseModel):
+    background: bool = True
 
 
 @router.get("/projects")
@@ -245,10 +261,58 @@ async def drama_patch_timeline(slug: str, episode: int, body: TimelinePatch):
 
 
 @router.post("/projects/{slug}/episodes/{episode}/export")
-async def drama_export_episode(slug: str, episode: int):
+async def drama_export_episode(slug: str, episode: int, body: ExportBody | None = None):
     try:
-        return export_episode(slug, episode)
+        background = body.background if body else True
+        return export_episode(slug, episode, background=background)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/jobs")
+async def drama_create_job(slug: str, episode: int, body: JobCreate):
+    try:
+        params: dict = {}
+        if body.shot is not None:
+            params["shot"] = body.shot
+        if body.layers is not None:
+            params["layers"] = body.layers
+        if body.force is not None:
+            params["force"] = body.force
+        return enqueue_job(slug, episode, body.kind, params=params or None)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.get("/jobs")
+async def drama_list_jobs(slug: str | None = None, active: bool = False, limit: int = 20):
+    try:
+        return list_render_jobs(slug=slug, active_only=active, limit=limit)
+    except DramaBadRequest as e:
+        raise _http(e) from e
+
+
+@router.get("/jobs/{job_id}")
+async def drama_get_job(job_id: str):
+    try:
+        return get_render_job(job_id)
+    except DramaNotFound as e:
+        raise _http(e) from e
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def drama_cancel_job(job_id: str):
+    try:
+        return cancel_render_job(job_id)
+    except DramaNotFound as e:
+        raise _http(e) from e
+
+
+@router.post("/jobs/{job_id}/retry")
+async def drama_retry_job(job_id: str):
+    try:
+        return retry_render_job(job_id)
+    except (DramaNotFound, DramaBadRequest) as e:
         raise _http(e) from e
 
 

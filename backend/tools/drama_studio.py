@@ -421,8 +421,7 @@ def rerender_one_shot(slug: str, episode: int, shot_n: int, layers: list[str] | 
     shot_n = parse_shot_n(shot_n)
     from tools.drama_video import rerender_shot
 
-    result = rerender_shot(slug, n, shot_n, layers=layers)
-    return result
+    return rerender_shot(slug, n, shot_n, layers=layers)
 
 
 def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None = None) -> dict[str, Any]:
@@ -551,9 +550,11 @@ def patch_timeline(slug: str, episode: int, body: dict[str, Any]) -> dict[str, A
     }
 
 
-def export_episode(slug: str, episode: int) -> dict[str, Any]:
+def export_episode(slug: str, episode: int, *, background: bool = False) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
+    if background:
+        return enqueue_job(slug, n, "export")
     doc = _ensure_shots_doc(slug, n)
     from tools.drama_video import assemble_episode, ffmpeg_available
 
@@ -634,6 +635,91 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
 
 
 def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
+    """Enqueue background rerender of dirty shots (D7)."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    ep = get_episode(slug, n)
+    if not ep.get("script"):
+        raise DramaNotFound("没有分集剧本")
+    from tools.drama_queue import drama_jobs
+
+    try:
+        return drama_jobs.submit("rerender_dirty", slug, n)
+    except RuntimeError as e:
+        raise DramaBadRequest(str(e)) from e
+
+
+def enqueue_job(
+    slug: str,
+    episode: int,
+    kind: str,
+    *,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    _ensure_shots_doc(slug, n)
+    from tools.drama_queue import drama_jobs
+
+    try:
+        return drama_jobs.submit(kind, slug, n, params=params)
+    except RuntimeError as e:
+        raise DramaBadRequest(str(e)) from e
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+
+
+def get_render_job(job_id: str) -> dict[str, Any]:
+    from tools.drama_queue import drama_jobs
+
+    job = drama_jobs.get(job_id)
+    if job is None:
+        raise DramaNotFound(f"任务不存在：{job_id}")
+    from tools.drama_queue import public_job
+
+    return public_job(job)
+
+
+def list_render_jobs(
+    *,
+    slug: str | None = None,
+    active_only: bool = False,
+    limit: int = 20,
+) -> dict[str, Any]:
+    from tools.drama_queue import drama_jobs
+
+    if slug:
+        slug = parse_slug(slug)
+    return {
+        "count": len(drama_jobs.list_jobs(slug=slug, active_only=active_only, limit=limit)),
+        "jobs": drama_jobs.list_jobs(slug=slug, active_only=active_only, limit=limit),
+    }
+
+
+def cancel_render_job(job_id: str) -> dict[str, Any]:
+    from tools.drama_queue import drama_jobs
+
+    try:
+        return drama_jobs.cancel(job_id)
+    except KeyError as e:
+        raise DramaNotFound(f"任务不存在：{job_id}") from e
+
+
+def retry_render_job(job_id: str) -> dict[str, Any]:
+    from tools.drama_queue import drama_jobs
+
+    try:
+        return drama_jobs.retry(job_id)
+    except KeyError as e:
+        raise DramaNotFound(f"任务不存在：{job_id}") from e
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    except RuntimeError as e:
+        raise DramaBadRequest(str(e)) from e
+
+
+def rerender_dirty_shots_sync(slug: str, episode: int) -> dict[str, Any]:
+    """Synchronous rerender — used by tests and legacy callers."""
     slug = parse_slug(slug)
     n = parse_episode(episode)
     ep = get_episode(slug, n)

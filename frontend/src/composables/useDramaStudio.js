@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import * as dramaApi from '@/api/drama'
+import { useDramaJobs } from '@/composables/useDramaJobs'
 
 export function useDramaStudio() {
   const projects = ref([])
@@ -21,6 +22,34 @@ export function useDramaStudio() {
   const charDraft = ref(emptyCharDraft())
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
+
+  const {
+    jobs: renderJobs,
+    activeJobs,
+    trackJob,
+    cancelJob,
+    retryJob,
+    refreshJobs,
+  } = useDramaJobs({
+    onTerminal: async (job) => {
+      if (slug.value && job.slug === slug.value) {
+        bust.value = Date.now()
+        try {
+          await openEpisode(episodeN.value || job.episode)
+        } catch {
+          /* ignore refresh errors */
+        }
+        if (job.status === 'done') {
+          notice.value =
+            job.result?.impact?.summary ||
+            job.result?.assemble ||
+            `任务 ${job.job_id} 已完成`
+        } else if (job.status === 'error') {
+          error.value = job.error || '渲染失败'
+        }
+      }
+    },
+  })
 
   const shots = computed(() => episode.value?.shots || [])
   const timelineItems = computed(() => episode.value?.timeline?.items || [])
@@ -159,6 +188,7 @@ export function useDramaStudio() {
     episode.value = data
     scriptDraft.value = data.script || ''
     syncTimelineFromEpisode(data)
+    void refreshJobs(slug.value)
     const keep = (data.shots || []).some((s) => s.n === selectedN.value)
     const next = keep ? selectedN.value : data.shots?.[0]?.n || null
     selectShot(next)
@@ -312,18 +342,20 @@ export function useDramaStudio() {
 
   async function rerenderDirtyShots() {
     if (!slug.value || !episodeN.value) return
-    rendering.value = true
     error.value = ''
     notice.value = ''
     try {
       const result = await dramaApi.rerenderDirty(slug.value, episodeN.value)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = '脏镜渲染已加入后台队列，可切回聊天或看底部任务条'
+        return
+      }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = result.impact?.summary || '脏镜已重渲'
     } catch (e) {
       error.value = e.message || String(e)
-    } finally {
-      rendering.value = false
     }
   }
 
@@ -602,18 +634,20 @@ export function useDramaStudio() {
     if (!slug.value || !episodeN.value) return
     if (orderDirty.value) await saveTimelineOrder()
     if (timelineDirty.value && selectedN.value) await saveTimelineShot()
-    rendering.value = true
     error.value = ''
     notice.value = ''
     try {
-      const result = await dramaApi.exportEpisode(slug.value, episodeN.value)
+      const result = await dramaApi.exportEpisode(slug.value, episodeN.value, true)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = '整集导出已加入后台队列'
+        return
+      }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = `整集已导出（${result.assemble || 'assemble'}，约 ${result.timeline?.total_duration || '?'}s）`
     } catch (e) {
       error.value = e.message || String(e)
-    } finally {
-      rendering.value = false
     }
   }
 
@@ -678,5 +712,9 @@ export function useDramaStudio() {
     moveTimelineShot,
     reorderTimeline,
     exportTimeline,
+    renderJobs,
+    activeJobs,
+    cancelRenderJob: cancelJob,
+    retryRenderJob: (jobId) => retryJob(jobId, slug.value),
   }
 }

@@ -193,8 +193,42 @@ export function patchTimeline(slug, episode, body) {
   })
 }
 
-export function exportEpisode(slug, episode) {
+export function exportEpisode(slug, episode, background = true) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/export`, {
+    method: 'POST',
+    body: JSON.stringify({ background }),
+  })
+}
+
+export function createJob(slug, episode, body) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/jobs`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+export function listJobs({ slug, active = false, limit = 20 } = {}) {
+  const params = new URLSearchParams()
+  if (slug) params.set('slug', slug)
+  if (active) params.set('active', 'true')
+  if (limit) params.set('limit', String(limit))
+  const q = params.toString()
+  return request(`/api/drama/jobs${q ? `?${q}` : ''}`)
+}
+
+export function getJob(jobId) {
+  return request(`/api/drama/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function cancelJob(jobId) {
+  return request(`/api/drama/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function retryJob(jobId) {
+  return request(`/api/drama/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: 'POST',
     body: JSON.stringify({}),
   })

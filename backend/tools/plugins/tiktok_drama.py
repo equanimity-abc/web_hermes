@@ -44,6 +44,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 14. 锁参考图后无法覆盖已锁定的定妆 png
 15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
 16. export_timeline 按时间线设置拼接整集（改镜序/切点/转场/音量不重渲源 clip）
+17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -399,7 +400,7 @@ def _record_video(project: dict[str, Any], result: dict[str, Any]) -> None:
 
 
 def _action_render_episode(args: dict) -> str:
-    from tools.drama_video import render_episode_video
+    from tools.drama_studio import enqueue_job
 
     slug, n, err = _episode_number(args)
     if err:
@@ -407,19 +408,19 @@ def _action_render_episode(args: dict) -> str:
     project = _load_project(slug)
     if not project:
         return _err("项目不存在，请先 init", slug=slug)
-    ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
-    content = _read_text(ep_rel)
-    if content is None:
-        return _err("该集剧本不存在，请先 save_episode", slug=slug, episode=n, path=ep_rel)
-    ep_meta = next(
-        (e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n),
-        {},
-    )
-    title = str(args.get("title") or ep_meta.get("title") or "").strip()
     force = bool(args.get("force"))
-    result = render_episode_video(slug, n, content, title=title, force=force)
-    _record_video(project, result)
-    return _ok(action="render_episode", **result)
+    try:
+        job = enqueue_job(slug, n, "render_episode", params={"force": force})
+    except ValueError as e:
+        return _err(str(e), slug=slug)
+    return _ok(
+        action="render_episode",
+        slug=slug,
+        episode=n,
+        job_id=job["job_id"],
+        status=job["status"],
+        hint="后台渲染中，用 poll_job 查进度；工作台任务条可看进度",
+    )
 
 
 def _parse_layers(raw: Any) -> list[str] | None:
@@ -545,17 +546,45 @@ def _action_save_character(args: dict) -> str:
 
 
 def _action_rerender_dirty(args: dict) -> str:
-    from tools.drama_studio import rerender_dirty_shots
+    from tools.drama_studio import enqueue_job
 
     slug, n, err = _episode_number(args)
     if err:
         return _err(err, slug=slug)
-    project = _load_project(slug)
-    if not project:
+    if not _load_project(slug):
         return _err("项目不存在，请先 init", slug=slug)
-    result = rerender_dirty_shots(slug, n)
-    _record_video(project, result)
-    return _ok(action="rerender_dirty", **result)
+    try:
+        job = enqueue_job(slug, n, "rerender_dirty")
+    except ValueError as e:
+        return _err(str(e), slug=slug)
+    return _ok(
+        action="rerender_dirty",
+        slug=slug,
+        episode=n,
+        job_id=job["job_id"],
+        status=job["status"],
+        hint="后台重渲脏镜，用 poll_job 查进度",
+    )
+
+
+def _action_poll_job(args: dict) -> str:
+    from tools.drama_studio import DramaNotFound, get_render_job
+
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return _err("需要 job_id")
+    try:
+        job = get_render_job(job_id)
+    except DramaNotFound:
+        return _err("任务不存在", job_id=job_id)
+    payload = {"action": "poll_job", **job}
+    if job.get("status") == "done" and job.get("kind") == "render_episode":
+        project = _load_project(str(job.get("slug") or ""))
+        result = job.get("result") or {}
+        if project and result.get("path"):
+            _record_video(project, result)
+            payload["video_recorded"] = True
+    return _ok(**payload)
 
 
 def _action_generate_candidates(args: dict) -> str:
@@ -642,6 +671,7 @@ def _tiktok_drama(args: dict) -> str:
         "generate_candidates": _action_generate_candidates,
         "choose_candidate": _action_choose_candidate,
         "export_timeline": _action_export_timeline,
+        "poll_job": _action_poll_job,
     }
     handler = handlers.get(action)
     if not handler:
@@ -671,7 +701,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -679,7 +709,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -697,6 +727,7 @@ def register_tiktok_drama() -> None:
                         "generate_candidates",
                         "choose_candidate",
                         "export_timeline",
+                        "poll_job",
                     ],
                 },
                 "slug": {
@@ -814,6 +845,10 @@ def register_tiktok_drama() -> None:
                 "count": {
                     "type": "integer",
                     "description": "generate_candidates 出图数量 2–4，默认 4",
+                },
+                "job_id": {
+                    "type": "string",
+                    "description": "poll_job 要查询的后台任务 id",
                 },
             },
             "required": ["action"],

@@ -4,6 +4,7 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
+import DramaJobBar from '@/components/drama/DramaJobBar.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
 import { useDramaStudio } from '@/composables/useDramaStudio'
@@ -71,6 +72,9 @@ const {
   moveTimelineShot,
   reorderTimeline,
   exportTimeline,
+  renderJobs: dramaRenderJobs,
+  cancelRenderJob,
+  retryRenderJob,
 } = useDramaStudio()
 
 const {
@@ -282,5 +286,11 @@ onMounted(() => {
     />
 
     <AppToast :message="toast" />
+
+    <DramaJobBar
+      :jobs="dramaRenderJobs"
+      @cancel="cancelRenderJob"
+      @retry="retryRenderJob"
+    />
   </div>
 </template>
