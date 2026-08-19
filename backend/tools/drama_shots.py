@@ -71,6 +71,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_episode_qc(raw: dict[str, Any]) -> dict[str, Any]:
+    from tools.drama_qc import normalize_episode_qc
+
+    return normalize_episode_qc(raw.get("qc"))
+
+
+def _normalize_shot_qc(raw: dict[str, Any]) -> dict[str, Any] | None:
+    from tools.drama_qc import normalize_shot_qc
+
+    return normalize_shot_qc(raw.get("qc"))
+
+
 def _normalize_shot_keys(slug: str, episode: int, raw: dict[str, Any]) -> list[dict[str, Any]]:
     from tools.drama_keys import normalize_keys
 
@@ -342,6 +354,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "keys": _normalize_shot_keys(slug, episode, raw),
         "identity": raw.get("identity") if isinstance(raw.get("identity"), dict) else None,
         "identity_hint": str(raw.get("identity_hint") or ""),
+        "qc": _normalize_shot_qc(raw),
         "locked": locked,
         "dirty": dirty,
         "status": status,
@@ -373,6 +386,7 @@ def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, An
         "shots": shots,
         "timeline": timeline,
         "coverage": normalize_coverage(data.get("coverage")),
+        "qc": _normalize_episode_qc(data),
         "updated_at": str(data.get("updated_at") or utc_now()),
     }
 
@@ -780,6 +794,7 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "keys": list(shot.get("keys") or []),
         "identity": shot.get("identity") if isinstance(shot.get("identity"), dict) else None,
         "identity_hint": shot.get("identity_hint") or "",
+        "qc": shot.get("qc") if isinstance(shot.get("qc"), dict) else None,
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],
         "status": shot.get("status"),

@@ -817,6 +817,84 @@ export function useDramaStudio() {
     }
   }
 
+  async function runEpisodeQc() {
+    if (!slug.value || !episodeN.value) return
+    error.value = ''
+    notice.value = ''
+    rendering.value = true
+    try {
+      const result = await dramaApi.qcEpisode(slug.value, episodeN.value)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      const qc = result.qc || {}
+      if (qc.can_pass) {
+        notice.value = '脚本可点通过（仍须在验收页确认）'
+      } else {
+        notice.value = qc.block_reason || result.hint || '待修：skipped 或未通过，不能点通过'
+      }
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function passEpisodeQcGate() {
+    if (!slug.value || !episodeN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.passEpisodeQc(slug.value, episodeN.value)
+      episode.value = data
+      notice.value = '本集已通过'
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function rejectSelectedShotQc() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.rejectShotQc(slug.value, episodeN.value, selectedN.value)
+      episode.value = data
+      notice.value = `Shot ${selectedN.value} 已退回待修`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function passSelectedShotQc() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.passShotQc(slug.value, episodeN.value, selectedN.value)
+      episode.value = data
+      notice.value = `Shot ${selectedN.value} 已通过`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
+  async function remixEpisodeLoudness() {
+    if (!slug.value || !episodeN.value) return
+    error.value = ''
+    notice.value = ''
+    rendering.value = true
+    try {
+      const data = await dramaApi.remixLoudness(slug.value, episodeN.value)
+      episode.value = data
+      bust.value = Date.now()
+      notice.value = data.hint || '已只重 mix，各镜 clip 未改'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
   async function suggestEpisodeCoverage() {
     if (!slug.value || !episodeN.value) return
     saving.value = true
@@ -1062,6 +1140,11 @@ export function useDramaStudio() {
     uploadShotKey,
     lockShotKey,
     qcSelectedShot,
+    runEpisodeQc,
+    passEpisodeQcGate,
+    rejectSelectedShotQc,
+    passSelectedShotQc,
+    remixEpisodeLoudness,
     suggestEpisodeCoverage,
     applyCoverageSuggestion,
     dismissCoverageSuggestion,

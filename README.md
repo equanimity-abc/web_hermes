@@ -144,4 +144,5 @@ npm run dev
 - [x] Q4: identity 抽检（锁参考图/连续镜余弦；低于 0.65 脏 scene/motion 不重配音；skipped 不得记为通过）
 - [x] Q5: 导演覆盖建议（钩子 3s / 景别节奏 / 最多 2 条 reaction；只建议不改镜；人可忽略可锁）
 - [x] Q6: 单人 action 稀疏关键帧（3–5 姿态 mock 补间；改姿态不重配音；多角色同框拒绝）
-- [ ] Q7–Q8: QC 验收页 / 风格包（见 ROADMAP）
+- [x] Q7: 验收页（身份/口型/闪烁/响度；整集待修/通过；skipped 不能点通过；响度只重 mix）
+- [ ] Q8: 风格包（见 ROADMAP）

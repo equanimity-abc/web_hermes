@@ -220,6 +220,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
                 )
             pub["keys"].append({**item, "url": meta.get("url"), "exists": meta["exists"], "candidates": cands})
         pub["keys_gate"] = estimate_keys(slug, shot)
+        pub["qc"] = shot.get("qc") if isinstance(shot.get("qc"), dict) else None
     return pub
 
 
@@ -310,6 +311,12 @@ def _public_coverage(doc: dict[str, Any] | None) -> dict[str, Any]:
     return public_coverage(doc)
 
 
+def _public_qc(doc: dict[str, Any] | None) -> dict[str, Any]:
+    from tools.drama_qc import public_episode_qc
+
+    return public_episode_qc(doc)
+
+
 def get_episode(slug: str, episode: int) -> dict[str, Any]:
     project = load_project(slug)
     n = parse_episode(episode)
@@ -356,6 +363,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "models": public_models(models),
         "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or []),
         "coverage": _public_coverage(doc),
+        "qc": _public_qc(doc),
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -906,6 +914,94 @@ def qc_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
         "passed": qc_passed(identity),
         "shot": enrich_shot(shot, slug=slug),
     }
+
+
+def qc_episode(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_qc import run_episode_qc
+
+    run_episode_qc(slug, n, doc, apply=True)
+    save_doc(doc)
+    ep = get_episode(slug, n)
+    return {"slug": slug, "episode": n, "qc": ep.get("qc"), "hint": (ep.get("qc") or {}).get("block_reason") or "验收已跑，通过必须以脚本为准"}
+
+
+def pass_episode_qc(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_qc import mark_episode_passed
+
+    try:
+        mark_episode_passed(doc, passed=True)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return get_episode(slug, n)
+
+
+def reject_shot_qc(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_qc import mark_episode_passed, mark_shot_verdict
+
+    try:
+        mark_shot_verdict(shot, "待修")
+        mark_episode_passed(doc, passed=False)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return get_episode(slug, n)
+
+
+def pass_shot_qc(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_qc import mark_shot_verdict
+
+    try:
+        mark_shot_verdict(shot, "通过")
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return get_episode(slug, n)
+
+
+def remix_loudness(slug: str, episode: int) -> dict[str, Any]:
+    """Loudness fail path: remix mix only, never rebuild per-shot clips."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    mix_episode(slug, n, background=False)
+    doc = load_doc(slug, n)
+    if doc is None:
+        raise DramaNotFound("没有 shots.json")
+    from tools.drama_qc import check_allows_pass, qc_episode_loudness, normalize_episode_qc
+
+    loudness = qc_episode_loudness(slug, n, apply=True)
+    qc = normalize_episode_qc(doc.get("qc"))
+    qc["loudness"] = loudness
+    if qc.get("verdict") == "通过" and not check_allows_pass(loudness):
+        qc["verdict"] = "待修"
+        qc["status"] = "review"
+        qc["passed_at"] = ""
+        qc["block_reason"] = str(loudness.get("hint") or "响度不达标，只重 mix")
+    doc["qc"] = qc
+    save_doc(doc)
+    ep = get_episode(slug, n)
+    ep["hint"] = "已只重 mix，各镜 clip 未改"
+    return ep
 
 
 def suggest_coverage(slug: str, episode: int) -> dict[str, Any]:

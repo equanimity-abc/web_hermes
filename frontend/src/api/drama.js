@@ -296,6 +296,41 @@ export function qcShot(slug, episode, shot) {
   )
 }
 
+export function qcEpisode(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function passEpisodeQc(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc/pass`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function remixLoudness(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc/remix`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function passShotQc(slug, episode, shot) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/qc/pass`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function rejectShotQc(slug, episode, shot) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/qc/reject`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 export function generateKeys(slug, episode, shot, count = 3) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/keys`,

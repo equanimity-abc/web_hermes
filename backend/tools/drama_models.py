@@ -221,6 +221,8 @@ def default_models() -> dict[str, Any]:
             "lufs_min": -16,
             "lufs_max": -12,
             "true_peak_dbtp": -1,
+            "lse_c_min": 0.0,
+            "lse_d_max": 1.0,
         },
     }
 

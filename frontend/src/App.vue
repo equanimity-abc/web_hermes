@@ -67,6 +67,10 @@ const {
   uploadShotKey,
   lockShotKey,
   qcSelectedShot,
+  runEpisodeQc,
+  passEpisodeQcGate,
+  rejectSelectedShotQc,
+  remixEpisodeLoudness,
   suggestEpisodeCoverage,
   applyCoverageSuggestion,
   dismissCoverageSuggestion,
@@ -306,6 +310,10 @@ onMounted(() => {
       @upload-key="uploadShotKey"
       @lock-key="lockShotKey"
       @qc-shot="qcSelectedShot"
+      @qc-episode="runEpisodeQc"
+      @pass-episode-qc="passEpisodeQcGate"
+      @reject-shot-qc="rejectSelectedShotQc"
+      @remix-loudness="remixEpisodeLoudness"
       @suggest-coverage="suggestEpisodeCoverage"
       @apply-coverage="applyCoverageSuggestion"
       @dismiss-coverage="dismissCoverageSuggestion"

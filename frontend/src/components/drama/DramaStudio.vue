@@ -69,6 +69,11 @@ const emit = defineEmits([
   'upload-key',
   'lock-key',
   'qc-shot',
+  'qc-episode',
+  'pass-episode-qc',
+  'pass-shot-qc',
+  'reject-shot-qc',
+  'remix-loudness',
   'suggest-coverage',
   'apply-coverage',
   'dismiss-coverage',
@@ -217,6 +222,39 @@ const identityClass = computed(() => {
   if (id.status === 'ok' && id.pass) return 'drama-qc-pass'
   return 'drama-qc-fail'
 })
+
+const episodeQc = computed(() => props.episode?.qc || null)
+
+const selectedQcRow = computed(() => {
+  const rows = episodeQc.value?.shots || []
+  return rows.find((row) => row.n === props.selectedN) || props.selected?.qc || null
+})
+
+function qcCheckLabel(check) {
+  if (!check) return '未检'
+  const status = check.status || ''
+  if (status === 'n/a') return '不适用'
+  if (status === 'skipped') return 'skipped'
+  if (status === 'ok' && check.pass) return '通过'
+  if (status === 'ok') return '未通过'
+  return '未检'
+}
+
+function qcCheckClass(check) {
+  if (!check) return ''
+  if (check.status === 'n/a') return 'drama-qc-na'
+  if (check.status === 'skipped') return 'drama-qc-skip'
+  if (check.status === 'ok' && check.pass) return 'drama-qc-pass'
+  return 'drama-qc-fail'
+}
+
+function qcShotFlag(shot) {
+  const row = (episodeQc.value?.shots || []).find((item) => item.n === shot.n)
+  if (!row) return '未检'
+  if (row.verdict === '通过') return '通过'
+  if (String(row.block_reason || '').includes('skipped')) return 'skipped'
+  return row.verdict || '待修'
+}
 
 const openSuggestions = computed(() =>
   (props.episode?.coverage?.suggestions || []).filter((item) => item.status === 'open'),
@@ -411,6 +449,13 @@ function onDrop(n) {
           >
             时间线
           </button>
+          <button
+            type="button"
+            :class="{ active: boardMode === 'qc' }"
+            @click="emit('update:boardMode', 'qc')"
+          >
+            验收
+          </button>
         </div>
         <h2>{{
           boardMode === 'script'
@@ -419,7 +464,9 @@ function onDrop(n) {
               ? '角色卡'
               : boardMode === 'timeline'
                 ? '镜序'
-                : '分镜'
+                : boardMode === 'qc'
+                  ? '验收'
+                  : '分镜'
         }}</h2>
         <template v-if="boardMode === 'cast'">
           <button
@@ -465,6 +512,27 @@ function onDrop(n) {
           </button>
           <p v-if="!orderedShots.length" class="drama-empty-hint">还没有可排的时间线镜头。</p>
           <p v-if="orderDirty" class="drama-empty-hint">镜序有未保存改动。</p>
+        </template>
+        <template v-else-if="boardMode === 'qc'">
+          <button
+            v-for="shot in shots"
+            :key="shot.n"
+            type="button"
+            class="drama-shot-item"
+            :class="{
+              active: shot.n === selectedN,
+              dirty: qcShotFlag(shot) === '待修' || qcShotFlag(shot) === 'skipped',
+            }"
+            @click="emit('select-shot', shot.n)"
+          >
+            <span class="drama-shot-n">{{ shot.n }}</span>
+            <span class="drama-shot-body">
+              <strong>Shot {{ shot.n }}</strong>
+              <em>{{ shot.kind || shot.画面 || '（无画面描述）' }}</em>
+            </span>
+            <span class="drama-shot-flag">{{ qcShotFlag(shot) }}</span>
+          </button>
+          <p v-if="!shots.length" class="drama-empty-hint">还没有分镜可验收。</p>
         </template>
         <template v-else>
         <button
@@ -541,6 +609,24 @@ function onDrop(n) {
           <img v-if="refPreviewUrl" class="drama-media" :src="refPreviewUrl" alt="角色参考图" />
           <div v-else class="drama-stage-empty">上传定妆图后，出图会按外形描述和配色锁定同一张脸</div>
         </div>
+      </section>
+
+      <section v-else-if="boardMode === 'qc'" class="drama-preview">
+        <div class="drama-stage">
+          <video
+            v-if="episode?.play_url"
+            :key="`${episode.play_url}-qc-${bust}`"
+            class="drama-media"
+            :src="episodePreviewUrl"
+            controls
+            playsinline
+          />
+          <div v-else class="drama-stage-empty">先拼整集再验收响度。单镜问题点左侧退回。</div>
+        </div>
+        <p class="drama-empty-hint" :class="episodeQc?.verdict === '通过' ? 'drama-qc-pass' : ''">
+          整集 {{ episodeQc?.verdict || '待修' }}
+          <template v-if="episodeQc?.block_reason"> · {{ episodeQc.block_reason }}</template>
+        </p>
       </section>
 
       <section v-else-if="boardMode === 'timeline'" class="drama-preview">
@@ -670,7 +756,9 @@ function onDrop(n) {
               ? '角色卡'
               : boardMode === 'timeline'
                 ? '时间线'
-                : '检查器'
+                : boardMode === 'qc'
+                  ? '验收'
+                  : '检查器'
         }}</h2>
         <div v-if="boardMode === 'script'" class="drama-actions drama-actions--script">
           <button type="button" class="btn-ghost" :disabled="saving || rendering" @click="emit('preview-script')">
@@ -859,6 +947,67 @@ function onDrop(n) {
               {{ rendering ? '导出中…' : '导出整集' }}
             </button>
           </div>
+        </template>
+        <template v-else-if="boardMode === 'qc'">
+          <p class="drama-empty-hint" :class="episodeQc?.verdict === '通过' ? 'drama-qc-pass' : ''">
+            整集 {{ episodeQc?.verdict || '待修' }}
+            · 通过 {{ episodeQc?.summary?.passed ?? 0 }}
+            / 未过 {{ episodeQc?.summary?.failed ?? 0 }}
+            / skipped {{ episodeQc?.summary?.skipped ?? 0 }}
+          </p>
+          <p v-if="episodeQc?.block_reason && episodeQc?.verdict !== '通过'" class="drama-empty-hint drama-qc-skip">
+            {{ episodeQc.block_reason }}
+          </p>
+          <div class="drama-qc-grid">
+            <div class="drama-qc-row">
+              <span>身份</span>
+              <em :class="qcCheckClass(selectedQcRow?.identity)">{{ qcCheckLabel(selectedQcRow?.identity) }}</em>
+            </div>
+            <p v-if="selectedQcRow?.identity?.hint" class="drama-empty-hint">{{ selectedQcRow.identity.hint }}</p>
+            <div class="drama-qc-row">
+              <span>口型</span>
+              <em :class="qcCheckClass(selectedQcRow?.lip)">{{ qcCheckLabel(selectedQcRow?.lip) }}</em>
+            </div>
+            <p v-if="selectedQcRow?.lip?.hint" class="drama-empty-hint">{{ selectedQcRow.lip.hint }}</p>
+            <div class="drama-qc-row">
+              <span>闪烁</span>
+              <em :class="qcCheckClass(selectedQcRow?.flicker)">{{ qcCheckLabel(selectedQcRow?.flicker) }}</em>
+            </div>
+            <p v-if="selectedQcRow?.flicker?.hint" class="drama-empty-hint">{{ selectedQcRow.flicker.hint }}</p>
+            <div class="drama-qc-row">
+              <span>响度</span>
+              <em :class="qcCheckClass(episodeQc?.loudness)">{{ qcCheckLabel(episodeQc?.loudness) }}</em>
+            </div>
+            <p v-if="episodeQc?.loudness?.hint" class="drama-empty-hint">{{ episodeQc.loudness.hint }}</p>
+            <p v-if="episodeQc?.loudness?.lufs != null" class="drama-empty-hint">
+              {{ episodeQc.loudness.lufs }} LUFS（目标 {{ episodeQc.loudness.lufs_target }}）
+            </p>
+          </div>
+          <div class="drama-actions">
+            <button type="button" class="btn-primary" :disabled="rendering || saving" @click="emit('qc-episode')">
+              {{ rendering ? '验收中…' : '跑验收' }}
+            </button>
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || !episodeQc?.can_pass"
+              @click="emit('pass-episode-qc')"
+            >
+              通过
+            </button>
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || !selected"
+              @click="emit('reject-shot-qc')"
+            >
+              退回本镜
+            </button>
+            <button type="button" class="btn-ghost" :disabled="rendering || saving" @click="emit('remix-loudness')">
+              重混音
+            </button>
+          </div>
+          <p class="drama-empty-hint">skipped 不能点通过。响度不达标只重 mix，不重渲各镜 clip。</p>
         </template>
         <template v-else-if="selected">
           <div class="drama-freeze">
@@ -1094,7 +1243,9 @@ function onDrop(n) {
                 ? '添加角色卡，写外形并锁定参考图。'
                 : boardMode === 'timeline'
                   ? '拖拽左侧镜序，或选中镜头改切点与转场。'
-                  : '选择左侧一个镜头。'
+                  : boardMode === 'qc'
+                    ? '先跑验收。skipped 不能点通过；响度只重 mix。'
+                    : '选择左侧一个镜头。'
           }}
         </p>
       </section>

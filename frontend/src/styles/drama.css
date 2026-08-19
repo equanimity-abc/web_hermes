@@ -525,6 +525,24 @@
   color: #fbbf24;
 }
 
+.drama-qc-na {
+  color: #9ca3af;
+}
+
+.drama-qc-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.drama-qc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
 .drama-suggest-list {
   display: flex;
   flex-direction: column;
