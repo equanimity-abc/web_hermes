@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from typing import Any
 from urllib.parse import quote
 
@@ -306,6 +307,29 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         project["logline"] = str(patch["logline"]).strip()
     save_project(slug, project)
     return get_project(slug)
+
+
+def remove_project(slug: str) -> dict[str, Any]:
+    """Delete a whole drama project directory and its queue records (fail closed)."""
+    slug = parse_slug(slug)
+    load_project(slug)
+    from tools.drama_queue import drama_jobs
+
+    jobs_removed = drama_jobs.remove_slug(slug)
+
+    root = resolve_safe(_ROOT)
+    target = resolve_safe(_rel(slug))
+    if target == root or root not in target.parents:
+        raise DramaBadRequest("非法项目路径，拒绝删除")
+    if target.exists():
+        shutil.rmtree(target)
+
+    return {
+        "ok": True,
+        "slug": slug,
+        "path": _rel(slug),
+        "jobs_removed": jobs_removed,
+    }
 
 
 def _public_coverage(doc: dict[str, Any] | None) -> dict[str, Any]:

@@ -40,6 +40,7 @@ const {
   selectedCharacter: dramaSelectedCharacter,
   charDraft: dramaCharDraft,
   refreshProjects,
+  deleteProject,
   openProject,
   openEpisode,
   selectShot,
@@ -200,6 +201,19 @@ async function openDramaProject(slug) {
   }
 }
 
+async function deleteDramaProject(slug) {
+  if (!window.confirm(`确定删除漫剧项目「${slug}」？该操作会删除剧本、分镜、配音与成片，不可恢复。`)) {
+    return
+  }
+  try {
+    await deleteProject(slug)
+    showToast(`已删除项目 ${slug}`)
+  } catch (e) {
+    console.error('删除漫剧项目失败:', e)
+    showToast(e.message || '删除项目失败')
+  }
+}
+
 watch(view, async (next) => {
   if (next !== 'drama') return
   try {
@@ -230,6 +244,7 @@ onMounted(() => {
       @resize-start="startResize"
       @set-view="setView"
       @select-project="openDramaProject"
+      @delete-project="deleteDramaProject"
     />
 
     <ChatView

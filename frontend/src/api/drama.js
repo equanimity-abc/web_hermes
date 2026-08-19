@@ -41,6 +41,12 @@ export function patchProject(slug, body) {
   })
 }
 
+export function deleteProject(slug) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+  })
+}
+
 export function getEpisode(slug, episode) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}`)
 }

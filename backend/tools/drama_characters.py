@@ -148,7 +148,14 @@ def find_character(characters: list[dict[str, Any]], cid: str) -> dict[str, Any]
 
 
 def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
-    cid = parse_character_id(str(patch.get("id") or suggest_character_id(str(patch.get("name") or ""))))
+    name = str(patch.get("name") or "").strip()
+    raw_id = str(patch.get("id") or "").strip()
+    if raw_id and _ID_RE.match(raw_id):
+        cid = parse_character_id(raw_id)
+    else:
+        # Tolerate non-ASCII / empty ids (e.g. an LLM passing a Chinese name as id).
+        # Fall back to a deterministic ascii id derived from the name.
+        cid = suggest_character_id(name or raw_id or "c")
     cards = load_characters(slug)
     existing = find_character(cards, cid) or {"id": cid}
     merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}

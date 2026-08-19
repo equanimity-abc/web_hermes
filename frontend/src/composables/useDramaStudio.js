@@ -202,6 +202,24 @@ export function useDramaStudio() {
     return projects.value
   }
 
+  async function deleteProject(targetSlug) {
+    error.value = ''
+    notice.value = ''
+    await dramaApi.deleteProject(targetSlug)
+    if (slug.value === targetSlug) {
+      slug.value = null
+      project.value = null
+      episodeN.value = null
+      episode.value = null
+      selectedN.value = null
+      fillDraft(null)
+      selectedCharacterId.value = null
+      fillCharDraft(null)
+    }
+    await refreshProjects()
+    return true
+  }
+
   async function openProject(nextSlug) {
     error.value = ''
     notice.value = ''
@@ -1128,6 +1146,7 @@ export function useDramaStudio() {
     mixUnlicensed,
     assetUrl,
     refreshProjects,
+    deleteProject,
     openProject,
     openEpisode,
     selectShot,

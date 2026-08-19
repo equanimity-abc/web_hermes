@@ -50,6 +50,7 @@ class DramaJob:
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    discarded: bool = False
 
     def touch(self, **patch: Any) -> None:
         for key, value in patch.items():
@@ -89,6 +90,8 @@ class DramaQueue:
         self._slug_busy: dict[str, str] = {}
 
     def _persist(self, job: DramaJob) -> None:
+        if job.discarded:
+            return
         path = _queue_dir() / f"{job.job_id}.json"
         payload = public_job(job)
         payload.pop("cancel_event", None)
@@ -167,6 +170,35 @@ class DramaQueue:
         if old.status != "error":
             raise ValueError("只能重试失败的任务")
         return self.submit(old.kind, old.slug, old.episode, params=dict(old.params or {}))
+
+    def remove_slug(self, slug: str) -> int:
+        """Cancel and drop in-memory jobs for a slug and remove persisted records.
+
+        Running workers keep a reference to their job; marking it discarded makes
+        the worker skip the trailing _persist, so no orphan file is re-created.
+        """
+        with self._lock:
+            jobs = [j for j in self._jobs.values() if j.slug == slug]
+            for j in jobs:
+                self._jobs.pop(j.job_id, None)
+        removed = len(jobs)
+        for j in jobs:
+            j.cancel_event.set()
+            j.discarded = True
+            if j.status == "pending":
+                j.touch(status="cancelled", error=None)
+            self._release_busy(j)
+        for path in _queue_dir().glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if data.get("slug") == slug:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        return removed
 
     def _release_busy(self, job: DramaJob) -> None:
         key = f"{job.slug}:ep{int(job.episode):02d}"

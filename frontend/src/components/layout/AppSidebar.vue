@@ -16,6 +16,7 @@ const emit = defineEmits([
   'resize-start',
   'set-view',
   'select-project',
+  'delete-project',
 ])
 </script>
 
@@ -85,6 +86,16 @@ const emit = defineEmits([
           <path d="M6 8h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
         </svg>
         <span class="session-title">{{ item.title }}</span>
+        <button
+          type="button"
+          class="btn-delete"
+          title="删除项目"
+          @click.stop="emit('delete-project', item.slug)"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </button>
       </div>
       <div v-if="projects.length === 0" class="no-sessions">暂无漫剧项目</div>
     </div>

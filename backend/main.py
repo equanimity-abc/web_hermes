@@ -461,4 +461,12 @@ async def chat_stream_legacy(req: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=True)
+    # reload=False：漫剧多为长任务 + SSE 流，热重载会在代码变动时硬断开
+    # 客户端连接（浏览器报 "Server disconnected without sending a response"）。
+    reload_enabled = config.RELOAD if hasattr(config, "RELOAD") else False
+    uvicorn.run(
+        "main:app",
+        host=config.HOST,
+        port=config.PORT,
+        reload=reload_enabled,
+    )

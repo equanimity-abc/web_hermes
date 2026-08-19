@@ -26,6 +26,7 @@ from tools.drama_studio import (
     patch_timeline,
     preview_script,
     remove_character,
+    remove_project,
     rerender_dirty_shots,
     rerender_one_shot,
     retry_render_job,
@@ -208,6 +209,14 @@ async def drama_get_project(slug: str):
 async def drama_patch_project(slug: str, body: ProjectPatch):
     try:
         return patch_project(slug, body.model_dump(exclude_unset=True))
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.delete("/projects/{slug}")
+async def drama_delete_project(slug: str):
+    try:
+        return remove_project(slug)
     except (DramaNotFound, DramaBadRequest) as e:
         raise _http(e) from e
 

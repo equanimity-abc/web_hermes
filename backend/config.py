@@ -19,6 +19,8 @@ class Config:
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))
+    # 热重载会断开进行中的 SSE 长连接，漫剧长任务场景默认关闭
+    RELOAD: bool = os.getenv("RELOAD", "0") in ("1", "true", "True", "yes")
 
     # CORS (允许前端开发服务器跨域)
     CORS_ORIGINS: list[str] = os.getenv(
@@ -41,7 +43,7 @@ class Config:
     )
 
     # Agent loop
-    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "32"))
+    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "256"))
 
     # Context compression（按字符粗估，超限则摘要旧轮次）
     CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))
