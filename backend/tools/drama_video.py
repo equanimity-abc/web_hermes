@@ -780,42 +780,94 @@ def _encode_clip(
 
 
 def _assemble_clips(
-    clips: list[tuple[Path, float, str]],
+    specs: list[dict[str, Any]],
     out_path: Path,
+    *,
+    fade_sec: float = XFADE_SEC,
 ) -> str:
-    """Crossfade shots. Hard concat reads as a slideshow."""
-    if not clips:
+    """Crossfade trimmed clips. Timeline edits never rewrite per-shot source files."""
+    from tools.drama_timeline import junction_fade_sec, resolve_transition_name
+
+    if not specs:
         raise ValueError("没有可拼接的镜头")
-    if len(clips) == 1:
+    if len(specs) == 1:
+        spec = specs[0]
+        path = spec["path"]
+        trim_in = float(spec.get("trim_in") or 0)
+        trim_out = float(spec.get("trim_out") or 0)
+        vol = float(spec.get("volume") or 1.0)
+        probe = _probe_duration(path)
+        end = max(trim_in + 0.25, probe - trim_out)
+        if trim_in > 0.01 or trim_out > 0.01 or abs(vol - 1.0) > 0.01:
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-filter_complex",
+                    (
+                        f"[0:v]trim=start={trim_in:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v];"
+                        f"[0:a]atrim=start={trim_in:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,volume={vol:.2f}[a]"
+                    ),
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "[a]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-movflags",
+                    "+faststart",
+                    str(out_path),
+                ],
+                timeout=120,
+            )
+            return "trim"
         _run_ffmpeg(
-            ["-y", "-i", str(clips[0][0]), "-c", "copy", "-movflags", "+faststart", str(out_path)],
+            ["-y", "-i", str(path), "-c", "copy", "-movflags", "+faststart", str(out_path)],
             timeout=60,
         )
         return "copy"
 
-    fade = XFADE_SEC
-    min_dur = min(d for _, d, _ in clips)
-    if min_dur <= fade + 0.2:
-        fade = max(0.12, min_dur * 0.22)
-
     inputs: list[str] = []
-    for path, _, _ in clips:
-        inputs += ["-i", str(path)]
-
     parts: list[str] = []
-    last_v = "[0:v]"
-    last_a = "[0:a]"
-    offset = clips[0][1] - fade
-    for i in range(1, len(clips)):
-        trans = _transition_name(clips[i][2], i)
-        v_out = f"[v{i}]"
-        a_out = f"[a{i}]"
+    durations: list[float] = []
+    for i, spec in enumerate(specs):
+        path = spec["path"]
+        trim_in = float(spec.get("trim_in") or 0)
+        trim_out = float(spec.get("trim_out") or 0)
+        vol = float(spec.get("volume") or 1.0)
+        probe = _probe_duration(path)
+        end = max(trim_in + 0.25, probe - trim_out)
+        play = max(0.25, end - trim_in)
+        durations.append(play)
+        inputs += ["-i", str(path)]
         parts.append(
-            f"{last_v}[{i}:v]xfade=transition={trans}:duration={fade:.2f}:offset={offset:.3f}{v_out}"
+            f"[{i}:v]trim=start={trim_in:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}p]"
         )
-        parts.append(f"{last_a}[{i}:a]acrossfade=d={fade:.2f}{a_out}")
+        parts.append(
+            f"[{i}:a]atrim=start={trim_in:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,volume={vol:.2f}[a{i}p]"
+        )
+
+    last_v = "[v0p]"
+    last_a = "[a0p]"
+    fade0 = junction_fade_sec(specs[0], fade_sec)
+    offset = durations[0] - fade0
+    for i in range(1, len(specs)):
+        prev = specs[i - 1]
+        fade_i = junction_fade_sec(prev, fade_sec)
+        trans = resolve_transition_name(prev, i, auto_fn=_transition_name)
+        v_out = f"[v{i}x]"
+        a_out = f"[a{i}x]"
+        parts.append(
+            f"{last_v}[v{i}p]xfade=transition={trans}:duration={fade_i:.2f}:offset={offset:.3f}{v_out}"
+        )
+        parts.append(f"{last_a}[a{i}p]acrossfade=d={fade_i:.2f}{a_out}")
         last_v, last_a = v_out, a_out
-        offset += clips[i][1] - fade
+        offset += durations[i] - fade_i
 
     args = [
         "-y",
@@ -848,7 +900,7 @@ def _assemble_clips(
     except RuntimeError:
         list_file = out_path.parent / "concat.txt"
         list_file.write_text(
-            "\n".join(f"file '{p.name}'" for p, _, _ in clips) + "\n",
+            "\n".join(f"file '{spec['path'].name}'" for spec in specs) + "\n",
             encoding="utf-8",
         )
         _run_ffmpeg(
@@ -999,9 +1051,15 @@ def render_shot_layers(
 
 
 def assemble_episode(doc: dict[str, Any]) -> str:
+    from tools.drama_timeline import build_assemble_specs
+
     out_rel = doc.get("output") or output_rel(str(doc["slug"]), int(doc["episode"]))
     out_path = resolve_safe(out_rel)
-    assemble = _assemble_clips(clip_list(doc), out_path)
+    specs, fade_sec = build_assemble_specs(doc, probe_duration=_probe_duration)
+    ready = [s for s in specs if not s.get("missing")]
+    if not ready:
+        raise FileNotFoundError("没有可拼接的镜头成片")
+    assemble = _assemble_clips(ready, out_path, fade_sec=fade_sec)
     doc["assemble"] = assemble
     save_doc(doc)
     return assemble

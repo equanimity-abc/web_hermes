@@ -181,3 +181,21 @@ export async function uploadShotScene(slug, episode, shot, file) {
   }
   return data
 }
+
+export function getTimeline(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/timeline`)
+}
+
+export function patchTimeline(slug, episode, body) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/timeline`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export function exportEpisode(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/export`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}

@@ -59,6 +59,18 @@ const {
   generateShotCandidates,
   chooseShotCandidate,
   uploadShotScene,
+  timelineOrder: dramaTimelineOrder,
+  tlDraft: dramaTlDraft,
+  timelineItems: dramaTimelineItems,
+  orderedShots: dramaOrderedShots,
+  transitions: dramaTransitions,
+  timelineDirty: dramaTimelineDirty,
+  orderDirty: dramaOrderDirty,
+  saveTimelineAll,
+  saveTimelineOrder,
+  moveTimelineShot,
+  reorderTimeline,
+  exportTimeline,
 } = useDramaStudio()
 
 const {
@@ -229,6 +241,13 @@ onMounted(() => {
       :selected-character-id="dramaSelectedCharacterId"
       :selected-character="dramaSelectedCharacter"
       :char-draft="dramaCharDraft"
+      :timeline-order="dramaTimelineOrder"
+      :tl-draft="dramaTlDraft"
+      :timeline-items="dramaTimelineItems"
+      :ordered-shots="dramaOrderedShots"
+      :transitions="dramaTransitions"
+      :timeline-dirty="dramaTimelineDirty"
+      :order-dirty="dramaOrderDirty"
       @open-episode="openEpisode"
       @select-shot="selectShot"
       @save="saveShot"
@@ -248,6 +267,11 @@ onMounted(() => {
       @generate-candidates="generateShotCandidates"
       @choose-candidate="chooseShotCandidate"
       @upload-scene="uploadShotScene"
+      @save-timeline-all="saveTimelineAll"
+      @save-timeline-order="saveTimelineOrder"
+      @move-timeline-shot="(n, d) => moveTimelineShot(n, d)"
+      @reorder-timeline="reorderTimeline"
+      @export-timeline="exportTimeline"
     />
 
     <ApprovalModal

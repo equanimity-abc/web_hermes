@@ -129,6 +129,53 @@
   margin-bottom: 12px;
 }
 
+.drama-shot-item--draggable {
+  cursor: grab;
+}
+
+.drama-timeline-track {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px;
+  background: #0f172a;
+  border-top: 1px solid #1f2937;
+  min-height: 52px;
+  align-items: stretch;
+}
+
+.drama-timeline-block {
+  min-width: 36px;
+  border-radius: 6px;
+  background: #374151;
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.drama-timeline-block.active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.drama-timeline-block em {
+  font-style: normal;
+  opacity: 0.85;
+  font-size: 10px;
+}
+
+.drama-timeline-meta {
+  margin: 0;
+  padding: 8px 12px 12px;
+  color: #9ca3af;
+  font-size: 12px;
+  background: #111827;
+}
+
 .drama-board-tabs button {
   border: none;
   background: var(--color-border-soft);

@@ -43,6 +43,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 13. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 14. 锁参考图后无法覆盖已锁定的定妆 png
 15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
+16. export_timeline 按时间线设置拼接整集（改镜序/切点/转场/音量不重渲源 clip）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -597,6 +598,30 @@ def _action_choose_candidate(args: dict) -> str:
     return _ok(action="choose_candidate", **result)
 
 
+def _action_export_timeline(args: dict) -> str:
+    from tools.drama_studio import export_episode
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    project = _load_project(slug)
+    if not project:
+        return _err("项目不存在，请先 init", slug=slug)
+    result = export_episode(slug, n)
+    _record_video(
+        project,
+        {
+            "slug": result["slug"],
+            "episode": result["episode"],
+            "path": result.get("video_path") or f"dramas/{slug}/videos/ep{n:02d}.mp4",
+            "play_url": result.get("play_url"),
+            "shots": result.get("count") or 0,
+            "bytes": 0,
+            "shots_json": result.get("shots_json"),
+        },
+    )
+    return _ok(action="export_timeline", slug=slug, episode=n, assemble=result.get("assemble"), play_url=result.get("play_url"))
+
 
 def _tiktok_drama(args: dict) -> str:
     action = str(args.get("action") or "").strip().lower()
@@ -616,6 +641,7 @@ def _tiktok_drama(args: dict) -> str:
         "save_character": _action_save_character,
         "generate_candidates": _action_generate_candidates,
         "choose_candidate": _action_choose_candidate,
+        "export_timeline": _action_export_timeline,
     }
     handler = handlers.get(action)
     if not handler:
@@ -644,7 +670,8 @@ def register_tiktok_drama() -> None:
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
-            "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）。"
+            "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -652,7 +679,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline",
                     "enum": [
                         "guide",
                         "init",
@@ -669,6 +696,7 @@ def register_tiktok_drama() -> None:
                         "save_character",
                         "generate_candidates",
                         "choose_candidate",
+                        "export_timeline",
                     ],
                 },
                 "slug": {

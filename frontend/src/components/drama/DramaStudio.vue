@@ -24,6 +24,13 @@ const props = defineProps({
   selectedCharacterId: { type: [String, null], default: null },
   selectedCharacter: { type: Object, default: null },
   charDraft: { type: Object, required: true },
+  timelineOrder: { type: Array, default: () => [] },
+  tlDraft: { type: Object, required: true },
+  timelineItems: { type: Array, default: () => [] },
+  orderedShots: { type: Array, default: () => [] },
+  transitions: { type: Array, default: () => [] },
+  timelineDirty: { type: Boolean, default: false },
+  orderDirty: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -49,11 +56,18 @@ const emit = defineEmits([
   'generate-candidates',
   'choose-candidate',
   'upload-scene',
+  'save-timeline-shot',
+  'save-timeline-all',
+  'save-timeline-order',
+  'move-timeline-shot',
+  'reorder-timeline',
+  'export-timeline',
 ])
 
 const previewMode = ref('shot')
 const refInput = ref(null)
 const sceneInput = ref(null)
+const dragFromN = ref(null)
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
   { id: 'scene', label: '画面' },
@@ -99,6 +113,12 @@ const previewUrl = computed(() => {
     const shot = props.selected
     url = shot?.files?.clip?.url || shot?.files?.scene?.url || shot?.preview_url || ''
   }
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+})
+
+const episodePreviewUrl = computed(() => {
+  const url = props.episode?.play_url || ''
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
@@ -150,6 +170,33 @@ function statusLabel(shot) {
   if ((shot.dirty || []).length) return '脏'
   if (shot.status === 'rendered') return '已渲'
   return shot.status || '待做'
+}
+
+function tlItem(n) {
+  return props.timelineItems.find((item) => item.n === n) || null
+}
+
+function tlLabel(shot) {
+  const item = tlItem(shot.n)
+  const play = item?.play_duration ?? shot.duration
+  const trim = Number(shot.trim_out || 0)
+  const parts = [`${play}s`]
+  if (trim > 0) parts.push(`-${trim}s`)
+  if (shot.transition && shot.transition !== 'auto') parts.push(shot.transition)
+  return parts.join(' · ')
+}
+
+function onDragStart(n) {
+  dragFromN.value = n
+}
+
+function onDragOver(ev) {
+  ev.preventDefault()
+}
+
+function onDrop(n) {
+  if (dragFromN.value != null) emit('reorder-timeline', dragFromN.value, n)
+  dragFromN.value = null
 }
 </script>
 
@@ -203,8 +250,23 @@ function statusLabel(shot) {
           >
             角色
           </button>
+          <button
+            type="button"
+            :class="{ active: boardMode === 'timeline' }"
+            @click="emit('update:boardMode', 'timeline')"
+          >
+            时间线
+          </button>
         </div>
-        <h2>{{ boardMode === 'script' ? '受影响镜头' : boardMode === 'cast' ? '角色卡' : '分镜' }}</h2>
+        <h2>{{
+          boardMode === 'script'
+            ? '受影响镜头'
+            : boardMode === 'cast'
+              ? '角色卡'
+              : boardMode === 'timeline'
+                ? '镜序'
+                : '分镜'
+        }}</h2>
         <template v-if="boardMode === 'cast'">
           <button
             v-for="char in characters"
@@ -226,6 +288,29 @@ function statusLabel(shot) {
             <span class="drama-shot-body"><strong>添加角色</strong></span>
           </button>
           <p v-if="!characters.length" class="drama-empty-hint">还没有角色卡。添加后写外形、绑音色，出图会按角色稳定下来。</p>
+        </template>
+        <template v-else-if="boardMode === 'timeline'">
+          <button
+            v-for="(shot, idx) in orderedShots"
+            :key="shot.n"
+            type="button"
+            class="drama-shot-item drama-shot-item--draggable"
+            :class="{ active: shot.n === selectedN }"
+            draggable="true"
+            @dragstart="onDragStart(shot.n)"
+            @dragover="onDragOver"
+            @drop="onDrop(shot.n)"
+            @click="emit('select-shot', shot.n)"
+          >
+            <span class="drama-shot-n">{{ idx + 1 }}</span>
+            <span class="drama-shot-body">
+              <strong>Shot {{ shot.n }}</strong>
+              <em>{{ shot.画面 || '（无画面描述）' }}</em>
+            </span>
+            <span class="drama-shot-flag">{{ tlLabel(shot) }}</span>
+          </button>
+          <p v-if="!orderedShots.length" class="drama-empty-hint">还没有可排的时间线镜头。</p>
+          <p v-if="orderDirty" class="drama-empty-hint">镜序有未保存改动。</p>
         </template>
         <template v-else>
         <button
@@ -277,6 +362,39 @@ function statusLabel(shot) {
           <img v-if="refPreviewUrl" class="drama-media" :src="refPreviewUrl" alt="角色参考图" />
           <div v-else class="drama-stage-empty">上传定妆图后，出图会按外形描述和配色锁定同一张脸</div>
         </div>
+      </section>
+
+      <section v-else-if="boardMode === 'timeline'" class="drama-preview">
+        <div class="drama-preview-tabs">
+          <button type="button" class="active">整集预览</button>
+        </div>
+        <div class="drama-stage">
+          <video
+            v-if="episode?.play_url"
+            :key="`${episode.play_url}-${bust}`"
+            class="drama-media"
+            :src="episodePreviewUrl"
+            controls
+            playsinline
+          />
+          <div v-else class="drama-stage-empty">导出后在此预览整集 mp4</div>
+        </div>
+        <div v-if="timelineItems.length" class="drama-timeline-track">
+          <div
+            v-for="item in timelineItems"
+            :key="item.n"
+            class="drama-timeline-block"
+            :class="{ active: item.n === selectedN }"
+            :style="{ flex: Math.max(item.play_duration || 1, 0.5) }"
+            @click="emit('select-shot', item.n)"
+          >
+            <span>S{{ item.n }}</span>
+            <em>{{ item.play_duration }}s</em>
+          </div>
+        </div>
+        <p v-if="episode?.timeline?.total_duration" class="drama-timeline-meta">
+          整集约 {{ episode.timeline.total_duration }}s · 改切点/转场/音量后点导出，不重渲源 clip
+        </p>
       </section>
 
       <section v-else class="drama-preview">
@@ -350,7 +468,15 @@ function statusLabel(shot) {
       </section>
 
       <section class="drama-inspector">
-        <h2>{{ boardMode === 'script' ? '剧本操作' : boardMode === 'cast' ? '角色卡' : '检查器' }}</h2>
+        <h2>{{
+          boardMode === 'script'
+            ? '剧本操作'
+            : boardMode === 'cast'
+              ? '角色卡'
+              : boardMode === 'timeline'
+                ? '时间线'
+                : '检查器'
+        }}</h2>
         <div v-if="boardMode === 'script'" class="drama-actions drama-actions--script">
           <button type="button" class="btn-ghost" :disabled="saving || rendering" @click="emit('preview-script')">
             {{ saving ? '预览中…' : '预览影响' }}
@@ -417,6 +543,58 @@ function statusLabel(shot) {
               </button>
               <button type="button" class="btn-ghost" :disabled="saving" @click="emit('delete-character')">
                 删除
+              </button>
+            </div>
+          </template>
+        </template>
+        <template v-else-if="boardMode === 'timeline'">
+          <p v-if="!selected" class="drama-empty-hint">选一条镜头改切点、转场或音量。</p>
+          <template v-else>
+            <div class="drama-actions drama-actions--script">
+              <button type="button" class="btn-ghost" :disabled="saving" @click="emit('move-timeline-shot', selected.n, -1)">
+                上移
+              </button>
+              <button type="button" class="btn-ghost" :disabled="saving" @click="emit('move-timeline-shot', selected.n, 1)">
+                下移
+              </button>
+              <button type="button" class="btn-ghost" :disabled="saving || !orderDirty" @click="emit('save-timeline-order')">
+                保存镜序
+              </button>
+            </div>
+            <label>
+              尾部裁切（秒）
+              <input v-model.number="tlDraft.trim_out" type="number" min="0" step="0.1" />
+            </label>
+            <label>
+              头部裁切（秒）
+              <input v-model.number="tlDraft.trim_in" type="number" min="0" step="0.1" />
+            </label>
+            <label>
+              音量
+              <input v-model.number="tlDraft.volume" type="range" min="0" max="2" step="0.05" />
+              <span>{{ tlDraft.volume }}</span>
+            </label>
+            <label>
+              到下镜转场
+              <select v-model="tlDraft.transition">
+                <option v-for="t in transitions" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </label>
+            <p class="drama-empty-hint">
+              源 clip {{ tlItem(selected.n)?.source_duration || selected.duration }}s → 时间线
+              {{ tlItem(selected.n)?.play_duration || '?' }}s
+            </p>
+            <div class="drama-actions">
+              <button
+                type="button"
+                class="btn-primary"
+                :disabled="saving || (!timelineDirty && !orderDirty)"
+                @click="emit('save-timeline-all')"
+              >
+                {{ saving ? '保存中…' : '保存时间线' }}
+              </button>
+              <button type="button" class="btn-ghost" :disabled="rendering || saving" @click="emit('export-timeline')">
+                {{ rendering ? '导出中…' : '导出整集' }}
               </button>
             </div>
           </template>
@@ -527,7 +705,9 @@ function statusLabel(shot) {
               ? '可先保存剧本生成分镜，再选镜头锁定整镜。'
               : boardMode === 'cast'
                 ? '添加角色卡，写外形并锁定参考图。'
-                : '选择左侧一个镜头。'
+                : boardMode === 'timeline'
+                  ? '拖拽左侧镜序，或选中镜头改切点与转场。'
+                  : '选择左侧一个镜头。'
           }}
         </p>
       </section>
@@ -535,7 +715,7 @@ function statusLabel(shot) {
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
-      <p>从左侧打开一个漫剧项目。分镜页可重抽候选、点选换图；剧本页改结局；角色页写外形、绑音色、锁参考图。</p>
+      <p>从左侧打开一个漫剧项目。分镜页可重抽候选；时间线页改镜序/切点/转场后导出整集，不覆盖各镜 clip。</p>
     </div>
   </main>
 </template>

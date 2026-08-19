@@ -29,7 +29,9 @@ from tools.drama_shots import (
     save_doc,
     script_impact,
     set_shot_locks,
+    TRANSITIONS,
 )
+from tools.drama_timeline import apply_timeline_patch, patch_timeline_doc, public_timeline
 from tools.workspace import resolve_safe, workspace_root
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$")
@@ -273,6 +275,9 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
     video = _asset_meta(video_rel)
     shots = [enrich_shot(s, slug=slug) for s in (doc.get("shots") or [])] if doc else []
+    from tools.drama_video import _probe_duration
+
+    timeline = public_timeline(doc, probe_duration=_probe_duration) if doc else None
     return {
         "slug": slug,
         "episode": n,
@@ -283,12 +288,14 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "shots_json": json_rel(slug, n) if doc else None,
         "shots": shots,
         "count": len(shots),
+        "timeline": timeline,
         "video_path": video_rel if video["exists"] else None,
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
         "voices": [{"id": vid, "label": label} for vid, label in VOICES],
         "layer_ids": ["scene", "overlay", "voice", "clip"],
+        "transitions": list(TRANSITIONS),
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -343,8 +350,10 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
+    timeline_keys = ("trim_in", "trim_out", "volume", "transition")
+    timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
     has_lock = any(patch.get(k) is not None for k in ("locked", "lock", "unlock") if k in patch)
     if "duration" in body:
         try:
@@ -360,8 +369,12 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         body["camera"] = cam
     if "角色" in body:
         body["角色"] = normalize_roles(body["角色"])
-    if not body and not has_lock:
-        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / locked）")
+    if "transition" in timeline_body:
+        t = str(timeline_body["transition"]).strip() or "auto"
+        if t not in TRANSITIONS:
+            raise DramaBadRequest(f"未知转场：{t}，可选 {', '.join(TRANSITIONS)}")
+    if not body and not timeline_body and not has_lock:
+        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / 时间线 / locked）")
 
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
@@ -388,6 +401,8 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
                 updated = patch_shot_in_markdown(script, shot_n, body)
                 if updated != script:
                     _write_text(script_rel, updated.rstrip() + "\n")
+    if timeline_body:
+        apply_timeline_patch(shot, timeline_body)
     save_doc(doc)
 
     return {
@@ -506,6 +521,48 @@ def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict
     payload.update({k: result[k] for k in ("assemble", "hint") if k in result})
     return payload
 
+
+def get_timeline(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_video import _probe_duration
+
+    return {
+        "slug": slug,
+        "episode": n,
+        "timeline": public_timeline(doc, probe_duration=_probe_duration),
+        "play_url": _asset_meta(_rel(slug, "videos", f"ep{n:02d}.mp4")).get("url"),
+    }
+
+
+def patch_timeline(slug: str, episode: int, body: dict[str, Any]) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    patch_timeline_doc(doc, body)
+    save_doc(doc)
+    from tools.drama_video import _probe_duration
+
+    return {
+        "slug": slug,
+        "episode": n,
+        "timeline": public_timeline(doc, probe_duration=_probe_duration),
+    }
+
+
+def export_episode(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_video import assemble_episode, ffmpeg_available
+
+    if not ffmpeg_available():
+        raise DramaBadRequest("未找到 ffmpeg，无法导出整集")
+    mode = assemble_episode(doc)
+    ep = get_episode(slug, n)
+    ep["assemble"] = mode
+    return ep
 
 
 def preview_script(slug: str, episode: int, content: str) -> dict[str, Any]:

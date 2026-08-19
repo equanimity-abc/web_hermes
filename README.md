@@ -90,6 +90,9 @@ npm run dev
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/candidates` | 重抽 2–4 张候选图 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/choose/{cid}` | 点选候选锁定画面（只重拼 clip，不重配音） |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/scene` | 手传覆盖本镜画面 |
+| GET | `/api/drama/projects/{slug}/episodes/{n}/timeline` | 时间线镜序与各镜切点/转场/音量 |
+| PATCH | `/api/drama/projects/{slug}/episodes/{n}/timeline` | 保存镜序或批量改时间线 |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/export` | 按时间线导出整集（不重渲源 clip） |
 | GET | `/api/drama/projects/{slug}/characters` | 角色卡列表 + 可选音色 |
 | POST | `/api/drama/projects/{slug}/characters` | 新建角色卡 |
 | PUT | `/api/drama/projects/{slug}/characters/{id}` | 更新外形 / 音色 / 别名 |
@@ -103,7 +106,7 @@ npm run dev
 漫剧项目：`backend/data/workspace/dramas/{slug}/`（插件 `tiktok_drama` 写入，不改 agent loop）。
 成片视频：`backend/data/workspace/dramas/{slug}/videos/epNN.mp4`（分镜静图 + 运镜/转场/调色 + 配音；聊天里可通过 `/api/workspace/file` 预览）。
 分镜资产：`videos/epNN/shots.json` + `shotNN.mp4`（改一镜用 `rerender_shot`，其它镜不重渲）。
-工作台：前端侧栏切到「漫剧」，REST `/api/drama/*` 直接改分镜（对白 / 运镜 / 时长 / 角色）或剧本，不走 Agent loop。锁住 `scene` 后改台词只重配音和字幕；锁住整镜后改剧本不会覆盖该镜。角色卡的外形进入出图 prompt，音色绑定配音，参考图可锁。分镜页候选墙可重抽 4 张、点选换图或手传覆盖，只换画面不重配音。
+工作台：前端侧栏切到「漫剧」，REST `/api/drama/*` 直接改分镜（对白 / 运镜 / 时长 / 角色）或剧本，不走 Agent loop。锁住 `scene` 后改台词只重配音和字幕；锁住整镜后改剧本不会覆盖该镜。角色卡的外形进入出图 prompt，音色绑定配音，参考图可锁。分镜页候选墙可重抽 4 张、点选换图或手传覆盖，只换画面不重配音。时间线页可拖拽镜序、裁切头尾、选转场、调音量，点导出立刻出新 epNN.mp4，各镜 shotNN.mp4 不会被覆盖。
 
 ## 开发路线
 
@@ -124,3 +127,4 @@ npm run dev
 - [x] D3: 剧情干预（剧本编辑器 + 脏镜提示；已锁整镜不覆盖）
 - [x] D4: 角色一致性（角色卡 + 参考图进 prompt + 每镜选角色 + 音色绑定）
 - [x] D5: 候选墙（每镜 2–4 候选 + 点选锁定 + 手传覆盖；换图不重配音）
+- [x] D6: 时间线（镜序拖拽 + 切点/转场/音量 + 导出不毁源 clip）

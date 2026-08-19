@@ -21,6 +21,23 @@ from tools.drama_characters import (
 )
 from tools.workspace import resolve_safe
 
+DEFAULT_FADE_SEC = 0.32
+MIN_PLAY_SEC = 0.25
+TRANSITIONS = (
+    "auto",
+    "cut",
+    "fade",
+    "fadeblack",
+    "fadewhite",
+    "wipeleft",
+    "wiperight",
+    "slideleft",
+    "slideright",
+    "slideup",
+    "slidedown",
+    "dissolve",
+)
+
 LAYERS = ("scene", "overlay", "voice", "clip")
 RENDER_LAYERS = (*LAYERS, "assemble")
 LOCK_TOKENS = (*LAYERS, "shot")
@@ -39,6 +56,63 @@ _CONTENT_KEYS = ("画面", "对白", "字幕", "角色", "duration", "timing")
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_shot_timeline(raw: dict[str, Any]) -> dict[str, float | str]:
+    trim_in = max(0.0, float(raw.get("trim_in") or 0))
+    trim_out = max(0.0, float(raw.get("trim_out") or 0))
+    try:
+        volume = float(raw.get("volume") if raw.get("volume") is not None else 1.0)
+    except (TypeError, ValueError):
+        volume = 1.0
+    volume = max(0.0, min(volume, 2.0))
+    transition = str(raw.get("transition") or "auto").strip() or "auto"
+    if transition not in TRANSITIONS:
+        transition = "auto"
+    return {
+        "trim_in": round(trim_in, 3),
+        "trim_out": round(trim_out, 3),
+        "volume": round(volume, 2),
+        "transition": transition,
+    }
+
+
+def _shot_numbers(shots: list[dict[str, Any]]) -> list[int]:
+    out: list[int] = []
+    for shot in shots:
+        try:
+            n = int(shot.get("n") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.append(n)
+    return sorted(set(out))
+
+
+def normalize_timeline(raw: Any, shots: list[dict[str, Any]]) -> dict[str, Any]:
+    nums = _shot_numbers(shots)
+    data = raw if isinstance(raw, dict) else {}
+    order_raw = data.get("order")
+    order: list[int] = []
+    seen: set[int] = set()
+    if isinstance(order_raw, list):
+        for item in order_raw:
+            try:
+                n = int(item)
+            except (TypeError, ValueError):
+                continue
+            if n in nums and n not in seen:
+                order.append(n)
+                seen.add(n)
+    for n in nums:
+        if n not in seen:
+            order.append(n)
+    try:
+        fade = float(data.get("fade_sec") if data.get("fade_sec") is not None else DEFAULT_FADE_SEC)
+    except (TypeError, ValueError):
+        fade = DEFAULT_FADE_SEC
+    fade = max(0.05, min(fade, 1.5))
+    return {"order": order, "fade_sec": round(fade, 3)}
 
 
 def work_rel(slug: str, episode: int) -> str:
@@ -216,6 +290,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         )
 
     duration = float(raw.get("duration") or 5)
+    tl = normalize_shot_timeline(raw)
     return {
         "n": n,
         "timing": str(raw.get("timing") or ""),
@@ -228,6 +303,10 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "角色": normalize_roles(raw.get("角色")),
         "camera": str(raw.get("camera") or ""),
         "prompt": str(raw.get("prompt") or ""),
+        "trim_in": tl["trim_in"],
+        "trim_out": tl["trim_out"],
+        "volume": tl["volume"],
+        "transition": tl["transition"],
         "locked": locked,
         "dirty": dirty,
         "status": status,
@@ -241,6 +320,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
 def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, Any]:
     """Ensure shots.json has D0 fields so PATCH/rerender work on older projects."""
     shots = [normalize_shot(slug, episode, s) for s in (data.get("shots") or []) if isinstance(s, dict)]
+    timeline = normalize_timeline(data.get("timeline"), shots)
     return {
         **data,
         "slug": slug,
@@ -252,6 +332,7 @@ def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, An
         "output": str(data.get("output") or output_rel(slug, episode)),
         "count": len(shots),
         "shots": shots,
+        "timeline": timeline,
         "updated_at": str(data.get("updated_at") or utc_now()),
     }
 
@@ -278,6 +359,10 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "scene_source": str(raw.get("scene_source") or ""),
         "chosen": str(raw.get("chosen") or ""),
         "candidates": normalize_candidates(slug, episode, n, raw.get("candidates")),
+        "trim_in": 0.0,
+        "trim_out": 0.0,
+        "volume": 1.0,
+        "transition": "auto",
         "assets": assets,
     }
 
@@ -468,6 +553,9 @@ def merge_from_parsed(
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
             rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
             rec["chosen"] = str(old.get("chosen") or "")
+            for key in ("trim_in", "trim_out", "volume", "transition"):
+                if key in old:
+                    rec[key] = old[key]
             if "scene" in locked:
                 rec["画面"] = str(old.get("画面") or rec["画面"])
                 rec["prompt"] = str(old.get("prompt") or rec.get("prompt") or "")
@@ -512,6 +600,8 @@ def merge_from_parsed(
             frozen["locked"] = _as_str_list(old.get("locked"))
             shots.append(normalize_shot(slug, episode, frozen))
     shots.sort(key=lambda s: int(s["n"]))
+    existing_tl = (existing or {}).get("timeline")
+    timeline = normalize_timeline(existing_tl, shots)
 
     return {
         "slug": slug,
@@ -523,6 +613,7 @@ def merge_from_parsed(
         "output": output_rel(slug, episode),
         "count": len(shots),
         "shots": shots,
+        "timeline": timeline,
         "updated_at": utc_now(),
     }
 
@@ -536,22 +627,40 @@ def find_shot(doc: dict[str, Any], n: int) -> dict[str, Any] | None:
 
 def clip_list(doc: dict[str, Any]) -> list[tuple[Path, float, str]]:
     clips: list[tuple[Path, float, str]] = []
-    for shot in doc.get("shots") or []:
+    for shot in ordered_shots_from_doc(doc):
         rel = (shot.get("assets") or {}).get("clip") or ""
         path = resolve_safe(rel)
         if not path.is_file():
             raise FileNotFoundError(f"缺少镜头成片：{rel}")
+        tl = normalize_shot_timeline(shot)
+        play = max(MIN_PLAY_SEC, float(shot.get("duration") or 5) - tl["trim_in"] - tl["trim_out"])
         clips.append(
             (
                 path,
-                float(shot.get("duration") or 5),
+                play,
                 str(shot.get("camera") or "punch_in"),
             )
         )
     return clips
 
 
+def ordered_shots_from_doc(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    shots = doc.get("shots") or []
+    by_n = {int(s.get("n") or 0): s for s in shots if s.get("n") is not None}
+    timeline = normalize_timeline(doc.get("timeline"), shots)
+    out: list[dict[str, Any]] = []
+    for n in timeline["order"]:
+        shot = by_n.get(int(n))
+        if shot is not None:
+            out.append(shot)
+    for n in sorted(by_n):
+        if n not in timeline["order"]:
+            out.append(by_n[n])
+    return out
+
+
 def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
+    tl = normalize_shot_timeline(shot)
     return {
         "n": shot.get("n"),
         "timing": shot.get("timing"),
@@ -561,6 +670,10 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "字幕": shot.get("字幕"),
         "角色": normalize_roles(shot.get("角色")),
         "camera": shot.get("camera"),
+        "trim_in": tl["trim_in"],
+        "trim_out": tl["trim_out"],
+        "volume": tl["volume"],
+        "transition": tl["transition"],
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],
         "status": shot.get("status"),

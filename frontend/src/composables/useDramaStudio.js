@@ -19,8 +19,17 @@ export function useDramaStudio() {
   const boardMode = ref('shots')
   const selectedCharacterId = ref(null)
   const charDraft = ref(emptyCharDraft())
+  const timelineOrder = ref([])
+  const tlDraft = ref(emptyTlDraft())
 
   const shots = computed(() => episode.value?.shots || [])
+  const timelineItems = computed(() => episode.value?.timeline?.items || [])
+  const transitions = computed(() => episode.value?.transitions || episode.value?.timeline?.transitions || [])
+  const orderedShots = computed(() => {
+    const order = timelineOrder.value.length ? timelineOrder.value : timelineItems.value.map((i) => i.n)
+    const byN = Object.fromEntries((shots.value || []).map((s) => [s.n, s]))
+    return order.map((n) => byN[n]).filter(Boolean)
+  })
   const selected = computed(() => shots.value.find((s) => s.n === selectedN.value) || null)
   const episodes = computed(() => project.value?.episodes || [])
   const characters = computed(() => project.value?.characters || episode.value?.characters || [])
@@ -40,6 +49,22 @@ export function useDramaStudio() {
       rolesKey(draft.value.角色) !== rolesKey(shot.角色)
     )
   })
+  const timelineDirty = computed(() => {
+    const shot = selected.value
+    if (!shot) return false
+    return (
+      Number(tlDraft.value.trim_in || 0) !== Number(shot.trim_in || 0) ||
+      Number(tlDraft.value.trim_out || 0) !== Number(shot.trim_out || 0) ||
+      Number(tlDraft.value.volume || 1) !== Number(shot.volume ?? 1) ||
+      String(tlDraft.value.transition || 'auto') !== String(shot.transition || 'auto')
+    )
+  })
+  const orderDirty = computed(() => {
+    const saved = episode.value?.timeline?.order || []
+    const cur = timelineOrder.value
+    if (saved.length !== cur.length) return true
+    return saved.some((n, i) => n !== cur[i])
+  })
 
   function emptyDraft() {
     return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3 }
@@ -47,6 +72,10 @@ export function useDramaStudio() {
 
   function emptyCharDraft() {
     return { id: '', name: '', look: '', voice: 'zh-CN-YunxiNeural', aliases: '', colors: '' }
+  }
+
+  function emptyTlDraft() {
+    return { trim_in: 0, trim_out: 0, volume: 1, transition: 'auto' }
   }
 
   function rolesKey(raw) {
@@ -63,6 +92,20 @@ export function useDramaStudio() {
       camera: shot?.camera || 'punch_in',
       duration: Number(shot?.duration || 3),
     }
+    fillTlDraft(shot)
+  }
+
+  function fillTlDraft(shot) {
+    tlDraft.value = {
+      trim_in: Number(shot?.trim_in || 0),
+      trim_out: Number(shot?.trim_out || 0),
+      volume: Number(shot?.volume ?? 1),
+      transition: shot?.transition || 'auto',
+    }
+  }
+
+  function syncTimelineFromEpisode(data) {
+    timelineOrder.value = [...(data?.timeline?.order || (data?.shots || []).map((s) => s.n))]
   }
 
   function fillCharDraft(char) {
@@ -115,6 +158,7 @@ export function useDramaStudio() {
     episodeN.value = data.episode
     episode.value = data
     scriptDraft.value = data.script || ''
+    syncTimelineFromEpisode(data)
     const keep = (data.shots || []).some((s) => s.n === selectedN.value)
     const next = keep ? selectedN.value : data.shots?.[0]?.n || null
     selectShot(next)
@@ -486,6 +530,93 @@ export function useDramaStudio() {
     }
   }
 
+  async function saveTimelineShot() {
+    if (!slug.value || !episodeN.value || !selectedN.value || !timelineDirty.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.patchShot(slug.value, episodeN.value, selectedN.value, {
+        trim_in: Number(tlDraft.value.trim_in || 0),
+        trim_out: Number(tlDraft.value.trim_out || 0),
+        volume: Number(tlDraft.value.volume ?? 1),
+        transition: tlDraft.value.transition || 'auto',
+      })
+      await openEpisode(episodeN.value)
+      notice.value = '时间线参数已保存（未改源 clip）'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function saveTimelineOrder() {
+    if (!slug.value || !episodeN.value || !orderDirty.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.patchTimeline(slug.value, episodeN.value, { order: [...timelineOrder.value] })
+      await openEpisode(episodeN.value)
+      notice.value = '镜序已保存'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  function moveTimelineShot(n, delta) {
+    const order = [...timelineOrder.value]
+    const idx = order.indexOf(n)
+    if (idx < 0) return
+    const next = idx + delta
+    if (next < 0 || next >= order.length) return
+    ;[order[idx], order[next]] = [order[next], order[idx]]
+    timelineOrder.value = order
+  }
+
+  function reorderTimeline(fromN, toN) {
+    if (fromN === toN) return
+    const order = [...timelineOrder.value]
+    const from = order.indexOf(fromN)
+    const to = order.indexOf(toN)
+    if (from < 0 || to < 0) return
+    order.splice(from, 1)
+    order.splice(to, 0, fromN)
+    timelineOrder.value = order
+  }
+
+  async function saveTimelineAll() {
+    if (!orderDirty.value && !timelineDirty.value) {
+      notice.value = '没有改动'
+      return
+    }
+    if (orderDirty.value) await saveTimelineOrder()
+    if (error.value) return
+    if (timelineDirty.value) await saveTimelineShot()
+  }
+
+  async function exportTimeline() {
+    if (!slug.value || !episodeN.value) return
+    if (orderDirty.value) await saveTimelineOrder()
+    if (timelineDirty.value && selectedN.value) await saveTimelineShot()
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.exportEpisode(slug.value, episodeN.value)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `整集已导出（${result.assemble || 'assemble'}，约 ${result.timeline?.total_duration || '?'}s）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
   return {
     projects,
     slug,
@@ -511,6 +642,13 @@ export function useDramaStudio() {
     selectedCharacterId,
     selectedCharacter,
     charDraft,
+    timelineOrder,
+    tlDraft,
+    timelineItems,
+    orderedShots,
+    transitions,
+    timelineDirty,
+    orderDirty,
     assetUrl,
     refreshProjects,
     openProject,
@@ -534,5 +672,11 @@ export function useDramaStudio() {
     generateShotCandidates,
     chooseShotCandidate,
     uploadShotScene,
+    saveTimelineShot,
+    saveTimelineOrder,
+    saveTimelineAll,
+    moveTimelineShot,
+    reorderTimeline,
+    exportTimeline,
   }
 }

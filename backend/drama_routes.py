@@ -9,14 +9,17 @@ from tools.drama_studio import (
     CAMERAS,
     DramaBadRequest,
     DramaNotFound,
+    export_episode,
     get_characters,
     get_episode,
     get_project,
+    get_timeline,
     list_projects,
     lock_character_ref,
     patch_episode,
     patch_project,
     patch_shot,
+    patch_timeline,
     preview_script,
     remove_character,
     rerender_dirty_shots,
@@ -62,9 +65,19 @@ class ShotPatch(BaseModel):
     camera: str | None = None
     duration: float | None = None
     timing: str | None = None
+    trim_in: float | None = None
+    trim_out: float | None = None
+    volume: float | None = None
+    transition: str | None = None
     locked: list[str] | None = None
     lock: list[str] | str | None = None
     unlock: list[str] | str | None = None
+
+
+class TimelinePatch(BaseModel):
+    order: list[int] | None = None
+    fade_sec: float | None = None
+    shots: dict[str, dict[str, float | str]] | None = None
 
 
 class RerenderRequest(BaseModel):
@@ -212,6 +225,30 @@ async def drama_rerender_dirty(slug: str, episode: int):
     try:
         return rerender_dirty_shots(slug, episode)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/episodes/{episode}/timeline")
+async def drama_get_timeline(slug: str, episode: int):
+    try:
+        return get_timeline(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.patch("/projects/{slug}/episodes/{episode}/timeline")
+async def drama_patch_timeline(slug: str, episode: int, body: TimelinePatch):
+    try:
+        return patch_timeline(slug, episode, body.model_dump(exclude_unset=True))
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/export")
+async def drama_export_episode(slug: str, episode: int):
+    try:
+        return export_episode(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 
 
