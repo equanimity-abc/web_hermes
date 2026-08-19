@@ -90,6 +90,8 @@ npm run dev
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/candidates` | 重抽 2–4 张候选图 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/choose/{cid}` | 点选候选锁定画面（只重拼 clip，不重配音） |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/scene` | 手传覆盖本镜画面 |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/i2v` | 生成 I2V 运动（L0 定场拒绝） |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/lip` | 生成口型（仅 dialogue CU/MCU，须有 speaker） |
 | GET | `/api/drama/projects/{slug}/episodes/{n}/timeline` | 时间线镜序与各镜切点/转场/音量 |
 | PATCH | `/api/drama/projects/{slug}/episodes/{n}/timeline` | 保存镜序或批量改时间线 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/export` | 按时间线导出整集（默认后台队列） |
@@ -137,4 +139,6 @@ npm run dev
 - [x] D8: I2V 运动（对已锁关键帧试 2–3s 运动；失败回退静图 zoompan；工作台可选 off/auto/on）
 - [x] Q0: 镜头分类 + 模型路由（kind/size/speaker、models.json 调研卡、L0/L1、I2V 估费）
 - [x] Q1: 音频分轨 + 版权（BGM 只在 assemble/export 混入；无 license 拒绝导出；换曲 clip 哈希不变）
-- [ ] Q2–Q8: 专业成片其余刀（口型 → 稀疏关键帧；见 ROADMAP）
+- [x] Q2: 口型（仅 dialogue CU/MCU + speaker；mock/http + 失败回退；LSE 代理分数）
+- [x] Q3: 运动档 L0–L3（定场禁止 I2V；action 规划 L3；贵模型不可用走 mock；每集最多 2 镜贵 I2V）
+- [ ] Q4–Q8: identity / 导演建议 / 稀疏关键帧 / QC / 风格包（见 ROADMAP）

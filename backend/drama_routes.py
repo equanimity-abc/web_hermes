@@ -36,6 +36,7 @@ from tools.drama_studio import (
     choose_candidate,
     generate_candidates,
     generate_i2v_shot,
+    generate_lip_shot,
     classify_shots,
     get_models,
     get_mix,
@@ -126,7 +127,7 @@ class RefLockBody(BaseModel):
 
 
 class JobCreate(BaseModel):
-    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode | i2v_shot")
+    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode | i2v_shot | lip_shot")
     shot: int | None = None
     layers: list[str] | None = None
     force: bool | None = None
@@ -292,6 +293,14 @@ async def drama_upload_shot_scene(slug: str, episode: int, shot: int, file: Uplo
 async def drama_generate_i2v(slug: str, episode: int, shot: int):
     try:
         return generate_i2v_shot(slug, episode, shot)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/lip")
+async def drama_generate_lip(slug: str, episode: int, shot: int):
+    try:
+        return generate_lip_shot(slug, episode, shot)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 

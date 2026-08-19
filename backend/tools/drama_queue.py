@@ -19,7 +19,7 @@ from typing import Any, Callable
 from tools.workspace import resolve_safe, workspace_root
 
 TERMINAL = frozenset({"done", "error", "cancelled"})
-KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "i2v_shot"})
+KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "i2v_shot", "lip_shot"})
 
 
 class JobCancelled(Exception):
@@ -225,6 +225,8 @@ class DramaQueue:
             return self._run_export(job)
         if job.kind == "i2v_shot":
             return self._run_i2v_shot(job)
+        if job.kind == "lip_shot":
+            return self._run_lip_shot(job)
         raise ValueError(f"未实现的任务：{job.kind}")
 
     def _run_rerender_dirty(self, job: DramaJob) -> dict[str, Any]:
@@ -339,6 +341,30 @@ class DramaQueue:
         self._progress(job, message=f"I2V Shot {shot_n}", current=0, total=2, shot=shot_n)
         job.check_cancel()
         info = generate_shot_i2v(job.slug, job.episode, shot, force=True)
+        save_doc(doc)
+        job.check_cancel()
+        self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)
+        result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
+        info["assemble"] = result.get("assemble")
+        return info
+
+    def _run_lip_shot(self, job: DramaJob) -> dict[str, Any]:
+        from tools.drama_lip import generate_shot_lip
+        from tools.drama_shots import find_shot, load_doc, save_doc
+        from tools.drama_video import rerender_shot
+
+        shot_n = int((job.params or {}).get("shot") or 0)
+        if shot_n < 1:
+            raise ValueError("lip_shot 需要 shot")
+        doc = load_doc(job.slug, job.episode)
+        if doc is None:
+            raise FileNotFoundError("没有 shots.json")
+        shot = find_shot(doc, shot_n)
+        if shot is None:
+            raise ValueError(f"找不到 Shot {shot_n}")
+        self._progress(job, message=f"口型 Shot {shot_n}", current=0, total=2, shot=shot_n)
+        job.check_cancel()
+        info = generate_shot_lip(job.slug, job.episode, shot)
         save_doc(doc)
         job.check_cancel()
         self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)

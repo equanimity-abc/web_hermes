@@ -61,6 +61,7 @@ const {
   chooseShotCandidate,
   uploadShotScene,
   generateShotI2v,
+  generateShotLip,
   classifyEpisodeShots,
   timelineOrder: dramaTimelineOrder,
   tlDraft: dramaTlDraft,
@@ -290,6 +291,7 @@ onMounted(() => {
       @choose-candidate="chooseShotCandidate"
       @upload-scene="uploadShotScene"
       @generate-i2v="generateShotI2v"
+      @generate-lip="generateShotLip"
       @classify-shots="() => classifyEpisodeShots(false)"
       @save-timeline-all="saveTimelineAll"
       @save-timeline-order="saveTimelineOrder"

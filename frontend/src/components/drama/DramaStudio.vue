@@ -63,6 +63,7 @@ const emit = defineEmits([
   'choose-candidate',
   'upload-scene',
   'generate-i2v',
+  'generate-lip',
   'classify-shots',
   'save-timeline-shot',
   'save-timeline-all',
@@ -86,6 +87,8 @@ const layerRows = [
   { id: 'scene', label: '画面' },
   { id: 'overlay', label: '字幕' },
   { id: 'voice', label: '配音' },
+  { id: 'motion', label: '运动' },
+  { id: 'lip', label: '口型' },
   { id: 'clip', label: '成片' },
   { id: 'assemble', label: '整集' },
 ]
@@ -111,7 +114,10 @@ function impactFor(n) {
 function shotFlag(shot) {
   const locked = shot.locked || []
   const impact = impactFor(shot.n)
-  if (shot.route?.ladder === 'L0') return 'L0'
+  if (shot.route?.planned_ladder === 'L3' || shot.route?.ladder === 'L3') return 'L3'
+  if (shot.lip_source === 'mock' || shot.lip_source === 'http') return '口型'
+  if (shot.route?.ladder === 'L0' || shot.route?.planned_ladder === 'L0') return 'L0'
+  if (shot.route?.planned_ladder === 'L2') return 'L2'
   if (shot.route?.ladder === 'L1') return 'L1'
   if (shot.i2v_source === 'ai') return 'I2V'
   if (shot.i2v_source === 'fallback') return '静图'
@@ -136,22 +142,38 @@ const canGenerateI2v = computed(() => {
 
 const kindLocked = computed(() => (props.selected?.locked || []).includes('kind') || shotFrozen.value)
 
+const canGenerateLip = computed(() => Boolean(props.selected?.lip?.ok || props.selected?.lip?.will_run))
+
 const i2vCostLabel = computed(() => {
   const route = props.selected?.route
+  const lip = props.selected?.lip
   const cost = props.episode?.cost || {}
   const cur = route?.currency || cost.currency || 'CNY'
   const shotCost = Number(route?.cost_per_shot || 0)
   const epCost = Number(cost.i2v_estimate || 0)
+  const lipCost = Number(lip?.cost_per_shot || 0)
+  const epLip = Number(cost.lip_estimate || 0)
   if (!route) return ''
-  if (route.ladder === 'L0') return `L0 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`
-  return `估 ${cur} ${shotCost} / 本集 ${cur} ${epCost}`
+  const planned = route.planned_ladder || route.ladder
+  const cap = `${cost.expensive_shots || 0}/${cost.expensive_cap || 2} 贵镜`
+  if (route.ladder === 'L0') return `${planned} 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`
+  const bits = [`${planned}→${route.ladder} 估 ${cur} ${shotCost}`, `本集 ${cur} ${epCost}`, cap]
+  if (lip?.will_run) bits.push(`口型 ${cur} ${lipCost} / 本集 ${epLip}`)
+  if (route.reason) bits.push(route.reason)
+  return bits.join(' · ')
 })
 
 const i2vSourceLabel = computed(() => {
   const src = props.selected?.i2v_source || ''
-  if (src === 'ai') return '已生成 I2V 运动'
-  if (src === 'fallback') return 'I2V 失败，已回退静图运镜'
-  return '尚未生成 I2V'
+  const lipSrc = props.selected?.lip_source || ''
+  const parts = []
+  if (src === 'ai') parts.push('已生成 I2V 运动')
+  else if (src === 'fallback') parts.push('I2V 失败，已回退静图运镜')
+  else parts.push('尚未生成 I2V')
+  if (lipSrc === 'mock' || lipSrc === 'http') parts.push(`口型 ${lipSrc}`)
+  else if (lipSrc === 'fallback') parts.push('口型失败，闭口静图')
+  else if (props.selected?.lip && !props.selected.lip.ok) parts.push(props.selected.lip.reason || '本镜不开口型')
+  return parts.join(' · ')
 })
 
 const previewUrl = computed(() => {
@@ -851,6 +873,14 @@ function onDrop(n) {
               @click="emit('generate-i2v')"
             >
               {{ rendering ? '处理中…' : '生成 I2V' }}
+            </button>
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || !canGenerateLip"
+              @click="emit('generate-lip')"
+            >
+              {{ rendering ? '处理中…' : '生成口型' }}
             </button>
           </div>
           <p v-if="boardMode === 'shots' && i2vCostLabel" class="drama-empty-hint">{{ i2vCostLabel }}</p>

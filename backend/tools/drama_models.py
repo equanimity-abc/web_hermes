@@ -1,8 +1,8 @@
-"""Shot-kind model router (Q0).
+"""Shot-kind model router (Q0–Q3).
 
 Project-level `models.json` is the research card + routing table.
-Q0 only decides L0 vs L1: establishing-class shots stay Ken Burns;
-dialogue/action class may try I2V. L2+ is recorded but capped until Q2/Q3.
+Q3 binds motion ladder L0–L3 to kind. L2 is lip (dialogue); L3 is action
+dual-keyframe. Expensive I2V providers stay unavailable until a complete card.
 """
 
 from __future__ import annotations
@@ -31,19 +31,22 @@ KIND_DEFAULT_SIZE = {
     "crowd": "WS",
     "title": "WS",
 }
-# Q0 built-in ladder before models.json overlay (L2/L3 still cap to L1).
+# Built-in ladder before models.json overlay (L4+ still cap to L3 until Q6).
 KIND_LADDER = {
     "establishing": "L0",
     "insert": "L0",
-    "dialogue": "L1",
+    "dialogue": "L2",
     "reaction": "L1",
-    "action": "L1",
+    "action": "L3",
     "crowd": "L0",
     "title": "L0",
 }
 L0_KINDS = frozenset(k for k, v in KIND_LADDER.items() if v == "L0")
 LADDER_RANK = {"L0": 0, "L1": 1, "L2": 2, "L3": 3, "L4": 4, "L5": 5}
 Q0_MAX_LADDER = "L1"
+Q3_MAX_LADDER = "L3"
+EXPENSIVE_I2V = frozenset({"kling", "hailuo"})
+MAX_EXPENSIVE_I2V = 2
 CURRENCY = "CNY"
 
 _RESEARCH_FIELDS = ("cost_per_shot", "fallback", "notes")
@@ -172,7 +175,7 @@ def default_providers() -> dict[str, dict[str, Any]]:
             "rpm": 6,
             "timeout_s": 180,
             "fallback": "mock",
-            "notes": "对话特写口型。Q2 再接，Q0 禁止 available。",
+            "notes": "对话特写口型。Q2 默认 mock；无完整调研卡禁止 available。",
         },
         "wav2lip": {
             "available": False,
@@ -207,7 +210,7 @@ def default_models() -> dict[str, Any]:
             "crowd": {"ladder": "L0", "provider": "l0"},
             "title": {"ladder": "L0", "provider": "l0"},
         },
-        "lip": {"provider": "musetalk", "only_kinds": ["dialogue"]},
+        "lip": {"provider": "musetalk", "only_kinds": ["dialogue"], "only_sizes": ["CU", "MCU", "ECU"], "fallback": "mock"},
         "bgm": {"provider": "library", "duck_db": -12, "license": "user_upload"},
         "sfx": {"provider": "library"},
         "qc": {
@@ -323,14 +326,21 @@ def set_provider_available(slug: str, provider_id: str, available: bool) -> dict
     return save_models(slug, doc)
 
 
-def cap_ladder_q0(ladder: str) -> str:
-    rank = LADDER_RANK.get(normalize_ladder(ladder) or "L1", 1)
-    max_rank = LADDER_RANK[Q0_MAX_LADDER]
+def cap_ladder(ladder: str, *, max_ladder: str = Q3_MAX_LADDER) -> str:
+    rank = LADDER_RANK.get(normalize_ladder(ladder) or "L0", 0)
+    max_rank = LADDER_RANK.get(normalize_ladder(max_ladder) or Q3_MAX_LADDER, 3)
     if rank <= 0:
         return "L0"
     if rank > max_rank:
-        return Q0_MAX_LADDER
-    return "L0" if rank == 0 else "L1" if rank >= 1 else "L0"
+        return max_ladder
+    for name, value in LADDER_RANK.items():
+        if value == rank:
+            return name
+    return "L0"
+
+
+def cap_ladder_q0(ladder: str) -> str:
+    return cap_ladder(ladder, max_ladder=Q0_MAX_LADDER)
 
 
 def planned_ladder(shot: dict[str, Any], models: dict[str, Any] | None = None) -> str:
@@ -340,7 +350,7 @@ def planned_ladder(shot: dict[str, Any], models: dict[str, Any] | None = None) -
 
 
 def effective_motion_ladder(shot: dict[str, Any], *, slug: str | None = None, models: dict[str, Any] | None = None) -> str:
-    """Q0: L0 kinds stay L0; everything else caps at L1."""
+    """Planned kind ladder, capped at L3 (Q6 owns L4). L0 kinds stay L0."""
     kind = infer_kind(shot)
     if kind in L0_KINDS:
         return "L0"
@@ -349,7 +359,28 @@ def effective_motion_ladder(shot: dict[str, Any], *, slug: str | None = None, mo
     planned = planned_ladder(shot, models)
     if planned == "L0":
         return "L0"
-    return cap_ladder_q0(planned)
+    return cap_ladder(planned)
+
+
+def i2v_run_ladder(shot: dict[str, Any], *, slug: str | None = None, models: dict[str, Any] | None = None) -> str:
+    """Ladder actually used for I2V. L2 (lip) falls back to L1 idle; L3 may fall to L1."""
+    models = models or (load_models(str(slug)) if slug else None)
+    planned = effective_motion_ladder(shot, slug=slug, models=models)
+    if planned == "L0":
+        return "L0"
+    kind = infer_kind(shot)
+    route = ((models or {}).get("motion") or {}).get(kind) or {}
+    fallback = normalize_ladder(route.get("fallback")) or "L1"
+    if fallback in ("L0", "L2"):
+        fallback = "L1" if planned != "L0" else "L0"
+    if planned == "L2":
+        return fallback if fallback != "L2" else "L1"
+    if planned == "L3":
+        wanted = str(route.get("provider") or "kling")
+        if models and provider_usable(models, wanted):
+            return "L3"
+        return fallback if fallback in ("L1", "L3") else "L1"
+    return "L1"
 
 
 def provider_usable(models: dict[str, Any], provider_id: str) -> bool:
@@ -381,31 +412,41 @@ def provider_cost(models: dict[str, Any], provider_id: str) -> float:
 def estimate_i2v(slug: str, shot: dict[str, Any], *, models: dict[str, Any] | None = None) -> dict[str, Any]:
     models = models or load_models(slug)
     kind = infer_kind(shot)
-    ladder = effective_motion_ladder(shot, models=models)
+    planned = planned_ladder(shot, models)
+    run = i2v_run_ladder(shot, models=models)
     currency = str(models.get("currency") or CURRENCY)
     route = (models.get("motion") or {}).get(kind) or {}
-    if ladder == "L0":
+    if run == "L0" or planned == "L0":
         return {
             "kind": kind,
             "ladder": "L0",
-            "planned_ladder": planned_ladder(shot, models),
+            "planned_ladder": planned,
             "provider": "l0",
             "cost_per_shot": 0,
             "currency": currency,
             "will_run": False,
+            "expensive": False,
             "reason": "定场类镜头强制 L0 静图运镜",
         }
     wanted = str(route.get("provider") or "mock")
     provider = resolve_provider(models, wanted)
+    expensive = provider in EXPENSIVE_I2V and provider_usable(models, provider)
+    cost = provider_cost(models, provider) if run != "L0" else 0
+    reason = ""
+    if planned == "L3" and run != "L3":
+        reason = f"L3 贵模型不可用，回退 {run}/{provider}"
+    elif planned == "L2":
+        reason = "对话镜口型走 L2；I2V 仅为 L1 idle"
     return {
         "kind": kind,
-        "ladder": "L1",
-        "planned_ladder": planned_ladder(shot, models),
+        "ladder": run,
+        "planned_ladder": planned,
         "provider": provider,
-        "cost_per_shot": round(provider_cost(models, provider), 4),
+        "cost_per_shot": round(cost, 4),
         "currency": currency,
         "will_run": True,
-        "reason": "",
+        "expensive": expensive,
+        "reason": reason,
     }
 
 
@@ -415,19 +456,39 @@ def estimate_episode_i2v(slug: str, shots: list[dict[str, Any]]) -> dict[str, An
     total = 0.0
     l1 = 0
     l0 = 0
+    l3 = 0
+    expensive = 0
+    deferred = 0
     for shot in shots:
         info = estimate_i2v(slug, shot, models=models)
         if info.get("will_run"):
+            if info.get("expensive") and expensive >= MAX_EXPENSIVE_I2V:
+                deferred += 1
+                info = {**info, "expensive": False, "provider": resolve_provider(models, "mock"), "cost_per_shot": 0}
             total += float(info.get("cost_per_shot") or 0)
-            l1 += 1
+            if info.get("ladder") == "L3":
+                l3 += 1
+            else:
+                l1 += 1
+            if info.get("expensive"):
+                expensive += 1
         else:
             l0 += 1
+    from tools.drama_lip import estimate_episode_lip
+
+    lip = estimate_episode_lip(slug, shots)
     return {
         "currency": currency,
         "i2v_estimate": round(total, 4),
         "l1_shots": l1,
         "l0_shots": l0,
+        "l3_shots": l3,
+        "expensive_shots": expensive,
+        "expensive_cap": MAX_EXPENSIVE_I2V,
+        "expensive_deferred": deferred,
         "shot_count": len(shots),
+        "lip_estimate": lip.get("lip_estimate") or 0,
+        "lip_shots": lip.get("lip_shots") or 0,
     }
 
 

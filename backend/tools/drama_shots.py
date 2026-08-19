@@ -48,8 +48,9 @@ TRANSITIONS = (
 )
 
 LAYERS = ("scene", "overlay", "voice", "clip")
-RENDER_LAYERS = (*LAYERS, "assemble")
-LOCK_TOKENS = (*LAYERS, "shot", "kind")
+EXTRA_LAYERS = ("motion", "lip", "mix", "assemble")
+RENDER_LAYERS = (*LAYERS, "assemble", "motion", "lip")
+LOCK_TOKENS = (*LAYERS, "shot", "kind", "motion", "lip")
 CANDIDATE_COUNT = 4
 WALL_MAX = 12
 LAYER_LABELS = {
@@ -57,6 +58,9 @@ LAYER_LABELS = {
     "overlay": "字幕",
     "voice": "配音",
     "clip": "成片",
+    "motion": "运动",
+    "lip": "口型",
+    "mix": "混音",
     "assemble": "整集拼接",
     "shot": "整镜",
 }
@@ -153,6 +157,7 @@ def shot_assets(slug: str, episode: int, n: int) -> dict[str, str]:
         "voice": f"{base}/{stem}.mp3",
         "clip": f"{base}/{stem}.mp4",
         "motion": f"{base}/{stem}_motion.mp4",
+        "lip": f"{base}/{stem}_lip.mp4",
     }
 
 
@@ -323,6 +328,12 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "i2v": normalize_i2v_mode(raw.get("i2v")),
         "i2v_source": str(raw.get("i2v_source") or ""),
         "i2v_seconds": float(raw.get("i2v_seconds") or 0) or None,
+        "i2v_ladder": str(raw.get("i2v_ladder") or ""),
+        "i2v_expensive": bool(raw.get("i2v_expensive")),
+        "i2v_deferred": bool(raw.get("i2v_deferred")),
+        "lip_source": str(raw.get("lip_source") or ""),
+        "lip_score": raw.get("lip_score") if isinstance(raw.get("lip_score"), dict) else None,
+        "keys": [item for item in (raw.get("keys") or []) if isinstance(item, dict)] if isinstance(raw.get("keys"), list) else [],
         "locked": locked,
         "dirty": dirty,
         "status": status,
@@ -406,33 +417,35 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
     if changed("画面"):
         dirty.extend(["scene", "clip"])
     if changed("对白"):
-        dirty.extend(["voice", "overlay", "clip"])
+        dirty.extend(["voice", "overlay", "clip", "lip"])
     if changed("字幕"):
         dirty.extend(["overlay", "clip"])
     if roles_key(old.get("角色")) != roles_key(new_content.get("角色")):
         dirty.extend(["scene", "voice", "clip"])
+    if changed("speaker"):
+        dirty.extend(["lip", "clip"])
     if changed("timing"):
         dirty.extend(["clip"])
     if str(old.get("camera") or "") != str(new_content.get("camera") or "") and str(
         new_content.get("camera") or ""
     ):
         if str(old.get("camera") or ""):
-            dirty.extend(["clip"])
+            dirty.extend(["clip", "motion"])
     if changed("kind") or changed("size"):
-        dirty.extend(["clip"])
+        dirty.extend(["clip", "motion", "lip"])
 
     locked = set(_as_str_list(old.get("locked"))) | set(_as_str_list(new_content.get("locked")))
     if "shot" in locked:
         return []
     ordered: list[str] = []
-    for layer in LAYERS:
+    for layer in (*LAYERS, "motion", "lip"):
         if layer in dirty and layer not in locked and layer not in ordered:
             ordered.append(layer)
     return ordered
 
 
 def parse_layers(raw: Any, *, extra: tuple[str, ...] = ()) -> list[str]:
-    allowed = set(LAYERS) | set(extra)
+    allowed = set(LAYERS) | set(EXTRA_LAYERS) | set(extra)
     if raw is None or raw == "":
         return []
     if isinstance(raw, str):
@@ -453,20 +466,22 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
     if "画面" in patch:
         dirty.extend(["scene", "clip"])
     if "对白" in patch:
-        dirty.extend(["voice", "overlay", "clip"])
+        dirty.extend(["voice", "overlay", "clip", "lip"])
     if "字幕" in patch:
         dirty.extend(["overlay", "clip"])
     if "角色" in patch:
         dirty.extend(["scene", "voice", "clip"])
+    if "speaker" in patch:
+        dirty.extend(["lip", "clip"])
     if "timing" in patch or "duration" in patch or "camera" in patch:
-        dirty.extend(["clip"])
-    if "kind" in patch or "size" in patch:
         dirty.extend(["clip", "motion"])
+    if "kind" in patch or "size" in patch:
+        dirty.extend(["clip", "motion", "lip"])
     locked_set = set(_as_str_list(locked))
     if "shot" in locked_set:
         return []
     ordered: list[str] = []
-    for layer in LAYERS:
+    for layer in (*LAYERS, "motion", "lip"):
         if layer in dirty and layer not in locked_set and layer not in ordered:
             ordered.append(layer)
     return ordered
@@ -534,6 +549,13 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
             dirty.append("clip")
         if "motion" not in dirty:
             dirty.append("motion")
+        if "lip" not in dirty:
+            dirty.append("lip")
+    if str(before.get("speaker") or "") != str(shot.get("speaker") or ""):
+        if "lip" not in dirty:
+            dirty.append("lip")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
     dirty = [layer for layer in dirty if layer not in locked]
     merged = _as_str_list(shot.get("dirty"))
     for layer in dirty:
@@ -553,7 +575,7 @@ def set_shot_locks(
 ) -> list[str]:
     """Replace or incrementally update locked layers. Locked layers drop out of dirty."""
     current = _as_str_list(shot.get("locked"))
-    extra = ("shot",)
+    extra = ("shot", "kind")
     if locked is not None:
         current = parse_layers(locked, extra=extra)
     else:
@@ -742,6 +764,9 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "transition": tl["transition"],
         "i2v": normalize_i2v_mode(shot.get("i2v")),
         "i2v_source": shot.get("i2v_source") or "",
+        "lip_source": shot.get("lip_source") or "",
+        "lip_score": shot.get("lip_score") or None,
+        "keys": list(shot.get("keys") or []),
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],
         "status": shot.get("status"),

@@ -58,5 +58,9 @@ class Config:
     I2V_API_URL: str = os.getenv("I2V_API_URL", "")
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
+    # 口型（Q2）：仅 dialogue CU/MCU；none|mock|fail|http
+    LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "mock")
+    LIP_API_URL: str = os.getenv("LIP_API_URL", "")
+
 
 config = Config()

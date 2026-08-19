@@ -31,9 +31,9 @@ def should_try_i2v(shot: dict[str, Any], *, slug: str | None = None) -> bool:
     mode = normalize_i2v_mode(shot.get("i2v"))
     if mode == "off":
         return False
-    from tools.drama_models import effective_motion_ladder
+    from tools.drama_models import i2v_run_ladder
 
-    ladder = effective_motion_ladder(shot, slug=slug or str(shot.get("_slug") or "") or None)
+    ladder = i2v_run_ladder(shot, slug=slug or str(shot.get("_slug") or "") or None)
     if ladder == "L0":
         return False
     if mode == "on":
@@ -181,6 +181,139 @@ def _provider_pollinations(scene: Path, dest: Path, shot: dict[str, Any], second
         return False
 
 
+def _concat_motion(first: Path, second: Path, dest: Path) -> bool:
+    from tools.drama_video import _probe_duration, _run_ffmpeg
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    d0 = float(_probe_duration(first) or 1.5)
+    offset = max(0.15, d0 - 0.2)
+    tmp = dest.with_suffix(".l3.tmp.mp4")
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(first),
+                "-i",
+                str(second),
+                "-filter_complex",
+                f"[0:v][1:v]xfade=transition=fade:duration=0.18:offset={offset:.2f},format=yuv420p[v]",
+                "-map",
+                "[v]",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ],
+            timeout=90,
+        )
+        tmp.replace(dest)
+        return dest.is_file() and dest.stat().st_size > 500
+    except RuntimeError:
+        list_file = dest.parent / "_l3_concat.txt"
+        try:
+            list_file.write_text(
+                f"file '{first.name}'\nfile '{second.name}'\n",
+                encoding="utf-8",
+            )
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(list_file.name),
+                    "-c",
+                    "copy",
+                    str(dest),
+                ],
+                timeout=90,
+                cwd=dest.parent,
+            )
+            return dest.is_file() and dest.stat().st_size > 500
+        except RuntimeError:
+            return False
+        finally:
+            if list_file.exists():
+                try:
+                    list_file.unlink()
+                except OSError:
+                    pass
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _key_image(shot: dict[str, Any], index: int, fallback: Path) -> Path:
+    keys = shot.get("keys") if isinstance(shot.get("keys"), list) else []
+    if index < len(keys) and isinstance(keys[index], dict):
+        rel = str(keys[index].get("file") or keys[index].get("path") or "").replace("\\", "/")
+        if rel:
+            try:
+                path = resolve_safe(rel)
+            except ValueError:
+                path = None
+            if path and path.is_file():
+                return path
+    return fallback
+
+
+def _provider_l3_mock(scene: Path, dest: Path, shot: dict[str, Any], seconds: float) -> bool:
+    """Dual-phase Ken Burns as degraded L3 (start pose → end pose)."""
+    half = max(MIN_SECONDS, min(seconds / 2.0, MAX_SECONDS))
+    start = _key_image(shot, 0, scene)
+    end = _key_image(shot, 1, scene)
+    tmp1 = dest.with_suffix(".k1.mp4")
+    tmp2 = dest.with_suffix(".k2.mp4")
+    try:
+        _kenburns_motion_mp4(start, tmp1, {**shot, "camera": shot.get("camera") or "punch_in"}, half)
+        _kenburns_motion_mp4(end, tmp2, {**shot, "camera": "pull_out"}, half)
+        ok = _concat_motion(tmp1, tmp2, dest)
+        return ok
+    finally:
+        for tmp in (tmp1, tmp2):
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+
+def _resolved_i2v_provider(shot: dict[str, Any]) -> str:
+    slug = str(shot.get("_slug") or "")
+    if slug:
+        from tools.drama_models import estimate_i2v
+
+        est = estimate_i2v(slug, shot)
+        if est.get("expensive"):
+            from tools.drama_models import MAX_EXPENSIVE_I2V
+            from tools.drama_shots import load_doc
+
+            episode = int(shot.get("_episode") or 0)
+            used = 0
+            if episode:
+                doc = load_doc(slug, episode)
+                for other in (doc or {}).get("shots") or []:
+                    if int(other.get("n") or 0) == int(shot.get("n") or 0):
+                        continue
+                    if other.get("i2v_source") == "ai" and other.get("i2v_expensive"):
+                        used += 1
+            if used >= MAX_EXPENSIVE_I2V:
+                shot["i2v_deferred"] = True
+                return "mock"
+        return str(est.get("provider") or "mock")
+    return _provider() or "mock"
+
+
 def try_generate_i2v(
     scene: Path,
     dest: Path,
@@ -194,24 +327,34 @@ def try_generate_i2v(
     if not shutil.which(_ffmpeg_bin()):
         return "none"
 
+    from tools.drama_models import effective_motion_ladder
+
     sec = i2v_seconds(shot) if seconds is None else max(MIN_SECONDS, min(float(seconds), MAX_SECONDS))
-    provider = _provider()
+    planned = effective_motion_ladder(shot, slug=str(shot.get("_slug") or "") or None)
+    provider = _resolved_i2v_provider(shot)
     ok = False
-    if provider in ("mock", "mock_ai"):
-        ok = _provider_mock_ai(scene, dest, shot, sec)
-    elif provider == "fail":
-        ok = _provider_fail(scene, dest, shot, sec)
-    elif provider in ("http", "api"):
-        ok = _provider_http(scene, dest, shot, sec)
-    elif provider == "pollinations":
-        ok = _provider_pollinations(scene, dest, shot, sec)
-    elif provider not in ("none", "off", ""):
-        ok = _provider_http(scene, dest, shot, sec)
+    if planned == "L3":
+        ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
+        if ok:
+            shot["i2v_ladder"] = "L3"
+    if not ok:
+        if provider in ("mock", "mock_ai", "l0"):
+            ok = _provider_mock_ai(scene, dest, shot, sec)
+        elif provider == "fail":
+            ok = _provider_fail(scene, dest, shot, sec)
+        elif provider in ("http", "api"):
+            ok = _provider_http(scene, dest, shot, sec)
+        elif provider == "pollinations":
+            ok = _provider_pollinations(scene, dest, shot, sec)
+        elif provider not in ("none", "off", ""):
+            ok = _provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec)
 
     if ok:
         rel = str(shot.get("assets", {}).get("motion") or "")
         if rel:
             shot["assets"]["motion"] = rel
+        if provider in ("kling", "hailuo") and not shot.get("i2v_deferred"):
+            shot["i2v_expensive"] = True
         return "ai"
     return "none"
 
@@ -224,7 +367,9 @@ def generate_shot_i2v(
     force: bool = False,
 ) -> dict[str, Any]:
     """Try I2V when enabled; rebuild motion asset. Returns status dict."""
-    if not force and not should_try_i2v(shot):
+    shot["_slug"] = slug
+    shot["_episode"] = episode
+    if not force and not should_try_i2v(shot, slug=slug):
         return {"tried": False, "i2v_source": str(shot.get("i2v_source") or "none"), "reason": "i2v_off"}
     rel = motion_rel(slug, episode, int(shot.get("n") or 0))
     assets = shot.setdefault("assets", {})
@@ -233,6 +378,16 @@ def generate_shot_i2v(
     dest = resolve_safe(rel)
     source = try_generate_i2v(scene, dest, shot)
     shot["i2v_source"] = source
+    shot.pop("_slug", None)
+    # keep _episode? pop it
+    shot.pop("_episode", None)
     if source == "ai":
-        return {"tried": True, "i2v_source": "ai", "motion": rel, "seconds": i2v_seconds(shot)}
+        return {
+            "tried": True,
+            "i2v_source": "ai",
+            "motion": rel,
+            "seconds": i2v_seconds(shot),
+            "ladder": shot.get("i2v_ladder") or "L1",
+            "deferred": bool(shot.get("i2v_deferred")),
+        }
     return {"tried": True, "i2v_source": "none", "motion": None, "fallback": "still_zoompan"}

@@ -70,7 +70,7 @@ def main() -> None:
     assert s2["kind"] == "dialogue", s2
     assert s2["speaker"] == "hero", s2
     assert effective_motion_ladder(s1, slug=SLUG) == "L0", s1
-    assert effective_motion_ladder(s2, slug=SLUG) == "L1", s2
+    assert effective_motion_ladder(s2, slug=SLUG) == "L2", s2
 
     s1["i2v"] = "on"
     s1["locked"] = ["scene"]

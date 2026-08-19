@@ -47,6 +47,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
 18. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
 19. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
+20. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；失败回退闭口静图）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -678,6 +679,33 @@ def _action_generate_i2v(args: dict) -> str:
     )
 
 
+def _action_generate_lip(args: dict) -> str:
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, generate_lip_shot
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要 slug")
+    try:
+        n = int(args.get("episode") or 1)
+        shot_n = int(args.get("shot") or 0)
+    except (TypeError, ValueError):
+        return _err("episode / shot 须为整数")
+    if shot_n < 1:
+        return _err("需要 shot")
+    try:
+        result = generate_lip_shot(slug, n, shot_n)
+    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
+        return _err(str(e))
+    return _ok(
+        action="generate_lip",
+        slug=slug,
+        episode=n,
+        shot=shot_n,
+        **result,
+        hint="后台口型 + 重合成 clip；远景/无 speaker 会拒绝",
+    )
+
+
 def _action_export_timeline(args: dict) -> str:
     from tools.drama_studio import export_episode
 
@@ -758,6 +786,7 @@ def _tiktok_drama(args: dict) -> str:
         "export_timeline": _action_export_timeline,
         "mix_episode": _action_mix_episode,
         "generate_i2v": _action_generate_i2v,
+        "generate_lip": _action_generate_lip,
         "classify_shots": _action_classify_shots,
         "poll_job": _action_poll_job,
     }
@@ -789,7 +818,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -797,7 +826,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | classify_shots | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | classify_shots | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -817,6 +846,7 @@ def register_tiktok_drama() -> None:
                         "export_timeline",
                         "mix_episode",
                         "generate_i2v",
+                        "generate_lip",
                         "classify_shots",
                         "poll_job",
                     ],

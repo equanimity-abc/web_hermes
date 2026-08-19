@@ -191,6 +191,9 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
         pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
         pub["voice_id"] = primary_voice(cast) if cast else ""
         pub["route"] = estimate_i2v(slug, shot)
+        from tools.drama_lip import estimate_lip
+
+        pub["lip"] = estimate_lip(slug, shot)
     return pub
 
 
@@ -313,7 +316,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
         "voices": [{"id": vid, "label": label} for vid, label in VOICES],
-        "layer_ids": ["scene", "overlay", "voice", "clip"],
+        "layer_ids": ["scene", "overlay", "voice", "motion", "lip", "clip"],
         "transitions": list(TRANSITIONS),
         "i2v_modes": list(I2V_MODES),
         "shot_kinds": list(SHOT_KINDS),
@@ -850,6 +853,36 @@ def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     return job
 
 
+def generate_lip_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_lip import estimate_lip, lip_eligible
+
+    gate = lip_eligible(shot)
+    if not gate["ok"]:
+        raise DramaBadRequest(gate["reason"])
+    scene = (shot.get("assets") or {}).get("scene") or ""
+    voice = (shot.get("assets") or {}).get("voice") or ""
+    try:
+        scene_ok = bool(scene) and resolve_safe(scene).is_file()
+        voice_ok = bool(voice) and resolve_safe(voice).is_file()
+    except ValueError:
+        scene_ok = False
+        voice_ok = False
+    if not scene_ok:
+        raise DramaBadRequest("请先锁定/生成画面再开口型")
+    if not voice_ok:
+        raise DramaBadRequest("请先生成配音再开口型")
+    job = enqueue_job(slug, n, "lip_shot", params={"shot": shot_n})
+    job["estimate"] = estimate_lip(slug, shot)
+    return job
+
+
 def get_models(slug: str) -> dict[str, Any]:
     slug = parse_slug(slug)
     load_project(slug)
@@ -888,7 +921,7 @@ def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str,
             if before[0] != after[0] or before[1] != after[1]:
                 dirty = list(shot.get("dirty") or [])
                 locked = set(shot.get("locked") or [])
-                for layer in ("clip", "motion"):
+                for layer in ("clip", "motion", "lip"):
                     if layer not in locked and layer not in dirty:
                         dirty.append(layer)
                 shot["dirty"] = dirty

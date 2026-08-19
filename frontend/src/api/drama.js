@@ -282,6 +282,13 @@ export function generateI2v(slug, episode, shot) {
   )
 }
 
+export function generateLip(slug, episode, shot) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/lip`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 export function classifyShots(slug, episode, force = false) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/classify`,

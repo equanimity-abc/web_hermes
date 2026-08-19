@@ -714,8 +714,20 @@ def _encode_clip(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Camera move on still or I2V motion, grade, burn subtitles."""
+    """Camera move on still, lip video, or I2V motion; then burn subtitles."""
     from tools.drama_i2v import generate_shot_i2v, should_try_i2v
+
+    lip_rel = (shot.get("assets") or {}).get("lip") or ""
+    lip_path = resolve_safe(lip_rel) if lip_rel else None
+    lip_ok = (
+        str(shot.get("lip_source") or "") in ("mock", "http", "ai")
+        and lip_path is not None
+        and lip_path.is_file()
+        and lip_path.stat().st_size > 500
+    )
+    if lip_ok:
+        _encode_clip_from_motion(lip_path, overlay, clip, duration, audio, shot)
+        return
 
     motion_rel = (shot.get("assets") or {}).get("motion") or ""
     motion_path = resolve_safe(motion_rel) if motion_rel else None
@@ -1063,7 +1075,8 @@ def render_shot_layers(
     if "shot" in locked:
         locked = set(LAYERS) | locked
     wanted = [layer for layer in wanted if layer not in locked]
-    if not wanted:
+    do_lip = "lip" in layers and "lip" not in locked
+    if not wanted and not do_lip:
         return {"n": shot.get("n"), "rebuilt": [], "skipped": "locked_or_empty"}
 
     assets = shot.setdefault("assets", {})
@@ -1106,6 +1119,15 @@ def render_shot_layers(
     elif voice.is_file() and voice.stat().st_size > 0:
         duration = max(duration, _probe_duration(voice) + 0.25)
         shot["duration"] = round(duration, 2)
+
+    if do_lip:
+        from tools.drama_lip import generate_shot_lip
+
+        generate_shot_lip(slug, episode, shot)
+        rebuilt.append("lip")
+        assets["lip"] = (shot.get("assets") or {}).get("lip") or assets.get("lip")
+        if "clip" not in wanted and "clip" not in locked:
+            wanted = [*wanted, "clip"]
 
     if "clip" in wanted:
         if not scene.is_file():
@@ -1301,8 +1323,8 @@ def rerender_shot(
             },
         )
 
-    requested = parse_layers(layers, extra=("assemble",)) if layers else []
-    wanted = [layer for layer in requested if layer in LAYERS]
+    requested = parse_layers(layers, extra=("assemble", "motion", "lip")) if layers else []
+    wanted = [layer for layer in requested if layer in LAYERS or layer in ("lip", "motion")]
     assemble_only = bool(requested) and not wanted and "assemble" in requested
     if assemble_only:
         assemble = assemble_episode(doc)
@@ -1320,7 +1342,7 @@ def rerender_shot(
 
     if not wanted:
         wanted = list(shot.get("dirty") or []) or layers_for_patch(patch, shot.get("locked")) or ["clip"]
-    if "clip" not in wanted and any(layer in wanted for layer in ("scene", "overlay", "voice")):
+    if "clip" not in wanted and any(layer in wanted for layer in ("scene", "overlay", "voice", "lip", "motion")):
         if "clip" not in locked:
             wanted = [*wanted, "clip"]
     wanted = [layer for layer in wanted if layer not in locked]

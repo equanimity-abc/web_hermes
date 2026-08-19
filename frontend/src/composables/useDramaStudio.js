@@ -719,6 +719,25 @@ export function useDramaStudio() {
     }
   }
 
+  async function generateShotLip() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.generateLip(slug.value, episodeN.value, selectedN.value)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = `Shot ${selectedN.value} 口型已加入后台队列`
+        return
+      }
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `口型完成（${result.lip_source || 'none'}）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
   async function exportTimeline() {
     if (!slug.value || !episodeN.value) return
     if (mixUnlicensed.value) {
@@ -892,6 +911,7 @@ export function useDramaStudio() {
     chooseShotCandidate,
     uploadShotScene,
     generateShotI2v,
+    generateShotLip,
     classifyEpisodeShots,
     saveTimelineShot,
     saveTimelineOrder,
