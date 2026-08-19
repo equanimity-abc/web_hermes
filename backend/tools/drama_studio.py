@@ -30,6 +30,8 @@ from tools.drama_shots import (
     script_impact,
     set_shot_locks,
     TRANSITIONS,
+    I2V_MODES,
+    normalize_i2v_mode,
 )
 from tools.drama_timeline import apply_timeline_patch, patch_timeline_doc, public_timeline
 from tools.workspace import resolve_safe, workspace_root
@@ -296,6 +298,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "voices": [{"id": vid, "label": label} for vid, label in VOICES],
         "layer_ids": ["scene", "overlay", "voice", "clip"],
         "transitions": list(TRANSITIONS),
+        "i2v_modes": list(I2V_MODES),
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -350,7 +353,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
@@ -373,6 +376,8 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         t = str(timeline_body["transition"]).strip() or "auto"
         if t not in TRANSITIONS:
             raise DramaBadRequest(f"未知转场：{t}，可选 {', '.join(TRANSITIONS)}")
+    if "i2v" in body:
+        body["i2v"] = normalize_i2v_mode(body["i2v"])
     if not body and not timeline_body and not has_lock:
         raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / 时间线 / locked）")
 
@@ -403,6 +408,10 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
                     _write_text(script_rel, updated.rstrip() + "\n")
     if timeline_body:
         apply_timeline_patch(shot, timeline_body)
+    if "i2v" in body:
+        if "clip" not in (shot.get("locked") or []) and "clip" not in (shot.get("dirty") or []):
+            shot.setdefault("dirty", []).append("clip")
+            shot["status"] = "dirty"
     save_doc(doc)
 
     return {
@@ -716,6 +725,21 @@ def retry_render_job(job_id: str) -> dict[str, Any]:
         raise DramaBadRequest(str(e)) from e
     except RuntimeError as e:
         raise DramaBadRequest(str(e)) from e
+
+
+def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    from tools.drama_i2v import should_try_i2v
+
+    if not should_try_i2v(shot):
+        raise DramaBadRequest("请先将 I2V 设为 on，或在 auto 模式下锁定画面（scene）")
+    return enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
 
 
 def rerender_dirty_shots_sync(slug: str, episode: int) -> dict[str, Any]:

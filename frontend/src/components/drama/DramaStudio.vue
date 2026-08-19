@@ -29,6 +29,7 @@ const props = defineProps({
   timelineItems: { type: Array, default: () => [] },
   orderedShots: { type: Array, default: () => [] },
   transitions: { type: Array, default: () => [] },
+  i2vModes: { type: Array, default: () => ['off', 'auto', 'on'] },
   timelineDirty: { type: Boolean, default: false },
   orderDirty: { type: Boolean, default: false },
 })
@@ -56,6 +57,7 @@ const emit = defineEmits([
   'generate-candidates',
   'choose-candidate',
   'upload-scene',
+  'generate-i2v',
   'save-timeline-shot',
   'save-timeline-all',
   'save-timeline-order',
@@ -98,6 +100,8 @@ function impactFor(n) {
 function shotFlag(shot) {
   const locked = shot.locked || []
   const impact = impactFor(shot.n)
+  if (shot.i2v_source === 'ai') return 'I2V'
+  if (shot.i2v_source === 'fallback') return '静图'
   if (locked.includes('shot') || impact?.frozen) return '整锁'
   if (impact?.changed?.length) return '将改'
   if ((shot.dirty || []).length) return '脏'
@@ -105,6 +109,23 @@ function shotFlag(shot) {
   if (locked.length) return '锁'
   return statusLabel(shot)
 }
+
+const canGenerateI2v = computed(() => {
+  const shot = props.selected
+  if (!shot) return false
+  const mode = props.draft?.i2v || shot.i2v || 'auto'
+  if (mode === 'off') return false
+  if (mode === 'on') return true
+  const locked = shot.locked || []
+  return locked.includes('scene') || locked.includes('shot')
+})
+
+const i2vSourceLabel = computed(() => {
+  const src = props.selected?.i2v_source || ''
+  if (src === 'ai') return '已生成 I2V 运动'
+  if (src === 'fallback') return 'I2V 失败，已回退静图运镜'
+  return '尚未生成 I2V'
+})
 
 const previewUrl = computed(() => {
   let url = ''
@@ -653,6 +674,25 @@ function onDrop(n) {
               :disabled="shotFrozen || isLocked('clip')"
             />
           </label>
+          <label>
+            I2V 运动
+            <select v-model="draft.i2v" :disabled="shotFrozen || isLocked('clip')">
+              <option v-for="mode in i2vModes" :key="mode" :value="mode">
+                {{ mode === 'off' ? '关闭' : mode === 'auto' ? '自动（锁画面后）' : '始终开启' }}
+              </option>
+            </select>
+          </label>
+          <p v-if="boardMode === 'shots'" class="drama-empty-hint">{{ i2vSourceLabel }}</p>
+          <div v-if="boardMode === 'shots'" class="drama-actions">
+            <button
+              type="button"
+              class="btn-ghost"
+              :disabled="rendering || saving || !canGenerateI2v"
+              @click="emit('generate-i2v')"
+            >
+              {{ rendering ? '处理中…' : '生成 I2V' }}
+            </button>
+          </div>
           <template v-if="boardMode === 'shots'">
             <h3 class="drama-layers-title">分层</h3>
             <div class="drama-layers">
@@ -715,7 +755,7 @@ function onDrop(n) {
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
-      <p>从左侧打开一个漫剧项目。分镜页可重抽候选；时间线页改镜序/切点/转场后导出整集，不覆盖各镜 clip。</p>
+      <p>从左侧打开一个漫剧项目。分镜页可重抽候选、对已锁画面生成 I2V；时间线页改镜序/切点/转场后导出整集，不覆盖各镜 clip。</p>
     </div>
   </main>
 </template>

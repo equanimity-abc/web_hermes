@@ -45,6 +45,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
 16. export_timeline 按时间线设置拼接整集（改镜序/切点/转场/音量不重渲源 clip）
 17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
+18. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -627,6 +628,33 @@ def _action_choose_candidate(args: dict) -> str:
     return _ok(action="choose_candidate", **result)
 
 
+def _action_generate_i2v(args: dict) -> str:
+    from tools.drama_studio import generate_i2v_shot
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要 slug")
+    try:
+        n = int(args.get("episode") or 1)
+        shot_n = int(args.get("shot") or 0)
+    except (TypeError, ValueError):
+        return _err("episode / shot 须为整数")
+    if shot_n < 1:
+        return _err("需要 shot")
+    try:
+        result = generate_i2v_shot(slug, n, shot_n)
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
+        return _err(str(e))
+    return _ok(
+        action="generate_i2v",
+        slug=slug,
+        episode=n,
+        shot=shot_n,
+        **result,
+        hint="后台 I2V + 重合成 clip，用 poll_job 查进度",
+    )
+
+
 def _action_export_timeline(args: dict) -> str:
     from tools.drama_studio import export_episode
 
@@ -671,6 +699,7 @@ def _tiktok_drama(args: dict) -> str:
         "generate_candidates": _action_generate_candidates,
         "choose_candidate": _action_choose_candidate,
         "export_timeline": _action_export_timeline,
+        "generate_i2v": _action_generate_i2v,
         "poll_job": _action_poll_job,
     }
     handler = handlers.get(action)
@@ -701,7 +730,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、generate_i2v（对已锁关键帧试 I2V 运动）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -709,7 +738,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | generate_i2v | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -727,6 +756,7 @@ def register_tiktok_drama() -> None:
                         "generate_candidates",
                         "choose_candidate",
                         "export_timeline",
+                        "generate_i2v",
                         "poll_job",
                     ],
                 },
@@ -864,6 +894,7 @@ def register_tiktok_drama() -> None:
         "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
         "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
+        "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

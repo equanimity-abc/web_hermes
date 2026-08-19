@@ -60,11 +60,13 @@ const {
   generateShotCandidates,
   chooseShotCandidate,
   uploadShotScene,
+  generateShotI2v,
   timelineOrder: dramaTimelineOrder,
   tlDraft: dramaTlDraft,
   timelineItems: dramaTimelineItems,
   orderedShots: dramaOrderedShots,
   transitions: dramaTransitions,
+  i2vModes: dramaI2vModes,
   timelineDirty: dramaTimelineDirty,
   orderDirty: dramaOrderDirty,
   saveTimelineAll,
@@ -250,6 +252,7 @@ onMounted(() => {
       :timeline-items="dramaTimelineItems"
       :ordered-shots="dramaOrderedShots"
       :transitions="dramaTransitions"
+      :i2v-modes="dramaI2vModes"
       :timeline-dirty="dramaTimelineDirty"
       :order-dirty="dramaOrderDirty"
       @open-episode="openEpisode"
@@ -271,6 +274,7 @@ onMounted(() => {
       @generate-candidates="generateShotCandidates"
       @choose-candidate="chooseShotCandidate"
       @upload-scene="uploadShotScene"
+      @generate-i2v="generateShotI2v"
       @save-timeline-all="saveTimelineAll"
       @save-timeline-order="saveTimelineOrder"
       @move-timeline-shot="(n, d) => moveTimelineShot(n, d)"

@@ -54,6 +54,7 @@ export function useDramaStudio() {
   const shots = computed(() => episode.value?.shots || [])
   const timelineItems = computed(() => episode.value?.timeline?.items || [])
   const transitions = computed(() => episode.value?.transitions || episode.value?.timeline?.transitions || [])
+  const i2vModes = computed(() => episode.value?.i2v_modes || ['off', 'auto', 'on'])
   const orderedShots = computed(() => {
     const order = timelineOrder.value.length ? timelineOrder.value : timelineItems.value.map((i) => i.n)
     const byN = Object.fromEntries((shots.value || []).map((s) => [s.n, s]))
@@ -75,6 +76,7 @@ export function useDramaStudio() {
       String(draft.value.字幕 || '') !== String(shot.字幕 || '') ||
       String(draft.value.camera || '') !== String(shot.camera || '') ||
       Number(draft.value.duration || 0) !== Number(shot.duration || 0) ||
+      String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto') ||
       rolesKey(draft.value.角色) !== rolesKey(shot.角色)
     )
   })
@@ -96,7 +98,7 @@ export function useDramaStudio() {
   })
 
   function emptyDraft() {
-    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3 }
+    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3, i2v: 'auto' }
   }
 
   function emptyCharDraft() {
@@ -120,6 +122,7 @@ export function useDramaStudio() {
       角色: Array.isArray(shot?.角色) ? [...shot.角色] : [],
       camera: shot?.camera || 'punch_in',
       duration: Number(shot?.duration || 3),
+      i2v: shot?.i2v || 'auto',
     }
     fillTlDraft(shot)
   }
@@ -217,6 +220,9 @@ export function useDramaStudio() {
       }
       if (rolesKey(draft.value.角色) !== rolesKey(shot.角色)) {
         body.角色 = [...(draft.value.角色 || [])]
+      }
+      if (String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto')) {
+        body.i2v = draft.value.i2v || 'auto'
       }
       if (!Object.keys(body).length) {
         notice.value = '没有改动'
@@ -630,6 +636,25 @@ export function useDramaStudio() {
     if (timelineDirty.value) await saveTimelineShot()
   }
 
+  async function generateShotI2v() {
+    if (!slug.value || !episodeN.value || !selectedN.value) return
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.generateI2v(slug.value, episodeN.value, selectedN.value)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = `Shot ${selectedN.value} I2V 已加入后台队列`
+        return
+      }
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `I2V 完成（${result.i2v_source || 'none'}）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+  }
+
   async function exportTimeline() {
     if (!slug.value || !episodeN.value) return
     if (orderDirty.value) await saveTimelineOrder()
@@ -681,6 +706,7 @@ export function useDramaStudio() {
     timelineItems,
     orderedShots,
     transitions,
+    i2vModes,
     timelineDirty,
     orderDirty,
     assetUrl,
@@ -706,6 +732,7 @@ export function useDramaStudio() {
     generateShotCandidates,
     chooseShotCandidate,
     uploadShotScene,
+    generateShotI2v,
     saveTimelineShot,
     saveTimelineOrder,
     saveTimelineAll,

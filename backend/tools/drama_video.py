@@ -714,7 +714,41 @@ def _encode_clip(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Camera move on the still, grade it, burn subtitles. Always output AAC."""
+    """Camera move on still or I2V motion, grade, burn subtitles."""
+    from tools.drama_i2v import generate_shot_i2v, should_try_i2v
+
+    motion_rel = (shot.get("assets") or {}).get("motion") or ""
+    motion_path = resolve_safe(motion_rel) if motion_rel else None
+    used_motion = False
+    if should_try_i2v(shot):
+        slug = str(shot.get("_slug") or "")
+        episode = int(shot.get("_episode") or 0)
+        if slug and episode:
+            info = generate_shot_i2v(slug, episode, shot)
+            motion_rel = (shot.get("assets") or {}).get("motion") or ""
+            motion_path = resolve_safe(motion_rel) if motion_rel else None
+            if info.get("i2v_source") == "ai" and motion_path and motion_path.is_file():
+                used_motion = True
+        elif motion_path and motion_path.is_file() and shot.get("i2v_source") == "ai":
+            used_motion = True
+
+    if used_motion and motion_path:
+        _encode_clip_from_motion(motion_path, overlay, clip, duration, audio, shot)
+        return
+    if should_try_i2v(shot):
+        shot["i2v_source"] = "fallback"
+    _encode_clip_from_still(scene, overlay, clip, duration, audio, shot)
+
+
+def _encode_clip_from_still(
+    scene: Path,
+    overlay: Path,
+    clip: Path,
+    duration: float,
+    audio: Path | None,
+    shot: dict[str, Any],
+) -> None:
+    """Ken Burns on PNG still."""
     frames = max(int(round(duration * FPS)), FPS)
     motion = _motion_expr(shot, frames)
     look = _look_filters(shot)
@@ -748,6 +782,57 @@ def _encode_clip(
             "-i",
             "anullsrc=channel_layout=stereo:sample_rate=44100",
         ]
+    args += [
+        "-filter_complex",
+        vf,
+        "-map",
+        "[vout]",
+        "-map",
+        "2:a",
+        "-t",
+        f"{duration:.2f}",
+        "-r",
+        str(FPS),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(clip),
+    ]
+    _run_ffmpeg(args, timeout=240)
+
+
+def _encode_clip_from_motion(
+    motion: Path,
+    overlay: Path,
+    clip: Path,
+    duration: float,
+    audio: Path | None,
+    shot: dict[str, Any],
+) -> None:
+    """Composite pre-rendered I2V motion with subtitles and voice."""
+    look = _look_filters(shot)
+    vf = (
+        f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS}[v];"
+        f"[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
+    )
+    args = ["-y", "-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
+    if audio is not None:
+        args += ["-i", str(audio)]
+    else:
+        args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
     args += [
         "-filter_complex",
         vf,
@@ -1031,7 +1116,11 @@ def render_shot_layers(
                 rebuilt.append("overlay")
         shot["camera"] = shot.get("camera") or _camera_style(shot)
         audio = voice if voice.is_file() and voice.stat().st_size > 0 else None
+        shot["_slug"] = slug
+        shot["_episode"] = episode
         _encode_clip(scene, overlay, clip, duration, audio, shot)
+        shot.pop("_slug", None)
+        shot.pop("_episode", None)
         rebuilt.append("clip")
         assets["clip"] = assets.get("clip") or str(clip)
 

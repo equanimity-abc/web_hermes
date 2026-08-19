@@ -233,3 +233,10 @@ export function retryJob(jobId) {
     body: JSON.stringify({}),
   })
 }
+
+export function generateI2v(slug, episode, shot) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/i2v`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}

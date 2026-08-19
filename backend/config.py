@@ -51,5 +51,12 @@ class Config:
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")
 
+    # I2V（D8）：对已锁关键帧试 2–3s 运动；失败回退静图 zoompan
+    # none | mock | fail | http | pollinations
+    I2V_PROVIDER: str = os.getenv("I2V_PROVIDER", "none")
+    I2V_MODEL: str = os.getenv("I2V_MODEL", "default")
+    I2V_API_URL: str = os.getenv("I2V_API_URL", "")
+    I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
+
 
 config = Config()

@@ -23,6 +23,14 @@ from tools.workspace import resolve_safe
 
 DEFAULT_FADE_SEC = 0.32
 MIN_PLAY_SEC = 0.25
+I2V_MODES = ("off", "auto", "on")
+
+
+def normalize_i2v_mode(raw: Any) -> str:
+    mode = str(raw or "auto").strip().lower()
+    return mode if mode in I2V_MODES else "auto"
+
+
 TRANSITIONS = (
     "auto",
     "cut",
@@ -143,6 +151,7 @@ def shot_assets(slug: str, episode: int, n: int) -> dict[str, str]:
         "overlay": f"{base}/{stem}_overlay.png",
         "voice": f"{base}/{stem}.mp3",
         "clip": f"{base}/{stem}.mp4",
+        "motion": f"{base}/{stem}_motion.mp4",
     }
 
 
@@ -307,6 +316,9 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "trim_out": tl["trim_out"],
         "volume": tl["volume"],
         "transition": tl["transition"],
+        "i2v": normalize_i2v_mode(raw.get("i2v")),
+        "i2v_source": str(raw.get("i2v_source") or ""),
+        "i2v_seconds": float(raw.get("i2v_seconds") or 0) or None,
         "locked": locked,
         "dirty": dirty,
         "status": status,
@@ -363,6 +375,8 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "trim_out": 0.0,
         "volume": 1.0,
         "transition": "auto",
+        "i2v": "auto",
+        "i2v_source": "",
         "assets": assets,
     }
 
@@ -553,7 +567,7 @@ def merge_from_parsed(
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
             rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
             rec["chosen"] = str(old.get("chosen") or "")
-            for key in ("trim_in", "trim_out", "volume", "transition"):
+            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source"):
                 if key in old:
                     rec[key] = old[key]
             if "scene" in locked:
@@ -674,6 +688,8 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "trim_out": tl["trim_out"],
         "volume": tl["volume"],
         "transition": tl["transition"],
+        "i2v": normalize_i2v_mode(shot.get("i2v")),
+        "i2v_source": shot.get("i2v_source") or "",
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],
         "status": shot.get("status"),

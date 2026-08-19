@@ -35,6 +35,7 @@ from tools.drama_studio import (
     upload_shot_scene,
     choose_candidate,
     generate_candidates,
+    generate_i2v_shot,
 )
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
@@ -74,6 +75,7 @@ class ShotPatch(BaseModel):
     trim_out: float | None = None
     volume: float | None = None
     transition: str | None = None
+    i2v: str | None = None
     locked: list[str] | None = None
     lock: list[str] | str | None = None
     unlock: list[str] | str | None = None
@@ -114,7 +116,7 @@ class RefLockBody(BaseModel):
 
 
 class JobCreate(BaseModel):
-    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode")
+    kind: str = Field(description="rerender_dirty | rerender_shot | export | render_episode | i2v_shot")
     shot: int | None = None
     layers: list[str] | None = None
     force: bool | None = None
@@ -217,6 +219,14 @@ async def drama_upload_shot_scene(slug: str, episode: int, shot: int, file: Uplo
         data = await file.read()
         return upload_shot_scene(slug, episode, shot, data)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/i2v")
+async def drama_generate_i2v(slug: str, episode: int, shot: int):
+    try:
+        return generate_i2v_shot(slug, episode, shot)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 
 

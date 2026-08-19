@@ -19,7 +19,7 @@ from typing import Any, Callable
 from tools.workspace import resolve_safe, workspace_root
 
 TERMINAL = frozenset({"done", "error", "cancelled"})
-KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode"})
+KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "i2v_shot"})
 
 
 class JobCancelled(Exception):
@@ -223,6 +223,8 @@ class DramaQueue:
             return self._run_rerender_shot(job)
         if job.kind == "export":
             return self._run_export(job)
+        if job.kind == "i2v_shot":
+            return self._run_i2v_shot(job)
         raise ValueError(f"未实现的任务：{job.kind}")
 
     def _run_rerender_dirty(self, job: DramaJob) -> dict[str, Any]:
@@ -316,9 +318,33 @@ class DramaQueue:
 
         self._progress(job, message="拼接整集…", current=0, total=1)
         job.check_cancel()
-        result = export_episode(job.slug, job.episode)
+        result = export_episode(job.slug, job.episode, background=False)
         self._progress(job, message="导出完成", current=1, total=1)
         return result
+
+    def _run_i2v_shot(self, job: DramaJob) -> dict[str, Any]:
+        from tools.drama_i2v import generate_shot_i2v
+        from tools.drama_shots import find_shot, load_doc, save_doc
+        from tools.drama_video import rerender_shot
+
+        shot_n = int((job.params or {}).get("shot") or 0)
+        if shot_n < 1:
+            raise ValueError("i2v_shot 需要 shot")
+        doc = load_doc(job.slug, job.episode)
+        if doc is None:
+            raise FileNotFoundError("没有 shots.json")
+        shot = find_shot(doc, shot_n)
+        if shot is None:
+            raise ValueError(f"找不到 Shot {shot_n}")
+        self._progress(job, message=f"I2V Shot {shot_n}", current=0, total=2, shot=shot_n)
+        job.check_cancel()
+        info = generate_shot_i2v(job.slug, job.episode, shot, force=True)
+        save_doc(doc)
+        job.check_cancel()
+        self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)
+        result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
+        info["assemble"] = result.get("assemble")
+        return info
 
 
 drama_jobs = DramaQueue()
