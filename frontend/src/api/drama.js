@@ -407,3 +407,10 @@ export function classifyShots(slug, episode, force = false) {
     { method: 'POST', body: JSON.stringify({ force }) },
   )
 }
+
+export function applyStyle(slug, episode, styleId = '') {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/style`,
+    { method: 'POST', body: JSON.stringify({ style_id: styleId || '' }) },
+  )
+}

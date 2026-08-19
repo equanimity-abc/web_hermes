@@ -1,0 +1,51 @@
+{
+  "id": "webtoon-city",
+  "title": "现代条漫",
+  "prompt": "modern city webtoon, neon night streets, casual fashion",
+  "negative": "hanfu, palace, ink wash",
+  "lora": {
+    "character": "",
+    "scene": "city-webtoon"
+  },
+  "image": {
+    "dialogue": {
+      "provider": "http",
+      "model": "flux-scene",
+      "refs": [],
+      "lora": "",
+      "cost_per_shot": 0.05
+    },
+    "reaction": {
+      "provider": "http",
+      "model": "flux-scene",
+      "refs": [],
+      "cost_per_shot": 0.05
+    },
+    "action": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.05
+    },
+    "establishing": {
+      "provider": "http",
+      "model": "flux-scene",
+      "lora": "city-webtoon",
+      "cost_per_shot": 0.05
+    },
+    "crowd": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.05
+    },
+    "insert": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.05
+    },
+    "title": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.02
+    }
+  }
+}

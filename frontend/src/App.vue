@@ -76,6 +76,7 @@ const {
   dismissCoverageSuggestion,
   lockCoverageSuggestion,
   classifyEpisodeShots,
+  applyEpisodeStyle,
   timelineOrder: dramaTimelineOrder,
   tlDraft: dramaTlDraft,
   timelineItems: dramaTimelineItems,
@@ -319,6 +320,7 @@ onMounted(() => {
       @dismiss-coverage="dismissCoverageSuggestion"
       @lock-coverage="lockCoverageSuggestion"
       @classify-shots="() => classifyEpisodeShots(false)"
+      @apply-style="applyEpisodeStyle"
       @save-timeline-all="saveTimelineAll"
       @save-timeline-order="saveTimelineOrder"
       @move-timeline-shot="(n, d) => moveTimelineShot(n, d)"

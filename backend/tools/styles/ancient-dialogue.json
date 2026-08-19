@@ -1,0 +1,55 @@
+{
+  "id": "ancient-dialogue",
+  "title": "古风对话",
+  "prompt": "ancient Chinese palace short drama, silk hanfu, lantern light, ink-wash manhua",
+  "negative": "modern clothing, neon, smartphone",
+  "lora": {
+    "character": "ancient-char",
+    "scene": "ancient-palace"
+  },
+  "image": {
+    "dialogue": {
+      "provider": "http",
+      "model": "char-lora",
+      "refs": ["character"],
+      "lora": "ancient-char",
+      "cost_per_shot": 0.08
+    },
+    "reaction": {
+      "provider": "http",
+      "model": "char-lora",
+      "refs": ["character"],
+      "lora": "ancient-char",
+      "cost_per_shot": 0.08
+    },
+    "action": {
+      "provider": "http",
+      "model": "char-lora",
+      "refs": ["character"],
+      "lora": "ancient-char",
+      "cost_per_shot": 0.08
+    },
+    "establishing": {
+      "provider": "http",
+      "model": "flux-scene",
+      "lora": "ancient-palace",
+      "cost_per_shot": 0.05
+    },
+    "crowd": {
+      "provider": "http",
+      "model": "flux-scene",
+      "lora": "ancient-palace",
+      "cost_per_shot": 0.05
+    },
+    "insert": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.05
+    },
+    "title": {
+      "provider": "http",
+      "model": "flux-scene",
+      "cost_per_shot": 0.02
+    }
+  }
+}

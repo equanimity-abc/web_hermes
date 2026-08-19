@@ -700,6 +700,22 @@ export function useDramaStudio() {
     }
   }
 
+  async function applyEpisodeStyle(styleId) {
+    if (!slug.value || !episodeN.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.applyStyle(slug.value, episodeN.value, styleId || '')
+      episode.value = data
+      notice.value = data.hint || '已切换风格，未重渲已有 clip'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function generateShotI2v() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
     error.value = ''
@@ -1150,6 +1166,7 @@ export function useDramaStudio() {
     dismissCoverageSuggestion,
     lockCoverageSuggestion,
     classifyEpisodeShots,
+    applyEpisodeStyle,
     saveTimelineShot,
     saveTimelineOrder,
     saveTimelineAll,

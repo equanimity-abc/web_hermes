@@ -78,6 +78,31 @@
   font-size: 12px;
 }
 
+.drama-style {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.drama-style select {
+  border: 1px solid var(--color-border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.drama-style select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .drama-banner {
   margin: 8px 20px 0;
   padding: 8px 12px;

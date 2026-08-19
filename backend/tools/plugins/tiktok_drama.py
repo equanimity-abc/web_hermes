@@ -52,6 +52,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 22. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
 23. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
 24. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过；响度不达标只重 mix；人在工作台点通过或退回单镜
+25. apply_style 为本集切换风格包（一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -656,6 +657,31 @@ def _action_classify_shots(args: dict) -> str:
     )
 
 
+def _action_apply_style(args: dict) -> str:
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, apply_style
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要 slug")
+    try:
+        n = int(args.get("episode") or 1)
+    except (TypeError, ValueError):
+        return _err("episode 须为整数")
+    style_id = str(args.get("style_id") or args.get("style") or "").strip()
+    try:
+        result = apply_style(slug, n, style_id)
+    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
+        return _err(str(e))
+    return _ok(
+        action="apply_style",
+        slug=slug,
+        episode=n,
+        style_id=result.get("style_id") or "",
+        cost=result.get("cost"),
+        hint=result.get("hint") or "已切换风格，未重渲已有 clip",
+    )
+
+
 def _action_generate_i2v(args: dict) -> str:
     from tools.drama_studio import DramaBadRequest, DramaNotFound, generate_i2v_shot
 
@@ -909,6 +935,7 @@ def _tiktok_drama(args: dict) -> str:
         "suggest_coverage": _action_suggest_coverage,
         "generate_keys": _action_generate_keys,
         "classify_shots": _action_classify_shots,
+        "apply_style": _action_apply_style,
         "poll_job": _action_poll_job,
     }
     handler = handlers.get(action)
@@ -939,7 +966,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、poll_job（查后台渲染进度）。"
+            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -947,7 +974,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -973,6 +1000,7 @@ def register_tiktok_drama() -> None:
                         "suggest_coverage",
                         "generate_keys",
                         "classify_shots",
+                        "apply_style",
                         "poll_job",
                     ],
                 },
@@ -1116,6 +1144,10 @@ def register_tiktok_drama() -> None:
                     "type": "boolean",
                     "description": "mix_episode 时清除 BGM 后再混（成片仅 VO）",
                 },
+                "style_id": {
+                    "type": "string",
+                    "description": "apply_style 风格包 id，如 ancient-dialogue；空字符串恢复默认路由",
+                },
             },
             "required": ["action"],
         },
@@ -1135,6 +1167,7 @@ def register_tiktok_drama() -> None:
         "导演覆盖用 suggest_coverage（钩子/景别/最多2条反应镜），只建议不改镜；人在工作台采纳或锁定。"
         "单人 action 稀疏关键帧用 generate_keys（3–5 姿态补间，改姿态不重配音；多角色同框会拒绝）。"
         "整集验收用 qc_episode（身份/口型/闪烁/响度）；skipped 不得记为通过；响度不达标只重 mix。"
+        "风格包用 apply_style（一集一个；古风对话后新镜走角色模型，定场仍便宜，不重渲已有 clip）。"
         "回复里用返回的 play_url 做成 markdown 链接，"
         "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
     )

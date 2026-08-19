@@ -164,7 +164,7 @@ def _asset_meta(rel: str) -> dict[str, Any]:
     return info
 
 
-def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
+def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = None) -> dict[str, Any]:
     pub = public_shot(shot)
     assets = pub.get("assets") or {}
     pub["files"] = {layer: _asset_meta(str(rel or "")) for layer, rel in assets.items()}
@@ -193,6 +193,9 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "") -> dict[str, Any]:
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
         from tools.drama_qc import qc_passed
+        from tools.drama_styles import estimate_image
+
+        pub["image"] = estimate_image(slug, shot, episode=episode)
 
         pub["lip"] = estimate_lip(slug, shot)
         pub["identity"] = shot.get("identity") if isinstance(shot.get("identity"), dict) else None
@@ -330,11 +333,13 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     doc = load_doc(slug, n)
     video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
     video = _asset_meta(video_rel)
-    shots = [enrich_shot(s, slug=slug) for s in (doc.get("shots") or [])] if doc else []
+    shots = [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])] if doc else []
     from tools.drama_video import _probe_duration
 
     timeline = public_timeline(doc, probe_duration=_probe_duration) if doc else None
-    models = load_models(slug)
+    from tools.drama_styles import effective_models, list_styles, public_style
+
+    models = effective_models(slug, episode=n, doc=doc)
     from tools.drama_audio import public_mix
 
     return {
@@ -361,7 +366,9 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "shot_kinds": list(SHOT_KINDS),
         "shot_sizes": list(SHOT_SIZES),
         "models": public_models(models),
-        "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or []),
+        "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or [], episode=n, doc=doc),
+        "style_id": str((doc or {}).get("style_id") or ""),
+        "styles": [public_style(item) for item in list_styles(slug)],
         "coverage": _public_coverage(doc),
         "qc": _public_qc(doc),
         "updated_at": (doc or {}).get("updated_at"),
@@ -1206,6 +1213,32 @@ def patch_models(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     return {"slug": slug, "models": public_models(doc)}
 
 
+def apply_style(slug: str, episode: int, style_id: str) -> dict[str, Any]:
+    """Switch this episode's style pack. Does not rebuild existing clips."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_styles import load_style, parse_style_id
+
+    try:
+        sid = parse_style_id(style_id)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    if sid:
+        pack = load_style(slug, sid)
+        if pack is None:
+            raise DramaBadRequest(f"没有风格包：{sid}")
+        doc["style_id"] = sid
+        title = pack.get("title") or sid
+    else:
+        doc["style_id"] = ""
+        title = "默认路由"
+    save_doc(doc)
+    ep = get_episode(slug, n)
+    ep["hint"] = f"已切换为{title}，未重渲已有 clip；新镜按新路由出图"
+    return ep
+
+
 def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
@@ -1233,8 +1266,8 @@ def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str,
         "episode": n,
         "classified": len(doc.get("shots") or []),
         "changed": [n for n in changed if n],
-        "shots": [enrich_shot(s, slug=slug) for s in (doc.get("shots") or [])],
-        "cost": estimate_episode_i2v(slug, doc.get("shots") or []),
+        "shots": [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])],
+        "cost": estimate_episode_i2v(slug, doc.get("shots") or [], episode=n, doc=doc),
     }
 
 

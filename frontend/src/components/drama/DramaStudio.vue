@@ -79,6 +79,7 @@ const emit = defineEmits([
   'dismiss-coverage',
   'lock-coverage',
   'classify-shots',
+  'apply-style',
   'save-timeline-shot',
   'save-timeline-all',
   'save-timeline-order',
@@ -170,20 +171,32 @@ const selectedKey = computed(() => {
 const i2vCostLabel = computed(() => {
   const route = props.selected?.route
   const lip = props.selected?.lip
+  const img = props.selected?.image
   const cost = props.episode?.cost || {}
   const cur = route?.currency || cost.currency || 'CNY'
   const shotCost = Number(route?.cost_per_shot || 0)
   const epCost = Number(cost.i2v_estimate || 0)
   const lipCost = Number(lip?.cost_per_shot || 0)
   const epLip = Number(cost.lip_estimate || 0)
+  const imgCost = Number(img?.cost_per_shot || 0)
+  const epImg = Number(cost.image_estimate || 0)
   if (!route) return ''
   const planned = route.planned_ladder || route.ladder
   const cap = `${cost.expensive_shots || 0}/${cost.expensive_cap || 2} 贵镜`
-  if (route.ladder === 'L0') return `${planned} 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`
+  const styleBit = cost.style_title || cost.style_id || ''
+  const imgBit = img ? `出图 ${img.model || '—'} ${cur} ${imgCost} / 本集 ${epImg}` : ''
+  if (route.ladder === 'L0') {
+    const bits = [`${planned} 静图运镜 · 本集 I2V 估 ${cur} ${epCost}`]
+    if (imgBit) bits.push(imgBit)
+    if (styleBit) bits.push(`风格 ${styleBit}`)
+    return bits.join(' · ')
+  }
   const bits = [`${planned}→${route.ladder} 估 ${cur} ${shotCost}`, `本集 ${cur} ${epCost}`, cap]
   if (lip?.will_run) bits.push(`口型 ${cur} ${lipCost} / 本集 ${epLip}`)
   const keys = props.selected?.keys_gate
   if (keys?.will_run) bits.push(`关键帧 L4 ${cur} ${Number(keys.cost_per_shot || 0)}`)
+  if (imgBit) bits.push(imgBit)
+  if (styleBit) bits.push(`风格 ${styleBit}`)
   if (route.reason) bits.push(route.reason)
   return bits.join(' · ')
 })
@@ -412,6 +425,19 @@ function onDrop(n) {
           <span class="drama-ep-meta">{{ ep.shot_count || 0 }} 镜</span>
         </button>
         <p v-if="!episodes.length" class="drama-empty-hint">这个项目还没有分集。</p>
+        <label v-if="episode" class="drama-style">
+          风格
+          <select
+            :value="episode.style_id || ''"
+            :disabled="saving || rendering"
+            @change="emit('apply-style', $event.target.value)"
+          >
+            <option value="">默认路由</option>
+            <option v-for="pack in episode.styles || []" :key="pack.id" :value="pack.id">
+              {{ pack.title || pack.id }}
+            </option>
+          </select>
+        </label>
       </div>
     </header>
 

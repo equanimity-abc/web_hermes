@@ -472,7 +472,13 @@ def estimate_i2v(slug: str, shot: dict[str, Any], *, models: dict[str, Any] | No
     }
 
 
-def estimate_episode_i2v(slug: str, shots: list[dict[str, Any]]) -> dict[str, Any]:
+def estimate_episode_i2v(
+    slug: str,
+    shots: list[dict[str, Any]],
+    *,
+    episode: int | None = None,
+    doc: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     models = load_models(slug)
     currency = str(models.get("currency") or CURRENCY)
     total = 0.0
@@ -500,8 +506,10 @@ def estimate_episode_i2v(slug: str, shots: list[dict[str, Any]]) -> dict[str, An
         else:
             l0 += 1
     from tools.drama_lip import estimate_episode_lip
+    from tools.drama_styles import estimate_episode_image
 
     lip = estimate_episode_lip(slug, shots)
+    image = estimate_episode_image(slug, shots, episode=episode, doc=doc)
     return {
         "currency": currency,
         "i2v_estimate": round(total, 4),
@@ -515,6 +523,11 @@ def estimate_episode_i2v(slug: str, shots: list[dict[str, Any]]) -> dict[str, An
         "shot_count": len(shots),
         "lip_estimate": lip.get("lip_estimate") or 0,
         "lip_shots": lip.get("lip_shots") or 0,
+        "image_estimate": image.get("image_estimate") or 0,
+        "image_character_shots": image.get("image_character_shots") or 0,
+        "image_scene_shots": image.get("image_scene_shots") or 0,
+        "style_id": image.get("style_id") or "",
+        "style_title": image.get("style_title") or "",
     }
 
 

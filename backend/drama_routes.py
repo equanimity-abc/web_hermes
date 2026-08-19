@@ -52,6 +52,7 @@ from tools.drama_studio import (
     dismiss_coverage,
     lock_coverage,
     classify_shots,
+    apply_style,
     get_models,
     get_mix,
     mix_episode,
@@ -151,6 +152,10 @@ class ClassifyBody(BaseModel):
     force: bool = False
 
 
+class StyleBody(BaseModel):
+    style_id: str = ""
+
+
 class KeysBody(BaseModel):
     count: int | None = None
 
@@ -228,6 +233,14 @@ async def drama_classify_shots(slug: str, episode: int, body: ClassifyBody | Non
     try:
         force = bool(body.force) if body else False
         return classify_shots(slug, episode, force=force)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/style")
+async def drama_apply_style(slug: str, episode: int, body: StyleBody | None = None):
+    try:
+        return apply_style(slug, episode, body.style_id if body else "")
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 

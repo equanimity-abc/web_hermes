@@ -275,13 +275,27 @@ def _scene_prompt(
         "pull_out": "epic establishing shot, vast landscape, tiny figure",
     }.get(style, "cinematic staging, strong silhouette")
     slug = slug or str(shot.get("slug") or "")
+    episode = int(shot.get("_episode") or 0) or None
     char_clause = character_prompt_clause(characters or [], slug=slug)
-    return (
-        "vertical 9:16 cinematic Chinese animation keyframe, "
-        f"{title or 'short drama'}, {scene}, {char_clause}, {kinetic}, "
+    style_clause = ""
+    if slug:
+        from tools.drama_styles import style_prompt_clause
+
+        style_clause = style_prompt_clause(slug, shot, episode=episode)
+    bits = [
+        "vertical 9:16 cinematic Chinese animation keyframe",
+        title or "short drama",
+        scene,
+        char_clause,
+        kinetic,
+    ]
+    if style_clause:
+        bits.append(style_clause)
+    bits.append(
         "classic manhua / anime illustration, dramatic rim lighting, highly detailed, "
         "no text, no letters, no subtitles, no watermark, no UI"
     )
+    return ", ".join(b for b in bits if b)
 
 
 def _camera_style(shot: dict[str, Any]) -> str:
@@ -477,7 +491,9 @@ def generate_shot_candidates(
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     shot["camera"] = shot.get("camera") or _camera_style(shot)
+    shot["_episode"] = episode
     prompt = _scene_prompt(title, shot, cast, slug=slug)
+    shot.pop("_episode", None)
     shot["prompt"] = prompt
     base_seed = character_seed(slug, cast, int(shot.get("n") or 1))
     ids = next_candidate_ids(shot, count)

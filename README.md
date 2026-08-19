@@ -87,6 +87,8 @@ npm run dev
 | POST | `/api/drama/projects/{slug}/episodes/{n}/script/preview` | 预览剧本改动影响哪些 Shot（不落盘） |
 | PUT | `/api/drama/projects/{slug}/episodes/{n}/script` | 保存剧本并同步 `shots.json`；已锁整镜不覆盖 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/rerender-dirty` | 后台重渲脏镜（返回 job_id） |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/classify` | 按对白推断 kind/speaker |
+| POST | `/api/drama/projects/{slug}/episodes/{n}/style` | 切换本集风格包（不重渲已有 clip） |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/candidates` | 重抽 2–4 张候选图 |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/choose/{cid}` | 点选候选锁定画面（只重拼 clip，不重配音） |
 | POST | `/api/drama/projects/{slug}/episodes/{n}/shots/{shot}/scene` | 手传覆盖本镜画面 |
@@ -145,4 +147,4 @@ npm run dev
 - [x] Q5: 导演覆盖建议（钩子 3s / 景别节奏 / 最多 2 条 reaction；只建议不改镜；人可忽略可锁）
 - [x] Q6: 单人 action 稀疏关键帧（3–5 姿态 mock 补间；改姿态不重配音；多角色同框拒绝）
 - [x] Q7: 验收页（身份/口型/闪烁/响度；整集待修/通过；skipped 不能点通过；响度只重 mix）
-- [ ] Q8: 风格包（见 ROADMAP）
+- [x] Q8: 风格包（`styles/*.json` 一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）

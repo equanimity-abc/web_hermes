@@ -387,6 +387,7 @@ def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, An
         "timeline": timeline,
         "coverage": normalize_coverage(data.get("coverage")),
         "qc": _normalize_episode_qc(data),
+        "style_id": str(data.get("style_id") or ""),
         "updated_at": str(data.get("updated_at") or utc_now()),
     }
 
