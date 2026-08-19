@@ -296,6 +296,34 @@ export function qcShot(slug, episode, shot) {
   )
 }
 
+export function suggestCoverage(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function applyCoverage(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage/${encodeURIComponent(sid)}/apply`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function dismissCoverage(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage/${encodeURIComponent(sid)}/dismiss`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function lockCoverage(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage/${encodeURIComponent(sid)}/lock`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 export function classifyShots(slug, episode, force = false) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/classify`,

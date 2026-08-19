@@ -525,6 +525,41 @@
   color: #fbbf24;
 }
 
+.drama-suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.drama-suggest {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--color-primary-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drama-suggest strong {
+  font-size: 12px;
+}
+
+.drama-suggest em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.drama-suggest-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .drama-stage-empty {
   color: #9ca3af;
 }

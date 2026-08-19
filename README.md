@@ -142,4 +142,5 @@ npm run dev
 - [x] Q2: 口型（仅 dialogue CU/MCU + speaker；mock/http + 失败回退；LSE 代理分数）
 - [x] Q3: 运动档 L0–L3（定场禁止 I2V；action 规划 L3；贵模型不可用走 mock；每集最多 2 镜贵 I2V）
 - [x] Q4: identity 抽检（锁参考图/连续镜余弦；低于 0.65 脏 scene/motion 不重配音；skipped 不得记为通过）
-- [ ] Q5–Q8: 导演建议 / 稀疏关键帧 / QC 验收页 / 风格包（见 ROADMAP）
+- [x] Q5: 导演覆盖建议（钩子 3s / 景别节奏 / 最多 2 条 reaction；只建议不改镜；人可忽略可锁）
+- [ ] Q6–Q8: 稀疏关键帧 / QC 验收页 / 风格包（见 ROADMAP）

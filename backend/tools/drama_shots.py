@@ -350,6 +350,8 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
 
 def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, Any]:
     """Ensure shots.json has D0 fields so PATCH/rerender work on older projects."""
+    from tools.drama_director import normalize_coverage
+
     shots = [normalize_shot(slug, episode, s) for s in (data.get("shots") or []) if isinstance(s, dict)]
     timeline = normalize_timeline(data.get("timeline"), shots)
     return {
@@ -364,6 +366,7 @@ def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, An
         "count": len(shots),
         "shots": shots,
         "timeline": timeline,
+        "coverage": normalize_coverage(data.get("coverage")),
         "updated_at": str(data.get("updated_at") or utc_now()),
     }
 

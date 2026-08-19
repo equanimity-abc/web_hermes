@@ -282,6 +282,12 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     return get_project(slug)
 
 
+def _public_coverage(doc: dict[str, Any] | None) -> dict[str, Any]:
+    from tools.drama_director import public_coverage
+
+    return public_coverage(doc)
+
+
 def get_episode(slug: str, episode: int) -> dict[str, Any]:
     project = load_project(slug)
     n = parse_episode(episode)
@@ -327,6 +333,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "shot_sizes": list(SHOT_SIZES),
         "models": public_models(models),
         "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or []),
+        "coverage": _public_coverage(doc),
         "updated_at": (doc or {}).get("updated_at"),
     }
 
@@ -877,6 +884,76 @@ def qc_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
         "passed": qc_passed(identity),
         "shot": enrich_shot(shot, slug=slug),
     }
+
+
+def suggest_coverage(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    load_project(slug)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_director import refresh_coverage
+
+    coverage = refresh_coverage(doc)
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "coverage": coverage,
+        "hint": "只建议，未改镜头、未加锁",
+    }
+
+
+def apply_coverage(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    sid = str(sid or "").strip()
+    if not sid:
+        raise DramaBadRequest("需要建议 id")
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_director import apply_suggestion
+
+    try:
+        info = apply_suggestion(doc, sid)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    ep = get_episode(slug, n)
+    ep["applied"] = info
+    return ep
+
+
+def dismiss_coverage(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    sid = str(sid or "").strip()
+    if not sid:
+        raise DramaBadRequest("需要建议 id")
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_director import dismiss_suggestion
+
+    try:
+        dismiss_suggestion(doc, sid)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return get_episode(slug, n)
+
+
+def lock_coverage(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    sid = str(sid or "").strip()
+    if not sid:
+        raise DramaBadRequest("需要建议 id")
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_director import lock_suggestion
+
+    try:
+        lock_suggestion(doc, sid)
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    save_doc(doc)
+    return get_episode(slug, n)
 
 
 def generate_lip_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:

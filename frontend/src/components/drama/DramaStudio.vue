@@ -65,6 +65,10 @@ const emit = defineEmits([
   'generate-i2v',
   'generate-lip',
   'qc-shot',
+  'suggest-coverage',
+  'apply-coverage',
+  'dismiss-coverage',
+  'lock-coverage',
   'classify-shots',
   'save-timeline-shot',
   'save-timeline-all',
@@ -197,6 +201,10 @@ const identityClass = computed(() => {
   if (id.status === 'ok' && id.pass) return 'drama-qc-pass'
   return 'drama-qc-fail'
 })
+
+const openSuggestions = computed(() =>
+  (props.episode?.coverage?.suggestions || []).filter((item) => item.status === 'open'),
+)
 
 const previewUrl = computed(() => {
   let url = ''
@@ -458,7 +466,27 @@ function onDrop(n) {
           <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('classify-shots')">
             按对白推断类型
           </button>
+          <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('suggest-coverage')">
+            导演建议
+          </button>
         </p>
+        <div v-if="boardMode === 'shots' && openSuggestions.length" class="drama-suggest-list">
+          <article v-for="item in openSuggestions" :key="item.id" class="drama-suggest">
+            <strong>{{ item.title }}</strong>
+            <em>{{ item.reason }}</em>
+            <div class="drama-suggest-actions">
+              <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('apply-coverage', item.id)">
+                采纳
+              </button>
+              <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('dismiss-coverage', item.id)">
+                忽略
+              </button>
+              <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('lock-coverage', item.id)">
+                锁定类型
+              </button>
+            </div>
+          </article>
+        </div>
         </template>
       </section>
 
@@ -836,6 +864,14 @@ function onDrop(n) {
             <select v-model="draft.kind" :disabled="kindLocked || saving">
               <option v-for="k in shotKinds" :key="k" :value="k">{{ kindLabel(k) }}</option>
             </select>
+            <button
+              type="button"
+              class="btn-tiny"
+              :disabled="saving || rendering || shotFrozen"
+              @click="emit('toggle-lock', 'kind')"
+            >
+              {{ kindLocked && !shotFrozen ? '解锁类型' : '锁定类型' }}
+            </button>
           </label>
           <label>
             景别

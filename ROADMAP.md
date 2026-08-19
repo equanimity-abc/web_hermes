@@ -12,7 +12,7 @@
 
 **漫剧草稿成片（P7–P8 + D0–D8）已齐：** 可改、可锁、可单镜重渲的竖屏草稿流水线；I2V 失败回退静图运镜。
 
-**下一刀：Q5 导演语法建议。** Q4 已交付 identity 抽检（锁参考图余弦；低于阈值脏画面不重配音）。
+**下一刀：Q6 单人 action 稀疏关键帧。** Q5 已交付导演覆盖建议（钩子 / 景别节奏 / 最多 2 条 reaction；只建议不改镜）。
 
 ---
 
@@ -179,7 +179,7 @@ Tool Registry
 
 P0–P8 + D0–D8 已齐。业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。
 
-下一刀 **Q5**：导演语法建议（景别节奏、对白切反应镜、钩子 3s）；Agent 只建议，人可删可锁。
+下一刀 **Q6**：单人 action 镜 3–5 关键帧 + 补间/I2V（可降级 mock/光流）；改姿态不重 VO。
 
 ---
 
@@ -300,12 +300,13 @@ Agent 适合：从一句话拉出系列、按 Bible 补分镜、按你的批注�
 不适合：拖转场时长、选第 3 张候选图——这些走 UI。  
 长任务（出图/TTS/I2V）必须 **后台队列 + 进度事件**（D7），不能卡死一轮聊天。
 
-Skills 建议目录（尚未落地）：
+Skills 建议目录：
 
 ```text
 skills/
-  drama-vertical-short/SKILL.md
-  drama-character-bible/SKILL.md
+  drama-director/SKILL.md   # Q5 已落地：suggest_coverage，只建议不改镜
+  drama-vertical-short/SKILL.md   # 计划
+  drama-character-bible/SKILL.md  # 计划
 plugins/              # 已有 tiktok_drama.py
 ```
 
@@ -519,7 +520,7 @@ Plugin：tiktok_drama 扩 action
 | **Q2** | 约 3–4 周 | 仅 `dialogue` 口型适配器；失败回退；`lip_source`；LSE 脚本能出分 | **完整：** 真口型模型 + 特写开口。**降级：** mock 口型链路 + 回退 + 远景不开口，仍算出片 | ✅ |
 | **Q3** | 约 3–4 周 | 运动档 L0–L3 与 kind 绑定；估费；action 默认真 I2V、定场禁止 | **完整：** 8 镜最多 2 镜打贵 I2V。**降级：** 路由与预算 UI 正确，贵模型 available=false 时走 mock/L1 | ✅ |
 | **Q4** | 约 1 周 | 运动仍吃角色参考；identity 脚本（ArcFace）；抽检入口 | 同角色连续镜可跑余弦分；低于 0.65 提示重抽首帧且不重配音 | ✅ |
-| **Q5** | 约 3–5 天 | 导演语法建议：景别节奏、对白切反应镜、钩子 3s；Agent 只建议 | 一集可建议最多 2 个 reaction，人可删可锁 | 计划 |
+| **Q5** | 约 3–5 天 | 导演语法建议：景别节奏、对白切反应镜、钩子 3s；Agent 只建议 | 一集可建议最多 2 个 reaction，人可删可锁 | ✅ |
 | **Q6** | 约 3–4 周 | 单人 action 镜 3–5 关键帧 + 补间/I2V；候选墙锁姿态 | **完整：** 真 I2V 补间。**降级：** mock/光流补间，改姿态不重 VO。多角色同框不验收 | 计划 |
 | **Q7** | 约 3–5 天 | 验收页接入 QC 四项；整集「待修/通过」 | 退回单镜；脚本 `skipped` 不能点通过；响度只重 mix | 计划 |
 | **Q8** | 约 3–5 天 | 风格包填路由表；成本汇总（字段 Q0 已有） | 切「古风对话」后新镜走角色模型，定场仍便宜 | 计划 |

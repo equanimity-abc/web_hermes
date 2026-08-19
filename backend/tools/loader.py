@@ -48,4 +48,29 @@ def load_plugin_tools() -> list[str]:
             loaded.append(mod.name)
         except Exception as e:
             print(f"[tools.plugins] failed to load {mod.name}: {e}")
+    load_skill_hints()
+    return loaded
+
+
+def load_skill_hints() -> list[str]:
+    """Inject backend/skills/*/SKILL.md prompt comments into the system prompt."""
+    import re
+
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    loaded: list[str] = []
+    if not skills_dir.is_dir():
+        return loaded
+    for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+        try:
+            text = skill_md.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = re.search(r"<!--\s*prompt:\s*(.*?)\s*-->", text, flags=re.S)
+        if match:
+            hint = " ".join(match.group(1).split())
+        else:
+            hint = ""
+        if hint:
+            add_plugin_prompt_hint(hint)
+            loaded.append(skill_md.parent.name)
     return loaded

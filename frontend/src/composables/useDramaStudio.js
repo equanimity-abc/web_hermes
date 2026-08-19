@@ -757,6 +757,72 @@ export function useDramaStudio() {
     }
   }
 
+  async function suggestEpisodeCoverage() {
+    if (!slug.value || !episodeN.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.suggestCoverage(slug.value, episodeN.value)
+      await openEpisode(episodeN.value)
+      const n = result.coverage?.open ?? (result.coverage?.suggestions || []).filter((s) => s.status === 'open').length
+      notice.value = n ? `导演建议 ${n} 条（未改镜头、未加锁）` : '暂无新的覆盖建议'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function applyCoverageSuggestion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.applyCoverage(slug.value, episodeN.value, sid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = '已采纳建议（未自动锁定）'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function dismissCoverageSuggestion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.dismissCoverage(slug.value, episodeN.value, sid)
+      await openEpisode(episodeN.value)
+      notice.value = '已忽略该建议'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function lockCoverageSuggestion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.lockCoverage(slug.value, episodeN.value, sid)
+      await openEpisode(episodeN.value)
+      notice.value = '已锁定该镜类型，建议不会再覆盖'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function exportTimeline() {
     if (!slug.value || !episodeN.value) return
     if (mixUnlicensed.value) {
@@ -932,6 +998,10 @@ export function useDramaStudio() {
     generateShotI2v,
     generateShotLip,
     qcSelectedShot,
+    suggestEpisodeCoverage,
+    applyCoverageSuggestion,
+    dismissCoverageSuggestion,
+    lockCoverageSuggestion,
     classifyEpisodeShots,
     saveTimelineShot,
     saveTimelineOrder,

@@ -38,6 +38,10 @@ from tools.drama_studio import (
     generate_i2v_shot,
     generate_lip_shot,
     qc_shot,
+    suggest_coverage,
+    apply_coverage,
+    dismiss_coverage,
+    lock_coverage,
     classify_shots,
     get_models,
     get_mix,
@@ -211,6 +215,38 @@ async def drama_classify_shots(slug: str, episode: int, body: ClassifyBody | Non
     try:
         force = bool(body.force) if body else False
         return classify_shots(slug, episode, force=force)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/coverage")
+async def drama_suggest_coverage(slug: str, episode: int):
+    try:
+        return suggest_coverage(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/coverage/{sid}/apply")
+async def drama_apply_coverage(slug: str, episode: int, sid: str):
+    try:
+        return apply_coverage(slug, episode, sid)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/coverage/{sid}/dismiss")
+async def drama_dismiss_coverage(slug: str, episode: int, sid: str):
+    try:
+        return dismiss_coverage(slug, episode, sid)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/coverage/{sid}/lock")
+async def drama_lock_coverage(slug: str, episode: int, sid: str):
+    try:
+        return lock_coverage(slug, episode, sid)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 

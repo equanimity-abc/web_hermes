@@ -63,6 +63,10 @@ const {
   generateShotI2v,
   generateShotLip,
   qcSelectedShot,
+  suggestEpisodeCoverage,
+  applyCoverageSuggestion,
+  dismissCoverageSuggestion,
+  lockCoverageSuggestion,
   classifyEpisodeShots,
   timelineOrder: dramaTimelineOrder,
   tlDraft: dramaTlDraft,
@@ -294,6 +298,10 @@ onMounted(() => {
       @generate-i2v="generateShotI2v"
       @generate-lip="generateShotLip"
       @qc-shot="qcSelectedShot"
+      @suggest-coverage="suggestEpisodeCoverage"
+      @apply-coverage="applyCoverageSuggestion"
+      @dismiss-coverage="dismissCoverageSuggestion"
+      @lock-coverage="lockCoverageSuggestion"
       @classify-shots="() => classifyEpisodeShots(false)"
       @save-timeline-all="saveTimelineAll"
       @save-timeline-order="saveTimelineOrder"
