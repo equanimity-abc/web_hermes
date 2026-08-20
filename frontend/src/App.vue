@@ -95,6 +95,11 @@ const {
   presets: dramaPresets,
   currentPreset: dramaCurrentPreset,
   applyProjectPreset,
+  selectedConfigNode: dramaSelectedConfigNode,
+  configNodeDraft: dramaConfigNodeDraft,
+  configNodeList: dramaConfigNodeList,
+  selectConfigNode,
+  saveConfigNode,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -306,8 +311,13 @@ onMounted(() => {
       :mix-unlicensed="dramaMixUnlicensed"
       :presets="dramaPresets"
       :current-preset="dramaCurrentPreset"
+      :config-node-list="dramaConfigNodeList"
+      :selected-config-node="dramaSelectedConfigNode"
+      v-model:config-node-draft="dramaConfigNodeDraft"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
+      @select-config-node="selectConfigNode"
+      @save-config-node="saveConfigNode"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"

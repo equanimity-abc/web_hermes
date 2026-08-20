@@ -39,6 +39,9 @@ const props = defineProps({
   mixUnlicensed: { type: Boolean, default: false },
   presets: { type: Array, default: () => [] },
   currentPreset: { type: String, default: 'balanced' },
+  configNodeList: { type: Array, default: () => [] },
+  selectedConfigNode: { type: String, default: 'script' },
+  configNodeDraft: { type: String, default: '' },
 })
 
 const emit = defineEmits([
@@ -51,6 +54,7 @@ const emit = defineEmits([
   'save-episode',
   'update:scriptDraft',
   'update:boardMode',
+  'update:configNodeDraft',
   'preview-script',
   'save-script',
   'rerender-dirty',
@@ -93,6 +97,8 @@ const emit = defineEmits([
   'apply-mix',
   'clear-bgm',
   'apply-preset',
+  'select-config-node',
+  'save-config-node',
 ])
 
 const previewMode = ref('shot')
@@ -497,6 +503,13 @@ function onDrop(n) {
           >
             验收
           </button>
+          <button
+            type="button"
+            :class="{ active: boardMode === 'config' }"
+            @click="emit('update:boardMode', 'config')"
+          >
+            配置
+          </button>
         </div>
         <h2>{{
           boardMode === 'script'
@@ -507,7 +520,9 @@ function onDrop(n) {
                 ? '镜序'
                 : boardMode === 'qc'
                   ? '验收'
-                  : '分镜'
+                  : boardMode === 'config'
+                    ? '节点配置'
+                    : '分镜'
         }}</h2>
         <template v-if="boardMode === 'cast'">
           <button
@@ -574,6 +589,23 @@ function onDrop(n) {
             <span class="drama-shot-flag">{{ qcShotFlag(shot) }}</span>
           </button>
           <p v-if="!shots.length" class="drama-empty-hint">还没有分镜可验收。</p>
+        </template>
+        <template v-else-if="boardMode === 'config'">
+          <button
+            v-for="node in configNodeList"
+            :key="node.id"
+            type="button"
+            class="drama-shot-item"
+            :class="{ active: node.id === selectedConfigNode }"
+            @click="emit('select-config-node', node.id)"
+          >
+            <span class="drama-shot-n">{{ node.label.slice(0, 1) }}</span>
+            <span class="drama-shot-body">
+              <strong>{{ node.label }}</strong>
+              <em>{{ node.id }}</em>
+            </span>
+          </button>
+          <p class="drama-empty-hint">选一个节点，在右侧编辑该节点的模型/参数 JSON。</p>
         </template>
         <template v-else>
         <button
@@ -719,6 +751,19 @@ function onDrop(n) {
         </p>
       </section>
 
+      <section v-else-if="boardMode === 'config'" class="drama-script">
+        <textarea
+          :value="configNodeDraft"
+          spellcheck="false"
+          class="drama-config-json"
+          placeholder='{ "provider": "edge-tts" }'
+          @input="emit('update:configNodeDraft', $event.target.value)"
+        />
+        <p class="drama-empty-hint">
+          当前节点 <code>{{ selectedConfigNode }}</code> · 直接编辑 JSON 后点「保存节点」。
+        </p>
+      </section>
+
       <section v-else class="drama-preview">
         <div class="drama-preview-tabs">
           <button type="button" :class="{ active: previewMode === 'shot' }" @click="previewMode = 'shot'">
@@ -799,7 +844,9 @@ function onDrop(n) {
                 ? '时间线'
                 : boardMode === 'qc'
                   ? '验收'
-                  : '检查器'
+                  : boardMode === 'config'
+                    ? '节点编辑'
+                    : '检查器'
         }}</h2>
         <div v-if="boardMode === 'script'" class="drama-actions drama-actions--script">
           <button type="button" class="btn-ghost" :disabled="saving || rendering" @click="emit('preview-script')">
@@ -988,6 +1035,19 @@ function onDrop(n) {
               {{ rendering ? '导出中…' : '导出整集' }}
             </button>
           </div>
+        </template>
+        <template v-else-if="boardMode === 'config'">
+          <div class="drama-actions">
+            <button
+              type="button"
+              class="btn-primary"
+              :disabled="saving || rendering"
+              @click="emit('save-config-node')"
+            >
+              {{ saving ? '保存中…' : '保存节点' }}
+            </button>
+          </div>
+          <p class="drama-empty-hint">改动只作用于当前节点，立即落盘生效，下次渲染按新配置路由。</p>
         </template>
         <template v-else-if="boardMode === 'qc'">
           <p class="drama-empty-hint" :class="episodeQc?.verdict === '通过' ? 'drama-qc-pass' : ''">
