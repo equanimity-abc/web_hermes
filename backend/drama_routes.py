@@ -61,6 +61,7 @@ from tools.drama_studio import (
     patch_models,
     upload_episode_bgm,
 )
+from tools.drama_config import apply_preset, get_config, put_node_config
 
 router = APIRouter(prefix="/api/drama", tags=["drama"])
 
@@ -192,6 +193,14 @@ class MixApplyBody(BaseModel):
     background: bool = False
 
 
+class PresetBody(BaseModel):
+    preset_id: str
+
+
+class NodeBody(BaseModel):
+    value: dict
+
+
 @router.get("/projects")
 async def drama_list_projects():
     return list_projects()
@@ -233,6 +242,30 @@ async def drama_get_models(slug: str):
 async def drama_patch_models(slug: str, body: ModelsPatch):
     try:
         return patch_models(slug, body.model_dump(exclude_unset=True))
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/config")
+async def drama_get_config(slug: str):
+    try:
+        return get_config(slug)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/config/preset")
+async def drama_apply_preset(slug: str, body: PresetBody):
+    try:
+        return apply_preset(slug, body.preset_id)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.put("/projects/{slug}/config/nodes/{node}")
+async def drama_put_node_config(slug: str, node: str, body: NodeBody):
+    try:
+        return put_node_config(slug, node, body.value)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 

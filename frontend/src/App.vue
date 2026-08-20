@@ -91,6 +91,10 @@ const {
   mixDraft: dramaMixDraft,
   mixDirty: dramaMixDirty,
   mixUnlicensed: dramaMixUnlicensed,
+  config: dramaConfig,
+  presets: dramaPresets,
+  currentPreset: dramaCurrentPreset,
+  applyProjectPreset,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -300,7 +304,10 @@ onMounted(() => {
       :mix-draft="dramaMixDraft"
       :mix-dirty="dramaMixDirty"
       :mix-unlicensed="dramaMixUnlicensed"
+      :presets="dramaPresets"
+      :current-preset="dramaCurrentPreset"
       @open-episode="openEpisode"
+      @apply-preset="applyProjectPreset"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"

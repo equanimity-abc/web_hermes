@@ -37,6 +37,8 @@ const props = defineProps({
   mixDraft: { type: Object, required: true },
   mixDirty: { type: Boolean, default: false },
   mixUnlicensed: { type: Boolean, default: false },
+  presets: { type: Array, default: () => [] },
+  currentPreset: { type: String, default: 'balanced' },
 })
 
 const emit = defineEmits([
@@ -90,6 +92,7 @@ const emit = defineEmits([
   'upload-bgm',
   'apply-mix',
   'clear-bgm',
+  'apply-preset',
 ])
 
 const previewMode = ref('shot')
@@ -435,6 +438,18 @@ function onDrop(n) {
             <option value="">默认路由</option>
             <option v-for="pack in episode.styles || []" :key="pack.id" :value="pack.id">
               {{ pack.title || pack.id }}
+            </option>
+          </select>
+        </label>
+        <label v-if="project" class="drama-style">
+          预设
+          <select
+            :value="currentPreset"
+            :disabled="saving || rendering"
+            @change="emit('apply-preset', $event.target.value)"
+          >
+            <option v-for="p in presets" :key="p.id" :value="p.id">
+              {{ p.title || p.id }}
             </option>
           </select>
         </label>

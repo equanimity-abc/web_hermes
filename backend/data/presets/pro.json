@@ -1,0 +1,29 @@
+{
+  "id": "pro",
+  "title": "专业顶级",
+  "tag": "商用",
+  "description": "角色一致性模型 + L3/L4 真 I2V + MuseTalk 口型 + 高拟真配音。精品/商用，按镜计费。",
+  "models": {
+    "image": {
+      "establishing": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
+      "insert": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
+      "dialogue": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
+      "reaction": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
+      "action": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
+      "crowd": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
+      "title": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.1 }
+    },
+    "motion": {
+      "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "dialogue": { "ladder": "L2", "provider": "mock", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "kling", "fallback": "L0" },
+      "action": { "ladder": "L3", "provider": "kling", "fallback": "L1" },
+      "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
+    },
+    "lip": { "provider": "musetalk", "enabled": true },
+    "tts": { "provider": "volcano", "model": "high-fidelity" },
+    "subtitle": { "style": "karaoke" }
+  }
+}

@@ -49,6 +49,8 @@ Q6_MAX_LADDER = "L4"
 EXPENSIVE_I2V = frozenset({"kling", "hailuo"})
 MAX_EXPENSIVE_I2V = 2
 CURRENCY = "CNY"
+PRESET_IDS = ("cheap", "balanced", "pro")
+DEFAULT_PRESET = "balanced"
 
 _RESEARCH_FIELDS = ("cost_per_shot", "fallback", "notes")
 
@@ -224,6 +226,11 @@ def default_models() -> dict[str, Any]:
             "lse_c_min": 0.0,
             "lse_d_max": 1.0,
         },
+        "preset": DEFAULT_PRESET,
+        "nodes": {},
+        "script": {"provider": "deepseek", "model": "deepseek-v4-flash", "refine_model": "deepseek-reasoner"},
+        "tts": {"provider": "edge-tts"},
+        "subtitle": {"style": "static"},
     }
 
 
@@ -281,14 +288,23 @@ def normalize_models(raw: Any) -> dict[str, Any]:
         im = {**(base["image"].get(kind) or {}), **(image_in.get(kind) if isinstance(image_in.get(kind), dict) else {})}
         image[kind] = im
     currency = str(data.get("currency") or CURRENCY).strip().upper() or CURRENCY
+    preset = str(data.get("preset") or DEFAULT_PRESET).strip().lower()
+    if preset not in PRESET_IDS:
+        preset = DEFAULT_PRESET
+    nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
     return {
         "currency": currency,
+        "preset": preset,
+        "nodes": nodes,
         "providers": _coerce_providers(data.get("providers")),
         "image": image,
         "motion": motion,
         "lip": {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})},
         "bgm": {**base["bgm"], **(data.get("bgm") if isinstance(data.get("bgm"), dict) else {})},
         "sfx": {**base["sfx"], **(data.get("sfx") if isinstance(data.get("sfx"), dict) else {})},
+        "script": {**base["script"], **(data.get("script") if isinstance(data.get("script"), dict) else {})},
+        "tts": {**base["tts"], **(data.get("tts") if isinstance(data.get("tts"), dict) else {})},
+        "subtitle": {**base["subtitle"], **(data.get("subtitle") if isinstance(data.get("subtitle"), dict) else {})},
         "qc": {**base["qc"], **(data.get("qc") if isinstance(data.get("qc"), dict) else {})},
     }
 

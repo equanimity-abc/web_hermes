@@ -1,0 +1,29 @@
+{
+  "id": "balanced",
+  "title": "均衡量产",
+  "tag": "默认",
+  "description": "flux + 参考图 + L1 单帧 I2V + 对话镜开口型 + edge-tts。日常量产默认档。",
+  "models": {
+    "image": {
+      "establishing": { "provider": "flux", "model": "flux", "cost_per_shot": 0.05 },
+      "insert": { "provider": "flux", "model": "flux", "cost_per_shot": 0.05 },
+      "dialogue": { "provider": "flux", "model": "flux", "cost_per_shot": 0.08, "use_ref": true },
+      "reaction": { "provider": "flux", "model": "flux", "cost_per_shot": 0.08, "use_ref": true },
+      "action": { "provider": "flux", "model": "flux", "cost_per_shot": 0.08, "use_ref": true },
+      "crowd": { "provider": "flux", "model": "flux", "cost_per_shot": 0.05 },
+      "title": { "provider": "flux", "model": "flux", "cost_per_shot": 0.02 }
+    },
+    "motion": {
+      "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "dialogue": { "ladder": "L2", "provider": "mock", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "mock", "fallback": "L0" },
+      "action": { "ladder": "L3", "provider": "mock", "fallback": "L1" },
+      "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
+    },
+    "lip": { "provider": "mock", "enabled": true },
+    "tts": { "provider": "edge-tts" },
+    "subtitle": { "style": "static" }
+  }
+}

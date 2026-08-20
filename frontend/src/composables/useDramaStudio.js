@@ -23,6 +23,8 @@ export function useDramaStudio() {
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
   const mixDraft = ref(emptyMixDraft())
+  const config = ref(null)
+  const presets = ref([])
 
   const {
     jobs: renderJobs,
@@ -104,6 +106,7 @@ export function useDramaStudio() {
     if (saved.length !== cur.length) return true
     return saved.some((n, i) => n !== cur[i])
   })
+  const currentPreset = computed(() => config.value?.preset || 'balanced')
   const mixUnlicensed = computed(() => {
     const mix = episode.value?.mix
     return Boolean(mix?.has_bgm && mix?.license && !mix.license.ok)
@@ -202,6 +205,32 @@ export function useDramaStudio() {
     return projects.value
   }
 
+  async function loadConfig() {
+    if (!slug.value) return
+    const data = await dramaApi.getConfig(slug.value)
+    config.value = data
+    presets.value = data.presets || []
+    return data
+  }
+
+  async function applyProjectPreset(presetId) {
+    if (!slug.value || !presetId) return
+    error.value = ''
+    notice.value = ''
+    saving.value = true
+    try {
+      const data = await dramaApi.applyPreset(slug.value, presetId)
+      config.value = { ...(config.value || {}), preset: data.preset }
+      presets.value = data.presets || presets.value
+      notice.value = `已切换预设：${data.title || data.preset}`
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function deleteProject(targetSlug) {
     error.value = ''
     notice.value = ''
@@ -238,6 +267,7 @@ export function useDramaStudio() {
     const firstChar = (data.characters || [])[0]
     selectedCharacterId.value = firstChar?.id || null
     fillCharDraft(firstChar || null)
+    void loadConfig()
   }
 
   async function openEpisode(n) {
@@ -1134,6 +1164,9 @@ export function useDramaStudio() {
     timelineOrder,
     tlDraft,
     mixDraft,
+    config,
+    presets,
+    currentPreset,
     timelineItems,
     orderedShots,
     transitions,
@@ -1147,6 +1180,8 @@ export function useDramaStudio() {
     assetUrl,
     refreshProjects,
     deleteProject,
+    loadConfig,
+    applyProjectPreset,
     openProject,
     openEpisode,
     selectShot,

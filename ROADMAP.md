@@ -12,7 +12,7 @@
 
 **漫剧草稿成片（P7–P8 + D0–D8）已齐：** 可改、可锁、可单镜重渲的竖屏草稿流水线；I2V 失败回退静图运镜。
 
-**下一刀：Q 系列已齐。** Q8 已交付风格包（切「古风对话」后新镜走角色模型，定场仍便宜；不重渲已有 clip）。
+**下一刀：R 系列（专业级流水线优化）。** Q 系列已齐；下一步把「统一配置、provider 插件化、生成鲁棒性、一致性硬闸、批量操作、版本回滚、成本治理、验收清单」补成专业顶级，见下文 **专业级流水线优化（R0–R8）**。
 
 ---
 
@@ -177,7 +177,7 @@ Tool Registry
 
 ## 建议的下一步行动
 
-P0–P8 + D0–D8 + Q0–Q8 已齐。业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。
+P0–P8 + D0–D8 + Q0–Q8 已齐。下一刀 **R0（统一配置中心）**；业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。完整计划见下文 **专业级流水线优化（R0–R8）**。
 
 ---
 
@@ -577,6 +577,111 @@ Q8 依赖 Q0 路由表已稳定
 
 ---
 
+## 专业级流水线优化（R0–R8）
+
+一句话目标：**在 Q 系列「分镜类型驱动的摄制组」之上，补成每个节点都可人工干预、每个节点都可单独配模型、默认推荐 + 人工覆盖的专业顶级生产线。** 完整细节见 [`docs/漫剧专业流水线优化计划.md`](./docs/漫剧专业流水线优化计划.md)，本节只落开发决策。
+
+### 差距（Q 系列没补的六块）
+
+| 维度 | 现状 | 要补 |
+|------|------|------|
+| 配置体系 | 零散 env + 每项目 models.json，无预设中心 | 三档预设 + 三层覆盖，一键切换 |
+| 模型适配 | 硬编码几种 provider，扩模型要改代码 | provider 插件化适配器，动态加载 |
+| 生成鲁棒性 | TTS/出图失败静默降级，不重试不告警 | 统一重试 + 熔断 + 降级清单 |
+| 角色一致性 | 参考图只进 prompt，弱保证 | 参考图引导 + identity 硬闸 |
+| 人工效率 | 逐镜点、改坏回不去 | 批量操作 + 版本回滚 |
+| 成本治理 | 无预估/无预算 | cost_per_shot + 渲染前预估 + 预算闸 |
+
+### 核心：统一配置 + 模型路由（三层覆盖）
+
+```text
+① 全局预设   backend/data/presets/*.json   （pro / balanced / cheap 三档）
+        ↓ 可被覆盖
+② 项目级     workspace/dramas/{slug}/models.json   （Q 系列已建，升级为完整 schema）
+        ↓ 可被覆盖
+③ 分集/单镜  episodes/epNN 的 doc.overrides   （工作台检查器可改）
+```
+
+读配置按 ③ > ② > ① 合并，缺省向上继承。**所有节点用同一 schema**：`provider` + `model` + `fallback` + `cost_per_shot`。
+
+三档默认预设（开箱即用，均可人工覆盖）：
+
+| 预设 | 画面 | 运动 | 口型 | 配音 | 适用 |
+|------|------|------|------|------|------|
+| `cheap` | flux(免费) | L0 静图运镜 | 关 | edge-tts | 试稿/跑通 |
+| `balanced`（默认） | flux + 参考图 | L1 单帧 I2V | dialogue 可开 | edge-tts | 日常量产 |
+| `pro`（专业顶级） | 即梦/可灵一致性 | L3/L4 真 I2V + 稀疏关键帧 | MuseTalk | 高拟真 + 角色克隆 | 精品/商用 |
+
+工作台新增「**节点配置面板**」：全局/项目/分集/单镜四层切换，改 provider/model/参数立即落盘生效，不改代码。
+
+### 流水线 14 节点（每节点：作用 / 默认推荐 / 人为干预）
+
+| # | 节点 | 作用 | 默认推荐 | 人为干预 |
+|---|------|------|----------|----------|
+| 1 | 立项 | 题材/logline/集数 | script 节点模型 | 锁定位 |
+| 2 | Bible | 人设/视觉锚/风格 | script 精修 | 改人设↓脏下游 |
+| 3 | 角色资产 | 定妆图/音色 | scene.use_ref + tts.voice_map | 锁定妆图 |
+| 4 | 大纲 | 每集钩子/反转 | script | 调集序 |
+| 5 | 剧本 | 对白/分镜指令 | deepseek-flash→reasoner | 预览影响→同步 |
+| 6 | 分镜表 | kind/size/speaker | Agent 建议 | 拆镜/锁 kind |
+| 7 | 关键帧 | 出图多候选 | scene 节点表(按 kind) | 候选墙/手传 |
+| 8 | 运动 | 推拉摇/I2V/关键帧 | motion 节点表(L0–L4) | 钉帧/锁姿态 |
+| 9 | 口型 | 仅 dialogue 特写 | MuseTalk；失败回退闭口 | 标 speaker |
+| 10 | 配音 | 按角色 TTS | edge-tts；pro 换高拟真 | 逐句重配/锁音 |
+| 11 | 字幕 | 烧字幕/卡拉OK | 本地 PIL/ASS | 改字/时间 |
+| 12 | BGM/SFX | 分轨 duclk 人声 | 授权曲库，duck -12 | 时间线打轨 |
+| 13 | 时间线成片 | 拼接/转场/混音 | ffmpeg | 预览导出 |
+| 14 | 验收 | 客观分数 + 人工通过 | drama_qc 四项 | 通过/退回 |
+
+### 开发阶段（R0–R8）
+
+| 代号 | 做什么 | 验收 | 状态 |
+|------|--------|------|------|
+| **R0** | 统一配置中心：`presets/*.json` 三档 + 三层合并 + models.json 升级 schema + `get/put_node_config` API | 一键切 cheap/balanced/pro，节点配置落盘生效 | 建议 |
+| **R1** | Provider 适配器插件化：`providers/` 目录，统一 image/i2v/lip/tts 接口，动态加载 | 加新模型只写适配器不改业务 | 建议 |
+| **R2** | 节点配置面板：工作台检查器加「模型/参数」区，四层切换 | 不开代码给每镜换 provider/model | 建议 |
+| **R3** | 鲁棒性：出图/TTS/I2V/口型统一重试 + 熔断 + 降级清单 | 一集渲完出「降级/失败项」，无静默默片 | 建议 |
+| **R4** | 一致性硬闸：参考图引导(IP-Adapter 若可) + identity 余弦阈值 ≥0.65 + 标脏可重抽 | 同角色连续 5 镜 identity 达标 | 建议 |
+| **R5** | 批量操作：分镜多选 + 批量改运镜/音色/kind/i2v | 一集 8 镜改参数 ≤5 次操作 | 建议 |
+| **R6** | 版本回滚：scene/shots.json 自动快照 + 撤销 | 改坏一键回退上一版 | 建议 |
+| **R7** | 成本治理：provider 带 cost_per_shot，渲染前预估 + 按钮显示 + 预算闸 | 开工前见账单，贵模型按镜花 | 建议 |
+| **R8** | 验收清单页：汇总 fallback/无声/未锁/未过 identity，一键退回 | 一集能不能过一屏看清 | 建议 |
+
+**顺序硬约束：**
+
+```text
+R0（配置中心 + 三层覆盖）
+  → R1（provider 插件化）
+  → R2（节点配置面板 UI）
+  → R3（鲁棒性：重试/熔断/降级清单）
+  → R4（一致性硬闸，依赖 R0 的路由字段）
+R5 / R6 / R7 / R8 可与 R3/R4 部分并行
+```
+
+### 每刀代码落点（保持窄腰）
+
+| 刀 | 新文件（建议） | 工作台 | 插件 action |
+|--|--|--|--|
+| R0 | `drama_config.py`、`presets/*.json` | 预设切换 | `get/put_node_config` |
+| R1 | `providers/`（image/i2v/lip/tts 适配器） | — | — |
+| R2 | 扩 `DramaStudio.vue` 检查器 | 节点配置面板 | 复用 R0 API |
+| R3 | 扩 `drama_video`/`drama_i2v`/`drama_lip` | 降级清单 | `report_render` |
+| R4 | 扩 `drama_qc.py` + IP-Adapter 适配器 | identity 分数/重抽 | `qc_shot` |
+| R5 | 扩 `useDramaStudio.js` | 分镜多选 + 批量改 | `patch_shots` |
+| R6 | `drama_snapshots.py` | 撤销/历史 | `revert_shot` |
+| R7 | 扩 `drama_models.py` cost | 生成按钮估费/预算条 | 复用估费 |
+| R8 | 扩 `drama_qc.py` + `DramaStudio.vue` | 验收清单页 | `qc_episode` |
+
+### 明确不做（本系列）
+
+- 不改 `agent/loop.py`。
+- 不做全局唯一 provider（必须走三层路由，否则失去「按镜配模型」）。
+- 不在 IP-Adapter / 真口型模型不可用时把 `available` 标 true。
+- 不把 BGM 烘焙进 `shotNN.mp4`。
+- 不把「逐镜手改」当默认体验（R5 批量之前先不上量）。
+
+---
+
 ## 怎么用两份源码（方法）
 
 1. **每次只追一条主路径**，例如「用户发一条带工具调用的消息到最终回复」——从入口跟到落盘，画一张流程图。
@@ -617,3 +722,4 @@ Q8 依赖 Q0 路由表已稳定
 - 项目 README：[`README.md`](./README.md)
 - Canvas 可视化副本（Cursor）：`~/.cursor/projects/d-liangkai-myagent-my-tiktok-video/canvases/agent-learning-roadmap.canvas.tsx`
 - 专业级成片计划 Canvas：`~/.cursor/projects/d-liangkai-myagent-my-tiktok-video/canvases/drama-pro-roadmap.canvas.tsx`
+- 专业级流水线优化计划：[`docs/漫剧专业流水线优化计划.md`](./docs/漫剧专业流水线优化计划.md)

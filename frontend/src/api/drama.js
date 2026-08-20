@@ -41,6 +41,24 @@ export function patchProject(slug, body) {
   })
 }
 
+export function getConfig(slug) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/config`)
+}
+
+export function applyPreset(slug, presetId) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/config/preset`, {
+    method: 'POST',
+    body: JSON.stringify({ preset_id: presetId }),
+  })
+}
+
+export function putNodeConfig(slug, node, value) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/config/nodes/${encodeURIComponent(node)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+}
+
 export function deleteProject(slug) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}`, {
     method: 'DELETE',
