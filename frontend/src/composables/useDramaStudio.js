@@ -25,6 +25,19 @@ export function useDramaStudio() {
   const mixDraft = ref(emptyMixDraft())
   const config = ref(null)
   const presets = ref([])
+  const selectedConfigNode = ref('script')
+  const configNodeDraft = ref('')
+  const configNodeList = [
+    { id: 'script', label: '脚本' },
+    { id: 'image', label: '出图' },
+    { id: 'motion', label: '运动' },
+    { id: 'lip', label: '口型' },
+    { id: 'tts', label: '配音' },
+    { id: 'subtitle', label: '字幕' },
+    { id: 'bgm', label: 'BGM' },
+    { id: 'sfx', label: '音效' },
+    { id: 'qc', label: 'QC 阈值' },
+  ]
 
   const {
     jobs: renderJobs,
@@ -222,8 +235,45 @@ export function useDramaStudio() {
       const data = await dramaApi.applyPreset(slug.value, presetId)
       config.value = { ...(config.value || {}), preset: data.preset }
       presets.value = data.presets || presets.value
+      selectConfigNode(selectedConfigNode.value, true)
       notice.value = `已切换预设：${data.title || data.preset}`
       return data
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  function selectConfigNode(nodeId, silent = false) {
+    if (!nodeId) return
+    selectedConfigNode.value = nodeId
+    const value = config.value?.nodes?.[nodeId]
+    configNodeDraft.value = JSON.stringify(value ?? {}, null, 2)
+    if (!silent) {
+      error.value = ''
+      notice.value = ''
+    }
+  }
+
+  async function saveConfigNode() {
+    if (!slug.value || !selectedConfigNode.value) return
+    let value
+    try {
+      value = JSON.parse(configNodeDraft.value || '{}')
+    } catch (e) {
+      error.value = 'JSON 格式错误：' + e.message
+      return
+    }
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.putNodeConfig(slug.value, selectedConfigNode.value, value)
+      config.value = { ...(config.value || {}), ...data, nodes: data.models ? undefined : (config.value || {}).nodes }
+      await loadConfig()
+      selectConfigNode(selectedConfigNode.value, true)
+      notice.value = `已保存节点 ${selectedConfigNode.value}`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -1167,6 +1217,9 @@ export function useDramaStudio() {
     config,
     presets,
     currentPreset,
+    selectedConfigNode,
+    configNodeDraft,
+    configNodeList,
     timelineItems,
     orderedShots,
     transitions,
@@ -1182,6 +1235,8 @@ export function useDramaStudio() {
     deleteProject,
     loadConfig,
     applyProjectPreset,
+    selectConfigNode,
+    saveConfigNode,
     openProject,
     openEpisode,
     selectShot,
