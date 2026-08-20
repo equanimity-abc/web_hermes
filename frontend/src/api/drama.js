@@ -83,6 +83,13 @@ export function patchShot(slug, episode, shot, body) {
   )
 }
 
+export function patchShots(slug, episode, shots, field, value) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots`,
+    { method: 'PATCH', body: JSON.stringify({ shots, field, value }) },
+  )
+}
+
 export function rerenderShot(slug, episode, shot, layers) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/rerender`,
