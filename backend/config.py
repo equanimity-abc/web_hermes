@@ -43,7 +43,9 @@ class Config:
     )
 
     # Agent loop
-    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "256"))
+    # 每次 LLM 调用算一轮（一轮可并发多次 tool_calls）。后台任务提交后必须「移交」
+    # 让用户查工作台，禁止在 loop 里反复 poll_job 等任务完成——那会白白烧光轮次。
+    AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "64"))
 
     # Context compression（按字符粗估，超限则摘要旧轮次）
     CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))

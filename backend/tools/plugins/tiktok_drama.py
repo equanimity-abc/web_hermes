@@ -427,7 +427,7 @@ def _action_render_episode(args: dict) -> str:
         episode=n,
         job_id=job["job_id"],
         status=job["status"],
-        hint="后台渲染中，用 poll_job 查进度；工作台任务条可看进度",
+        hint="已提交后台渲染（job_id 如上）。不要再循环 poll_job 等待，交给工作台任务条看进度。",
     )
 
 
@@ -571,7 +571,7 @@ def _action_rerender_dirty(args: dict) -> str:
         episode=n,
         job_id=job["job_id"],
         status=job["status"],
-        hint="后台重渲脏镜，用 poll_job 查进度",
+        hint="已提交后台重渲脏镜。不要循环 poll_job 等待，进度看工作台任务条。",
     )
 
 
@@ -705,7 +705,7 @@ def _action_generate_i2v(args: dict) -> str:
         episode=n,
         shot=shot_n,
         **result,
-        hint="后台 I2V + 重合成 clip，用 poll_job 查进度",
+        hint="已提交后台 I2V。不要循环 poll_job 等待，进度看工作台任务条。",
     )
 
 
@@ -1163,6 +1163,9 @@ def register_tiktok_drama() -> None:
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
         "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
         "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
+        "render_episode / rerender_dirty / generate_i2v / generate_lip / generate_keys / export 都是后台任务，"
+        "返回 job_id 后即完成你的职责，立即用最终答复收尾并附上已有预览链接；"
+        "禁止在工具循环里反复 poll_job 等待完成（会让轮次耗尽）。进度交给工作台底部任务条，或让用户稍后手动问一次。"
         "分镜分类用 classify_shots（定场 L0 / 对话 L1）；锁 kind 后不会被覆盖。"
         "导演覆盖用 suggest_coverage（钩子/景别/最多2条反应镜），只建议不改镜；人在工作台采纳或锁定。"
         "单人 action 稀疏关键帧用 generate_keys（3–5 姿态补间，改姿态不重配音；多角色同框会拒绝）。"
