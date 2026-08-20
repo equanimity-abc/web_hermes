@@ -187,6 +187,29 @@ def locked_ref_path(slug: str, shot: dict[str, Any]) -> Path | None:
     return path if path.is_file() else None
 
 
+def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
+    if not char or not char.get("ref_locked") or not ref_exists(slug, char):
+        return None
+    rel = str(char.get("ref") or ref_rel(slug, str(char.get("id") or "")))
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        return None
+    return str(path) if path.is_file() else None
+
+
+def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
+    """All locked reference-image paths for characters in this shot (R4 refs)."""
+    cards = load_characters(slug)
+    cast = resolve_shot_characters(shot, cards)
+    refs: list[str] = []
+    for char in cast:
+        path = _char_ref_path(slug, char)
+        if path and path not in refs:
+            refs.append(path)
+    return refs
+
+
 def _scene_path(shot: dict[str, Any]) -> Path | None:
     rel = str((shot.get("assets") or {}).get("scene") or "")
     if not rel:
