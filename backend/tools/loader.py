@@ -49,7 +49,18 @@ def load_plugin_tools() -> list[str]:
         except Exception as e:
             print(f"[tools.plugins] failed to load {mod.name}: {e}")
     load_skill_hints()
+    _load_providers()
     return loaded
+
+
+def _load_providers() -> None:
+    """Auto-register generation adapters (tools/providers/*.py)."""
+    try:
+        from tools.providers import registry
+
+        registry.load_all()
+    except Exception as e:
+        print(f"[providers] failed to load adapters: {e}")
 
 
 def load_skill_hints() -> list[str]:

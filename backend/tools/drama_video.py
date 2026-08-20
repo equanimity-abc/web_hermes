@@ -425,29 +425,19 @@ def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
     provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
     if provider in ("", "none", "off"):
         return False
-    quoted = urllib.parse.quote(prompt)
-    model = config.IMAGE_GEN_MODEL or "flux"
-    url = (
-        f"https://image.pollinations.ai/prompt/{quoted}"
-        f"?width=1024&height=1792&model={urllib.parse.quote(model)}"
-        f"&nologo=true&enhance=true&seed={seed}"
+    from tools.providers import registry
+
+    return bool(
+        registry.dispatch(
+            "image",
+            provider,
+            prompt,
+            dest,
+            seed=seed,
+            width=ZOOM_W,
+            height=ZOOM_H,
+        )
     )
-    try:
-        from io import BytesIO
-
-        import httpx
-        from PIL import Image
-
-        with httpx.Client(timeout=90.0, follow_redirects=True) as client:
-            resp = client.get(url, headers={"User-Agent": "my-tiktok-video-agent/0.8"})
-            resp.raise_for_status()
-            img = Image.open(BytesIO(resp.content)).convert("RGB")
-        img = _fit_cover(img, ZOOM_W, ZOOM_H)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dest, "PNG")
-        return dest.is_file() and dest.stat().st_size > 1000
-    except Exception:
-        return False
 
 
 def _write_scene_png(data: bytes, dest: Path) -> None:
@@ -1121,7 +1111,23 @@ def render_shot_layers(
     duration = float(shot.get("duration") or 5)
     if "voice" in wanted:
         speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
-        has_audio = _tts_to_file(speech, voice, voice=primary_voice(cast)) if speech else False
+        if speech:
+            from tools.drama_models import load_models
+            from tools.providers import registry
+
+            tts_cfg = (load_models(slug) or {}).get("tts") or {}
+            tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
+            has_audio = bool(
+                registry.dispatch(
+                    "tts",
+                    tts_provider,
+                    speech,
+                    voice,
+                    voice=primary_voice(cast),
+                )
+            )
+        else:
+            has_audio = False
         if has_audio:
             used_tts = True
             duration = max(duration, _probe_duration(voice) + 0.25)

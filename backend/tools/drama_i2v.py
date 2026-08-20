@@ -372,16 +372,12 @@ def try_generate_i2v(
         if ok:
             shot["i2v_ladder"] = "L3"
     if not ok:
-        if provider in ("mock", "mock_ai", "l0"):
-            ok = _provider_mock_ai(scene, dest, shot, sec)
-        elif provider == "fail":
-            ok = _provider_fail(scene, dest, shot, sec)
-        elif provider in ("http", "api"):
-            ok = _provider_http(scene, dest, shot, sec)
-        elif provider == "pollinations":
-            ok = _provider_pollinations(scene, dest, shot, sec)
-        elif provider not in ("none", "off", ""):
-            ok = _provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec)
+        from tools.providers import registry
+
+        ok = registry.dispatch("i2v", provider, scene, dest, shot, sec) == "ai"
+        # Unknown providers: try http then degraded local motion.
+        if not ok and provider not in ("mock", "mock_ai", "l0", "fail", "http", "api", "kling", "hailuo", "pollinations", "none", "off", ""):
+            ok = bool(_provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec))
 
     if ok:
         rel = str(shot.get("assets", {}).get("motion") or "")
