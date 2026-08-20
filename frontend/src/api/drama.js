@@ -83,6 +83,13 @@ export function patchShot(slug, episode, shot, body) {
   )
 }
 
+export function patchShots(slug, episode, shots, field, value) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots`,
+    { method: 'PATCH', body: JSON.stringify({ shots, field, value }) },
+  )
+}
+
 export function rerenderShot(slug, episode, shot, layers) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/rerender`,
@@ -422,6 +429,24 @@ export function lockCoverage(slug, episode, sid) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/coverage/${encodeURIComponent(sid)}/lock`,
     { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function listSnapshots(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots`)
+}
+
+export function restoreSnapshot(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots/restore/${encodeURIComponent(sid)}`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function deleteSnapshot(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots/${encodeURIComponent(sid)}`,
+    { method: 'DELETE' },
   )
 }
 

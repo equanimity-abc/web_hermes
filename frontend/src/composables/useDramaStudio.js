@@ -38,6 +38,18 @@ export function useDramaStudio() {
     { id: 'sfx', label: '音效' },
     { id: 'qc', label: 'QC 阈值' },
   ]
+  const selectedShotIds = ref([])
+  const snapshots = ref([])
+  const snapshotsOpen = ref(false)
+  const batchField = ref('camera')
+  const batchValue = ref('')
+  const batchFields = [
+    { id: 'camera', label: '运镜' },
+    { id: 'voice', label: '音色' },
+    { id: 'kind', label: '镜头类型' },
+    { id: 'i2v', label: 'I2V 运动' },
+    { id: 'speaker', label: '说话人' },
+  ]
 
   const {
     jobs: renderJobs,
@@ -340,6 +352,108 @@ export function useDramaStudio() {
     selectedN.value = n
     const shot = shots.value.find((s) => s.n === n)
     fillDraft(shot || null)
+  }
+
+  function toggleShotSelected(n) {
+    const idx = selectedShotIds.value.indexOf(n)
+    if (idx >= 0) selectedShotIds.value.splice(idx, 1)
+    else selectedShotIds.value.push(n)
+  }
+
+  function clearShotSelection() {
+    selectedShotIds.value = []
+  }
+
+  function selectAllShots() {
+    selectedShotIds.value = shots.value.map((s) => s.n)
+  }
+
+  async function refreshSnapshots() {
+    if (!slug.value || !episodeN.value) return
+    try {
+      const data = await dramaApi.listSnapshots(slug.value, episodeN.value)
+      snapshots.value = data.snapshots || []
+    } catch {
+      snapshots.value = []
+    }
+    return snapshots.value
+  }
+
+  function toggleSnapshotsPanel() {
+    snapshotsOpen.value = !snapshotsOpen.value
+    if (snapshotsOpen.value) void refreshSnapshots()
+  }
+
+  async function restoreSnapshotVersion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.restoreSnapshot(slug.value, episodeN.value, sid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      await refreshSnapshots()
+      notice.value = `已恢复到 ${sid}（还原 ${data.restored?.restored_scenes || 0} 张画面）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function deleteSnapshotVersion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.deleteSnapshot(slug.value, episodeN.value, sid)
+      await refreshSnapshots()
+      notice.value = `已删除快照 ${sid}`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function applyBatchEdit(field, value) {
+    if (!slug.value || !episodeN.value) return
+    const targetShots = [...selectedShotIds.value]
+    const fieldSel = String(field || batchField.value || '').trim()
+    const valueSel = value ?? batchValue.value
+    if (!targetShots.length) {
+      error.value = '请先在左侧勾选要批量修改的镜头'
+      return
+    }
+    if (!fieldSel) {
+      error.value = '请选择要批量修改的字段'
+      return
+    }
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await dramaApi.patchShots(
+        slug.value,
+        episodeN.value,
+        targetShots,
+        fieldSel,
+        valueSel,
+      )
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      const skipped = (result.skipped_locked || []).length
+      const updated = (result.updated || []).length
+      notice.value = skipped
+        ? `已批量更新 ${updated} 镜；${skipped} 镜已锁定未改`
+        : `已批量更新 ${updated} 镜（未重渲，脏层下次渲染生效）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
   }
 
   async function saveShot() {
@@ -1220,6 +1334,20 @@ export function useDramaStudio() {
     selectedConfigNode,
     configNodeDraft,
     configNodeList,
+    selectedShotIds,
+    batchField,
+    batchValue,
+    batchFields,
+    snapshots,
+    snapshotsOpen,
+    toggleShotSelected,
+    clearShotSelection,
+    selectAllShots,
+    applyBatchEdit,
+    refreshSnapshots,
+    toggleSnapshotsPanel,
+    restoreSnapshotVersion,
+    deleteSnapshotVersion,
     timelineItems,
     orderedShots,
     transitions,

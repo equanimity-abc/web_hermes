@@ -100,6 +100,16 @@ const {
   configNodeList: dramaConfigNodeList,
   selectConfigNode,
   saveConfigNode,
+  selectedShotIds: dramaSelectedShotIds,
+  toggleShotSelected,
+  clearShotSelection,
+  selectAllShots,
+  applyBatchEdit,
+  snapshots: dramaSnapshots,
+  snapshotsOpen: dramaSnapshotsOpen,
+  toggleSnapshotsPanel,
+  restoreSnapshotVersion,
+  deleteSnapshotVersion,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -314,10 +324,20 @@ onMounted(() => {
       :config-node-list="dramaConfigNodeList"
       :selected-config-node="dramaSelectedConfigNode"
       v-model:config-node-draft="dramaConfigNodeDraft"
+      :selected-shot-ids="dramaSelectedShotIds"
+      :snapshots="dramaSnapshots"
+      :snapshots-open="dramaSnapshotsOpen"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
       @select-config-node="selectConfigNode"
       @save-config-node="saveConfigNode"
+      @toggle-shot-selected="toggleShotSelected"
+      @clear-shot-selection="clearShotSelection"
+      @select-all-shots="selectAllShots"
+      @apply-batch-edit="applyBatchEdit"
+      @toggle-snapshots="toggleSnapshotsPanel"
+      @restore-snapshot="restoreSnapshotVersion"
+      @delete-snapshot="deleteSnapshotVersion"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"

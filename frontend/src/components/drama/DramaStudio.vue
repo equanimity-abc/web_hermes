@@ -42,6 +42,9 @@ const props = defineProps({
   configNodeList: { type: Array, default: () => [] },
   selectedConfigNode: { type: String, default: 'script' },
   configNodeDraft: { type: String, default: '' },
+  selectedShotIds: { type: Array, default: () => [] },
+  snapshots: { type: Array, default: () => [] },
+  snapshotsOpen: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -99,6 +102,13 @@ const emit = defineEmits([
   'apply-preset',
   'select-config-node',
   'save-config-node',
+  'toggle-shot-selected',
+  'clear-shot-selection',
+  'select-all-shots',
+  'apply-batch-edit',
+  'toggle-snapshots',
+  'restore-snapshot',
+  'delete-snapshot',
 ])
 
 const previewMode = ref('shot')
@@ -108,6 +118,15 @@ const keyInput = ref(null)
 const bgmInput = ref(null)
 const selectedKeyId = ref(null)
 const dragFromN = ref(null)
+const batchFieldLocal = ref('camera')
+const batchValueDraft = ref('')
+const batchFieldsLocal = [
+  { id: 'camera', label: '运镜' },
+  { id: 'voice', label: '音色' },
+  { id: 'kind', label: '镜头类型' },
+  { id: 'i2v', label: 'I2V 运动' },
+  { id: 'speaker', label: '说话人' },
+]
 const cameras = computed(() => props.episode?.cameras || props.project?.cameras || [])
 const layerRows = [
   { id: 'scene', label: '画面' },
@@ -121,6 +140,14 @@ const layerRows = [
 
 function isLocked(layer) {
   return (props.selected?.locked || []).includes(layer)
+}
+
+function isSelectedForBatch(n) {
+  return (props.selectedShotIds || []).includes(n)
+}
+
+function emitBatchEdit() {
+  emit('apply-batch-edit', batchFieldLocal.value, batchValueDraft.value)
 }
 
 function isDirtyLayer(layer) {
@@ -608,18 +635,36 @@ function onDrop(n) {
           <p class="drama-empty-hint">选一个节点，在右侧编辑该节点的模型/参数 JSON。</p>
         </template>
         <template v-else>
+        <div v-if="shots.length" class="drama-batch-toolbar">
+          <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('select-all-shots')">
+            全选
+          </button>
+          <button type="button" class="btn-tiny" :disabled="saving || rendering || !selectedShotIds.length" @click="emit('clear-shot-selection')">
+            清空
+          </button>
+          <span class="drama-batch-count">已选 {{ selectedShotIds.length }} 镜</span>
+        </div>
         <button
           v-for="shot in shots"
           :key="shot.n"
           type="button"
-          class="drama-shot-item"
+          class="drama-shot-item drama-shot-item--selectable"
           :class="{
             active: shot.n === selectedN,
             dirty: (shot.dirty || []).length || impactFor(shot.n)?.changed?.length,
             frozen: (shot.locked || []).includes('shot'),
+            selected: isSelectedForBatch(shot.n),
           }"
           @click="emit('select-shot', shot.n)"
         >
+          <input
+            type="checkbox"
+            class="drama-shot-check"
+            :checked="isSelectedForBatch(shot.n)"
+            :disabled="saving || (shot.locked || []).includes('shot')"
+            @click.stop
+            @change="emit('toggle-shot-selected', shot.n)"
+          />
           <span class="drama-shot-n">{{ shot.n }}</span>
           <span class="drama-shot-body">
             <strong>Shot {{ shot.n }}</strong>
@@ -848,6 +893,54 @@ function onDrop(n) {
                     ? '节点编辑'
                     : '检查器'
         }}</h2>
+        <div v-if="boardMode === 'shots' && selectedShotIds.length" class="drama-batch-panel">
+          <h3 class="drama-layers-title">批量编辑（已选 {{ selectedShotIds.length }} 镜）</h3>
+          <label>
+            批量字段
+            <select v-model="batchFieldLocal">
+              <option v-for="f in batchFieldsLocal" :key="f.id" :value="f.id">{{ f.label }}</option>
+            </select>
+          </label>
+          <label v-if="batchFieldLocal === 'camera'">
+            运镜
+            <select v-model="batchValueDraft">
+              <option value="">（不变）</option>
+              <option v-for="cam in cameras" :key="cam" :value="cam">{{ cam }}</option>
+            </select>
+          </label>
+          <label v-else-if="batchFieldLocal === 'voice'">
+            音色
+            <select v-model="batchValueDraft">
+              <option value="">（用角色默认）</option>
+              <option v-for="voice in voices" :key="voice.id" :value="voice.id">{{ voice.label }}</option>
+            </select>
+          </label>
+          <label v-else-if="batchFieldLocal === 'kind'">
+            镜头类型
+            <select v-model="batchValueDraft">
+              <option v-for="k in shotKinds" :key="k" :value="k">{{ kindLabel(k) }}</option>
+            </select>
+          </label>
+          <label v-else-if="batchFieldLocal === 'i2v'">
+            I2V 运动
+            <select v-model="batchValueDraft">
+              <option v-for="mode in i2vModes" :key="mode" :value="mode">{{ mode }}</option>
+            </select>
+          </label>
+          <label v-else-if="batchFieldLocal === 'speaker'">
+            说话人
+            <select v-model="batchValueDraft">
+              <option value="">（未指定）</option>
+              <option v-for="char in characters" :key="char.id" :value="char.id">{{ char.name }}</option>
+            </select>
+          </label>
+          <div class="drama-actions">
+            <button type="button" class="btn-primary" :disabled="saving || rendering" @click="emitBatchEdit">
+              {{ saving ? '保存中…' : '应用到选中镜头' }}
+            </button>
+          </div>
+          <p class="drama-empty-hint">只改字段并标脏，不立即重渲；锁定的镜头会被跳过。</p>
+        </div>
         <div v-if="boardMode === 'script'" class="drama-actions drama-actions--script">
           <button type="button" class="btn-ghost" :disabled="saving || rendering" @click="emit('preview-script')">
             {{ saving ? '预览中…' : '预览影响' }}
@@ -919,6 +1012,29 @@ function onDrop(n) {
           </template>
         </template>
         <template v-else-if="boardMode === 'timeline'">
+          <div class="drama-freeze">
+            <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-snapshots')">
+              {{ snapshotsOpen ? '收起版本历史' : '版本历史' }}
+            </button>
+            <span>{{ snapshots.length ? `已留档 ${snapshots.length} 条` : '无快照' }}</span>
+          </div>
+          <div v-if="snapshotsOpen" class="drama-snapshots-panel">
+            <p v-if="!snapshots.length" class="drama-empty-hint">保存分镜/画面/批量编辑/剧本/分类前会自动留档（最多 20 条）。</p>
+            <div v-for="snap in snapshots" :key="snap.sid" class="drama-snap-row">
+              <span class="drama-snap-meta">
+                <strong>{{ snap.tag }}</strong>
+                <em>{{ snap.created_at }} · {{ snap.shots }} 镜{{ snap.scenes ? ` · 还原 ${snap.scenes} 图` : '' }}</em>
+              </span>
+              <span class="drama-snap-actions">
+                <button type="button" class="btn-tiny" :disabled="saving" @click="emit('restore-snapshot', snap.sid)">
+                  恢复
+                </button>
+                <button type="button" class="btn-tiny" :disabled="saving" @click="emit('delete-snapshot', snap.sid)">
+                  删除
+                </button>
+              </span>
+            </div>
+          </div>
           <label>
             曲库
             <select v-model="mixDraft.catalog_id" :disabled="saving || !catalogTracks.length">

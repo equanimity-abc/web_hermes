@@ -46,6 +46,12 @@ from tools.drama_shots import (
     normalize_i2v_mode,
 )
 from tools.drama_timeline import apply_timeline_patch, patch_timeline_doc, public_timeline
+from tools.drama_snapshots import (
+    drop_snapshot as _drop_snapshot,
+    list_snapshots as _list_snapshots,
+    restore_snapshot as _restore_snapshot,
+    take_snapshot as _take_snapshot,
+)
 from tools.workspace import resolve_safe, workspace_root
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$")
@@ -449,7 +455,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker", "voice")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
@@ -478,6 +484,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
 
     doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="patch_shot")
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
@@ -523,6 +530,73 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     }
 
 
+_BATCH_FIELDS = ("camera", "voice", "kind", "i2v", "speaker")
+
+
+def patch_shots(slug: str, episode: int, shot_ns: list[int], field: str, value: Any) -> dict[str, Any]:
+    """R5: batch edit one field across multiple shots (camera / voice / kind / i2v / speaker)."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    field = str(field or "").strip()
+    if field not in _BATCH_FIELDS:
+        raise DramaBadRequest(f"不支持的批量字段：{field}，可选 {', '.join(_BATCH_FIELDS)}")
+
+    shots_wanted = sorted({parse_shot_n(x) for x in (shot_ns or [])})
+    if not shots_wanted:
+        raise DramaBadRequest("需要至少一个 shot 编号")
+    if len(shots_wanted) > 99:
+        raise DramaBadRequest("批量操作最多 99 镜")
+
+    doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="patch_shots")
+
+    if field == "kind":
+        from tools.drama_models import normalize_kind
+
+        kind = normalize_kind(value)
+        if not kind:
+            raise DramaBadRequest(f"未知镜头类型：{value}")
+        patch_value = kind
+    elif field == "i2v":
+        patch_value = normalize_i2v_mode(value)
+    else:
+        patch_value = str(value or "").strip()
+
+    updated: list[int] = []
+    skipped_locked: list[int] = []
+    changed: list[int] = []
+    for shot in doc.get("shots") or []:
+        shot_num = int(shot.get("n") or 0)
+        if shot_num not in shots_wanted:
+            continue
+        locked = set(shot.get("locked") or [])
+        blocked = {"shot", field} & locked
+        if blocked:
+            skipped_locked.append(shot_num)
+            continue
+        before = shot.get(field)
+        try:
+            apply_patch(shot, {field: patch_value})
+        except ValueError as e:
+            raise DramaBadRequest(str(e)) from e
+        changed.append(shot_num)
+        if str(before or "") != str(shot.get(field) or ""):
+            updated.append(shot_num)
+
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "field": field,
+        "changed": changed,
+        "updated": updated,
+        "skipped_locked": skipped_locked,
+        "shot": None,
+        "shots": [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])],
+        "shots_json": json_rel(slug, n),
+    }
+
+
 def rerender_one_shot(slug: str, episode: int, shot_n: int, layers: list[str] | None = None) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
@@ -542,6 +616,7 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     if "shot" in (shot.get("locked") or []):
         raise DramaBadRequest("整镜已锁定，不能重抽出图")
+    _take_snapshot(slug, n, doc, tag="candidates")
     from tools.drama_video import generate_shot_candidates
 
     ep_title = str(doc.get("title") or f"第{n}集")
@@ -581,6 +656,7 @@ def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
+    _take_snapshot(slug, n, doc, tag="scene")
     from tools.drama_video import choose_shot_candidate
 
     try:
@@ -609,6 +685,7 @@ def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
+    _take_snapshot(slug, n, doc, tag="scene")
     from tools.drama_video import upload_shot_candidate
 
     try:
@@ -787,6 +864,7 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
 
     project = load_project(slug)
     existing = load_doc(slug, n)
+    _take_snapshot(slug, n, existing, tag="script")
     parsed = parse_episode_markdown(text)
     if not parsed.get("shots"):
         raise DramaBadRequest("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
@@ -1263,11 +1341,40 @@ def apply_style(slug: str, episode: int, style_id: str) -> dict[str, Any]:
     return ep
 
 
+def list_snapshots(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    _ensure_shots_doc(slug, n)
+    return {"slug": slug, "episode": n, "snapshots": _list_snapshots(slug, n)}
+
+
+def restore_snapshot(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        result = _restore_snapshot(slug, n, str(sid or ""))
+    except LookupError as e:
+        raise DramaNotFound(str(e)) from e
+    ep = get_episode(slug, n)
+    ep["restored"] = result
+    return ep
+
+
+def drop_snapshot(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        return _drop_snapshot(slug, n, str(sid or ""))
+    except LookupError as e:
+        raise DramaNotFound(str(e)) from e
+
+
 def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
     load_models(slug)
     doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="classify")
     changed: list[int] = []
     for shot in doc.get("shots") or []:
         before = (shot.get("kind"), shot.get("size"), shot.get("speaker"))

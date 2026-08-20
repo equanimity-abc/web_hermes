@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -23,6 +25,7 @@ from tools.drama_studio import (
     patch_episode,
     patch_project,
     patch_shot,
+    patch_shots,
     patch_timeline,
     preview_script,
     remove_character,
@@ -54,6 +57,9 @@ from tools.drama_studio import (
     lock_coverage,
     classify_shots,
     apply_style,
+    list_snapshots,
+    restore_snapshot,
+    drop_snapshot,
     get_models,
     get_mix,
     mix_episode,
@@ -104,6 +110,7 @@ class ShotPatch(BaseModel):
     kind: str | None = None
     size: str | None = None
     speaker: str | None = None
+    voice: str | None = None
     locked: list[str] | None = None
     lock: list[str] | str | None = None
     unlock: list[str] | str | None = None
@@ -117,6 +124,12 @@ class TimelinePatch(BaseModel):
 
 class RerenderRequest(BaseModel):
     layers: list[str] | None = Field(default=None)
+
+
+class ShotsPatch(BaseModel):
+    shots: list[int]
+    field: str
+    value: Any
 
 
 class CandidateCount(BaseModel):
@@ -270,6 +283,30 @@ async def drama_put_node_config(slug: str, node: str, body: NodeBody):
         raise _http(e) from e
 
 
+@router.get("/projects/{slug}/episodes/{episode}/snapshots")
+async def drama_list_snapshots(slug: str, episode: int):
+    try:
+        return list_snapshots(slug, episode)
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/snapshots/restore/{sid}")
+async def drama_restore_snapshot(slug: str, episode: int, sid: str):
+    try:
+        return restore_snapshot(slug, episode, sid)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.delete("/projects/{slug}/episodes/{episode}/snapshots/{sid}")
+async def drama_drop_snapshot(slug: str, episode: int, sid: str):
+    try:
+        return drop_snapshot(slug, episode, sid)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
 @router.post("/projects/{slug}/episodes/{episode}/classify")
 async def drama_classify_shots(slug: str, episode: int, body: ClassifyBody | None = None):
     try:
@@ -348,6 +385,14 @@ async def drama_list_shots(slug: str, episode: int):
             "cameras": list(CAMERAS),
         }
     except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.patch("/projects/{slug}/episodes/{episode}/shots")
+async def drama_patch_shots(slug: str, episode: int, body: ShotsPatch):
+    try:
+        return patch_shots(slug, episode, body.shots, body.field, body.value)
+    except (DramaNotFound, DramaBadRequest, ValueError, KeyError) as e:
         raise _http(e) from e
 
 

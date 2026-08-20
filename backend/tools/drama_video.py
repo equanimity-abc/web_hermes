@@ -1144,6 +1144,7 @@ def render_shot_layers(
 
             tts_cfg = (load_models(slug) or {}).get("tts") or {}
             tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
+            voice_sel = str(shot.get("voice") or "").strip() or primary_voice(cast)
             has_audio = bool(
                 retry_call(
                     registry.dispatch,
@@ -1151,7 +1152,7 @@ def render_shot_layers(
                     tts_provider,
                     speech,
                     voice,
-                    voice=primary_voice(cast),
+                    voice=voice_sel,
                 )
             )
         else:
