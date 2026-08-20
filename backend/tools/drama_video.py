@@ -421,7 +421,7 @@ def _paste_character_refs(img, characters: list[dict[str, Any]]) -> None:
         img.paste(portrait, (x0 + i * (slot_w + gap), y0))
 
 
-def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
+def _generate_scene_image(prompt: str, dest: Path, *, seed: int, refs: tuple[str, ...] = ()) -> bool:
     provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
     if provider in ("", "none", "off"):
         return False
@@ -436,6 +436,7 @@ def _generate_scene_image(prompt: str, dest: Path, *, seed: int) -> bool:
             seed=seed,
             width=ZOOM_W,
             height=ZOOM_H,
+            refs=tuple(refs),
         )
     )
 
@@ -490,6 +491,12 @@ def generate_shot_candidates(
     created: list[dict[str, Any]] = []
     used_ai = False
     n = int(shot.get("n") or 0)
+
+    # R4: feed locked character reference sheets into the image provider.
+    from tools.drama_qc import locked_refs_for_shot
+
+    refs = tuple(locked_refs_for_shot(slug, shot))
+
     for i, cid in enumerate(ids):
         seed = (base_seed + i * 97) & 0x7FFFFFFF
         rel = candidate_rel(slug, episode, n, cid)
@@ -497,7 +504,7 @@ def generate_shot_candidates(
         dest.parent.mkdir(parents=True, exist_ok=True)
         from tools.drama_retry import retry_call
 
-        ai_ok = bool(retry_call(_generate_scene_image, prompt, dest, seed=seed))
+        ai_ok = bool(retry_call(_generate_scene_image, prompt, dest, seed=seed, refs=refs))
         if not ai_ok:
             _draw_fallback_scene(shot, dest, cast, seed=seed)
         source = "ai" if ai_ok else "fallback"
@@ -1108,6 +1115,20 @@ def render_shot_layers(
         if not _path_for(shot, "scene").is_file() and generated:
             apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
+        # R4: auto identity hard gate. Failed identity marks scene/motion/clip
+        # dirty so retry (重抽) is the natural next step.
+        if used_ai:
+            from tools.drama_qc import qc_shot_identity
+
+            identity = qc_shot_identity(slug, episode, shot, apply=True)
+            if str(identity.get("status") or "") == "ok" and not identity.get("pass"):
+                degrades.append(
+                    {
+                        "shot": int(shot.get("n") or 0),
+                        "layer": "identity",
+                        "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏可重抽",
+                    }
+                )
 
     if "overlay" in wanted:
         _draw_subtitle_overlay(shot, overlay)
