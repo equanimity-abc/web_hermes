@@ -190,13 +190,27 @@ def try_generate_lip(
     if not shutil.which(_ffmpeg_bin()):
         return "fallback"
     provider = _provider()
+    from tools.drama_retry import retry_call
+    from tools.providers import registry
+
     if provider in ("fail", "none", "off"):
         return "fallback"
-    if provider in ("http", "api", "musetalk", "wav2lip") and _http_lip(scene, voice, dest, shot, duration):
+    if registry.has("lip", provider):
+        return retry_call(
+            registry.dispatch,
+            "lip",
+            provider,
+            scene,
+            voice,
+            dest,
+            shot,
+            duration,
+            ok=lambda r: r != "fallback",
+        )
+    # Unknown provider: try http adapter, then local mock.
+    if _http_lip(scene, voice, dest, shot, duration):
         return "http"
-    if _mock_lip(scene, voice, dest, duration):
-        return "mock"
-    return "fallback"
+    return "mock" if _mock_lip(scene, voice, dest, duration) else "fallback"
 
 
 def generate_shot_lip(
