@@ -495,7 +495,9 @@ def generate_shot_candidates(
         rel = candidate_rel(slug, episode, n, cid)
         dest = resolve_safe(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        ai_ok = _generate_scene_image(prompt, dest, seed=seed)
+        from tools.drama_retry import retry_call
+
+        ai_ok = bool(retry_call(_generate_scene_image, prompt, dest, seed=seed))
         if not ai_ok:
             _draw_fallback_scene(shot, dest, cast, seed=seed)
         source = "ai" if ai_ok else "fallback"
@@ -1092,6 +1094,7 @@ def render_shot_layers(
     clip = _path_for(shot, "clip")
 
     rebuilt: list[str] = []
+    degrades: list[dict[str, Any]] = []
     used_tts = False
     used_ai = False
     cards = load_characters(slug)
@@ -1100,6 +1103,8 @@ def render_shot_layers(
     if "scene" in wanted:
         generated = generate_shot_candidates(slug, episode, shot, title=title)
         used_ai = any(item.get("source") == "ai" for item in generated)
+        if not used_ai:
+            degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})
         if not _path_for(shot, "scene").is_file() and generated:
             apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
@@ -1113,12 +1118,14 @@ def render_shot_layers(
         speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
         if speech:
             from tools.drama_models import load_models
+            from tools.drama_retry import retry_call
             from tools.providers import registry
 
             tts_cfg = (load_models(slug) or {}).get("tts") or {}
             tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
             has_audio = bool(
-                registry.dispatch(
+                retry_call(
+                    registry.dispatch,
                     "tts",
                     tts_provider,
                     speech,
@@ -1137,6 +1144,8 @@ def render_shot_layers(
                 voice.unlink()
             except OSError:
                 pass
+        if speech and not has_audio:
+            degrades.append({"shot": int(shot.get("n") or 0), "layer": "voice", "reason": "TTS 失败，本镜无声"})
         rebuilt.append("voice")
     elif voice.is_file() and voice.stat().st_size > 0:
         duration = max(duration, _probe_duration(voice) + 0.25)
@@ -1145,7 +1154,9 @@ def render_shot_layers(
     if do_lip:
         from tools.drama_lip import generate_shot_lip
 
-        generate_shot_lip(slug, episode, shot)
+        lip_info = generate_shot_lip(slug, episode, shot)
+        if lip_info.get("tried") and str(lip_info.get("lip_source") or "") == "fallback":
+            degrades.append({"shot": int(shot.get("n") or 0), "layer": "lip", "reason": "口型失败，回退闭口静图"})
         rebuilt.append("lip")
         assets["lip"] = (shot.get("assets") or {}).get("lip") or assets.get("lip")
         if "clip" not in wanted and "clip" not in locked:
@@ -1174,6 +1185,7 @@ def render_shot_layers(
     return {
         "n": shot.get("n"),
         "rebuilt": rebuilt,
+        "degrades": degrades,
         "duration": shot.get("duration"),
         "camera": shot.get("camera"),
         "scene_source": shot.get("scene_source"),
@@ -1253,6 +1265,7 @@ def render_episode_video(
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     rebuilt: list[int] = []
     skipped: list[int] = []
+    degraded: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     for shot in doc.get("shots") or []:
         if "shot" in (shot.get("locked") or []):
@@ -1266,6 +1279,19 @@ def render_episode_video(
                 continue
             layers = list(LAYERS)
         pending.append(shot)
+
+    # Even skipped shots that already exist can carry stale degrade markers;
+    # collect degrade info from doc regardless of rebuild.
+    for shot in doc.get("shots") or []:
+        for mark in shot.get("degrades") or []:
+            if isinstance(mark, dict):
+                degraded.append(
+                    {
+                        "shot": int(shot.get("n") or 0),
+                        "layer": mark.get("layer"),
+                        "reason": mark.get("reason"),
+                    }
+                )
 
     total = len(pending)
     if on_progress:
@@ -1284,6 +1310,12 @@ def render_episode_video(
             )
         layers = list(LAYERS) if force else list(shot.get("dirty") or []) or list(LAYERS)
         info = render_shot_layers(slug, episode, shot, layers, title=ep_title)
+        info_degrades = info.get("degrades") or []
+        if info_degrades:
+            # merge this shot's fresh degrade marks (drop stale ones for this shot)
+            degraded = [d for d in degraded if int(d.get("shot") or 0) != n]
+            degraded.extend(info_degrades)
+            shot["degrades"] = info_degrades
         if info.get("rebuilt"):
             rebuilt.append(n)
         else:
@@ -1303,7 +1335,15 @@ def render_episode_video(
     else:
         assemble = str(doc.get("assemble") or "unchanged")
         save_doc(doc)
-    return _episode_result(doc, {"rebuilt_shots": rebuilt, "skipped_shots": skipped, "assemble": assemble})
+    return _episode_result(
+        doc,
+        {
+            "rebuilt_shots": rebuilt,
+            "skipped_shots": skipped,
+            "assemble": assemble,
+            "degraded": degraded,
+        },
+    )
 
 
 def rerender_shot(
