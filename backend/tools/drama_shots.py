@@ -337,6 +337,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
         "speaker": str(raw.get("speaker") or ""),
+        "voice": str(raw.get("voice") or ""),
         "camera": str(raw.get("camera") or ""),
         "prompt": str(raw.get("prompt") or ""),
         "trim_in": tl["trim_in"],
@@ -409,6 +410,7 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
         "speaker": str(raw.get("speaker") or ""),
+        "voice": str(raw.get("voice") or ""),
         "camera": str(raw.get("camera") or ""),
         "prompt": str(raw.get("prompt") or ""),
         "locked": _as_str_list(raw.get("locked")),
@@ -459,6 +461,8 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
             dirty.extend(["clip", "motion"])
     if changed("kind") or changed("size"):
         dirty.extend(["clip", "motion", "lip"])
+    if changed("voice"):
+        dirty.extend(["voice", "clip"])
 
     locked = set(_as_str_list(old.get("locked"))) | set(_as_str_list(new_content.get("locked")))
     if "shot" in locked:
@@ -503,6 +507,8 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
         dirty.extend(["clip", "motion"])
     if "kind" in patch or "size" in patch:
         dirty.extend(["clip", "motion", "lip"])
+    if "voice" in patch:
+        dirty.extend(["voice", "clip"])
     locked_set = set(_as_str_list(locked))
     if "shot" in locked_set:
         return []
@@ -532,7 +538,7 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         patch.pop("kind", None)
         patch.pop("size", None)
 
-    before = {k: shot.get(k) for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker")}
+    before = {k: shot.get(k) for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice")}
     for key in ("画面", "对白", "字幕", "timing", "camera"):
         if key in patch and patch[key] is not None:
             shot[key] = str(patch[key])
@@ -580,6 +586,11 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     if str(before.get("speaker") or "") != str(shot.get("speaker") or ""):
         if "lip" not in dirty:
             dirty.append("lip")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
+    if str(before.get("voice") or "") != str(shot.get("voice") or ""):
+        if "voice" not in dirty and "voice" not in locked:
+            dirty.append("voice")
         if "clip" not in dirty and "clip" not in locked:
             dirty.append("clip")
     dirty = [layer for layer in dirty if layer not in locked]
@@ -660,7 +671,7 @@ def merge_from_parsed(
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
             rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
             rec["chosen"] = str(old.get("chosen") or "")
-            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "kind", "size", "speaker"):
+            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "kind", "size", "speaker", "voice"):
                 if key in old:
                     rec[key] = old[key]
             if "kind" in locked:
@@ -783,6 +794,7 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "kind": infer_kind(shot),
         "size": infer_size(shot),
         "speaker": infer_speaker(shot),
+        "voice": shot.get("voice") or "",
         "camera": shot.get("camera"),
         "trim_in": tl["trim_in"],
         "trim_out": tl["trim_out"],

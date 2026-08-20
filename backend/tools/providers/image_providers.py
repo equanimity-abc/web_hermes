@@ -1,8 +1,12 @@
-"""Image generation adapters (R1).
+"""Image generation adapters (R1 + R4 refs contract).
 
 Provider contract: fn(prompt, dest, *, seed=0, slug="", shot=None,
-width=0, height=0) -> bool. Returns False so business code falls back to the
-atmospheric still.
+width=0, height=0, refs=()) -> bool. Returns False so business code falls back
+to the atmospheric still.
+
+`refs`: list[str] of locked character reference-image paths. Providers that
+support img2img / IP-Adapter must consume them for face consistency; txt2img
+providers (pollinations/flux) degrade to a stronger identity clause in prompt.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ def _pollinations(
     shot: Any = None,
     width: int = 0,
     height: int = 0,
+    refs: tuple[str, ...] = (),
 ) -> bool:
     from io import BytesIO
     from urllib.parse import quote
@@ -34,9 +39,18 @@ def _pollinations(
     target_w = int(width or 1620)
     target_h = int(height or 2880)
     model = config.IMAGE_GEN_MODEL or "flux"
+    final_prompt = str(prompt)
+    if refs:
+        # txt2img fallback: emphasize same-face / same-costume since we can't
+        # feed the reference image directly. A real img2img adapter should
+        # consume `refs` and skip this textual nudge.
+        final_prompt = (
+            f"{final_prompt}, keep face identical to the locked character "
+            f"reference sheet, same facial structure and costume"
+        )
     url = (
         "https://image.pollinations.ai/prompt/"
-        f"{quote(str(prompt))}?width=1024&height=1792&model={quote(model)}"
+        f"{quote(final_prompt)}?width=1024&height=1792&model={quote(model)}"
         f"&nologo=true&enhance=true&seed={int(seed) & 0x7FFFFFFF}"
     )
     try:

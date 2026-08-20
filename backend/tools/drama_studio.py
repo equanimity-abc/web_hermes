@@ -449,7 +449,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker", "voice")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
@@ -519,6 +519,72 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         "shot": enrich_shot(shot, slug=slug),
         "dirty": dirty or list(shot.get("dirty") or []),
         "locked": list(shot.get("locked") or []),
+        "shots_json": json_rel(slug, n),
+    }
+
+
+_BATCH_FIELDS = ("camera", "voice", "kind", "i2v", "speaker")
+
+
+def patch_shots(slug: str, episode: int, shot_ns: list[int], field: str, value: Any) -> dict[str, Any]:
+    """R5: batch edit one field across multiple shots (camera / voice / kind / i2v / speaker)."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    field = str(field or "").strip()
+    if field not in _BATCH_FIELDS:
+        raise DramaBadRequest(f"不支持的批量字段：{field}，可选 {', '.join(_BATCH_FIELDS)}")
+
+    shots_wanted = sorted({parse_shot_n(x) for x in (shot_ns or [])})
+    if not shots_wanted:
+        raise DramaBadRequest("需要至少一个 shot 编号")
+    if len(shots_wanted) > 99:
+        raise DramaBadRequest("批量操作最多 99 镜")
+
+    doc = _ensure_shots_doc(slug, n)
+
+    if field == "kind":
+        from tools.drama_models import normalize_kind
+
+        kind = normalize_kind(value)
+        if not kind:
+            raise DramaBadRequest(f"未知镜头类型：{value}")
+        patch_value = kind
+    elif field == "i2v":
+        patch_value = normalize_i2v_mode(value)
+    else:
+        patch_value = str(value or "").strip()
+
+    updated: list[int] = []
+    skipped_locked: list[int] = []
+    changed: list[int] = []
+    for shot in doc.get("shots") or []:
+        shot_num = int(shot.get("n") or 0)
+        if shot_num not in shots_wanted:
+            continue
+        locked = set(shot.get("locked") or [])
+        blocked = {"shot", field} & locked
+        if blocked:
+            skipped_locked.append(shot_num)
+            continue
+        before = shot.get(field)
+        try:
+            apply_patch(shot, {field: patch_value})
+        except ValueError as e:
+            raise DramaBadRequest(str(e)) from e
+        changed.append(shot_num)
+        if str(before or "") != str(shot.get(field) or ""):
+            updated.append(shot_num)
+
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "field": field,
+        "changed": changed,
+        "updated": updated,
+        "skipped_locked": skipped_locked,
+        "shot": None,
+        "shots": [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])],
         "shots_json": json_rel(slug, n),
     }
 
