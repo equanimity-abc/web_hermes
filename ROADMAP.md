@@ -189,9 +189,6 @@ R 解决「像不像专业工具」；S 解决「片好不好、能不能发」�
 
 ## 源码位置
 
-
-## 源码位置
-
 | 项目 | 路径 |
 |------|------|
 | hermes-agent | `D:\liangkai\myagent\my_agent_source\hermes-agent-main\hermes-agent-main\` |
