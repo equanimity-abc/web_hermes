@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -124,14 +125,32 @@ def _hist_embedding(path: Path) -> list[float] | None:
     return [v / total for v in bins]
 
 
+_arcface_app: Any = None
+_arcface_lock = threading.Lock()
+
+
+def _arcface_singleton() -> Any:
+    """Lazy singleton so consecutive shots don't rebuild the model (P1-8)."""
+    global _arcface_app
+    app = _arcface_app
+    if app is not None:
+        return app
+    with _arcface_lock:
+        if _arcface_app is None:
+            from insightface.app import FaceAnalysis  # type: ignore
+
+            _arcface_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+            _arcface_app.prepare(ctx_id=-1, det_size=(640, 640))
+        return _arcface_app
+
+
 def _arcface_embedding(path: Path) -> tuple[list[float] | None, str]:
     try:
-        from insightface.app import FaceAnalysis  # type: ignore
+        import insightface.app  # type: ignore  # noqa: F401 — availability probe
     except ImportError:
         return None, "no_insightface"
     try:
-        app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        app.prepare(ctx_id=-1, det_size=(640, 640))
+        app = _arcface_singleton()
         from PIL import Image
         import numpy as np
 
@@ -155,13 +174,22 @@ def score_pair(left: Path, right: Path) -> dict[str, Any]:
     vec_a, method = _arcface_embedding(left)
     vec_b, method_b = _arcface_embedding(right) if vec_a is not None else (None, method)
     if vec_a is None or vec_b is None or method_b != "arcface":
+        # P1-7: when ArcFace is unavailable, the histogram cosine is a
+        # meaningless numeric proxy — mark it degraded so it can NEVER pass.
         vec_a = _hist_embedding(left)
         vec_b = _hist_embedding(right)
-        method = "proxy"
         if vec_a is None or vec_b is None:
             return {"status": "skipped", "reason": "no_embedder", "method": "skipped", "cosine": None}
+        cosine = round(_cosine(vec_a, vec_b), 4)
+        return {
+            "status": "degraded",
+            "reason": "proxy_identity",
+            "method": "proxy",
+            "cosine": cosine,
+            "hint": "缺 ArcFace，直方图余弦不可判定身份（不得记为通过）",
+        }
     cosine = round(_cosine(vec_a, vec_b), 4)
-    return {"status": "ok", "reason": "", "method": method, "cosine": cosine}
+    return {"status": "ok", "reason": "", "method": "arcface", "cosine": cosine}
 
 
 def _subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:

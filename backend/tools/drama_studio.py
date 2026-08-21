@@ -612,6 +612,7 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
+    _assert_budget(slug, n)
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
     if shot is None:
@@ -905,6 +906,7 @@ def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
     """Enqueue background rerender of dirty shots (D7)."""
     slug = parse_slug(slug)
     n = parse_episode(episode)
+    _assert_budget(slug, n)
     ep = get_episode(slug, n)
     if not ep.get("script"):
         raise DramaNotFound("没有分集剧本")
@@ -926,6 +928,8 @@ def enqueue_job(
     slug = parse_slug(slug)
     n = parse_episode(episode)
     _ensure_shots_doc(slug, n)
+    if str(kind or "").strip() in ("render_episode", "rerender_dirty"):
+        _assert_budget(slug, n)
     from tools.drama_queue import drama_jobs
 
     try:

@@ -329,6 +329,96 @@ def normalize_models(raw: Any) -> dict[str, Any]:
     }
 
 
+def cost_entry(
+    *,
+    provider: str,
+    layer: str,
+    cost: float,
+    shot: int | None = None,
+) -> dict[str, Any]:
+    """Build one structured cost-log entry (shared shape, no side effects)."""
+    from tools.drama_shots import utc_now
+
+    return {
+        "shot": int(shot) if shot else None,
+        "layer": str(layer),
+        "provider": str(provider),
+        "cost": round(max(0.0, float(cost)), 4),
+        "at": utc_now(),
+    }
+
+
+def record_cost(
+    slug: str,
+    episode: int,
+    *,
+    provider: str,
+    layer: str,
+    cost: float,
+    shot: int | None = None,
+) -> dict[str, Any] | None:
+    """Append one actual spend entry to the episode cost log (P1-9).
+
+    Lives on the episode doc (shots.json) so it is part of the workbench truth
+    source. Returns None if the doc does not exist yet (nothing to record).
+    """
+    from tools.drama_shots import load_doc, save_doc
+
+    doc = load_doc(slug, int(episode))
+    if doc is None:
+        return None
+    entries = doc.get("cost_log")
+    if not isinstance(entries, list):
+        entries = []
+    entries.append(cost_entry(provider=provider, layer=layer, cost=cost, shot=shot))
+    doc["cost_log"] = entries
+    save_doc(doc)
+    return doc.get("cost_log")
+
+
+def append_cost(
+    doc: dict[str, Any],
+    *,
+    provider: str,
+    layer: str,
+    cost: float,
+    shot: int | None = None,
+) -> dict[str, Any]:
+    """Append a cost entry into an in-memory episode doc (no disk write).
+
+    Used by the bulk render loop so each shot's spend is recorded exactly once
+    without reloading/saving shots.json per shot.
+    """
+    entries = doc.get("cost_log")
+    if not isinstance(entries, list):
+        entries = []
+        doc["cost_log"] = entries
+    entry = cost_entry(provider=provider, layer=layer, cost=cost, shot=shot)
+    entries.append(entry)
+    return entry
+
+
+def actual_episode_cost(slug: str, episode: int) -> float:
+    """Sum recorded actual spend for an episode (0 when nothing recorded)."""
+    from tools.drama_shots import load_doc
+
+    doc = load_doc(slug, int(episode))
+    if not doc:
+        return 0.0
+    entries = doc.get("cost_log")
+    if not isinstance(entries, list):
+        return 0.0
+    total = 0.0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            total += float(entry.get("cost") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 4)
+
+
 def budget_state(
     slug: str,
     episode: int | None = None,
@@ -360,8 +450,10 @@ def budget_state(
         d = load_doc(slug, episode)
         shots = (d or {}).get("shots") or []
     shots = shots or []
-    est = estimate_episode_i2v(slug, shots, episode=episode, doc=load_doc(slug, episode) if episode else None)
+    ep_doc = load_doc(slug, episode) if episode else None
+    est = estimate_episode_i2v(slug, shots, episode=episode, doc=ep_doc)
     spent = round(float(est.get("i2v_estimate") or 0) + float(est.get("lip_estimate") or 0) + float(est.get("image_estimate") or 0), 4)
+    actual_spent = actual_episode_cost(slug, episode) if episode else 0.0
 
     if not enabled or per_episode <= 0:
         return {
@@ -369,6 +461,7 @@ def budget_state(
             "per_episode": round(per_episode, 2),
             "warn_at": warn_at,
             "spent": spent,
+            "actual_spent": actual_spent,
             "remaining": None,
             "ratio": None,
             "warn": False,
@@ -391,6 +484,7 @@ def budget_state(
         "per_episode": round(per_episode, 2),
         "warn_at": warn_at,
         "spent": spent,
+        "actual_spent": actual_spent,
         "remaining": remaining,
         "ratio": ratio,
         "warn": warn,

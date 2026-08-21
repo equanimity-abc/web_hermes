@@ -1250,10 +1250,58 @@ def render_shot_layers(
     remaining = [layer for layer in (shot.get("dirty") or []) if layer not in rebuilt]
     shot["dirty"] = remaining
     shot["status"] = "rendered" if not remaining and clip.is_file() else "dirty"
+
+    # P1-9: record the actual spend for the providers that really ran this pass.
+    costs: list[dict[str, Any]] = []
+    n = int(shot.get("n") or 0)
+    if "scene" in rebuilt and used_ai:
+        from tools.drama_models import cost_entry
+        from tools.drama_styles import estimate_image
+
+        img = estimate_image(slug, shot, episode=episode)
+        if float(img.get("cost_per_shot") or 0) > 0:
+            costs.append(
+                cost_entry(
+                    provider=str(img.get("provider") or ""),
+                    layer="scene",
+                    cost=float(img.get("cost_per_shot") or 0),
+                    shot=n,
+                )
+            )
+    if "lip" in rebuilt:
+        from tools.drama_lip import estimate_lip
+
+        lip_est = estimate_lip(slug, shot)
+        if lip_est.get("will_run") and float(lip_est.get("cost_per_shot") or 0) > 0:
+            from tools.drama_models import cost_entry
+
+            costs.append(
+                cost_entry(
+                    provider=str(lip_est.get("provider") or ""),
+                    layer="lip",
+                    cost=float(lip_est.get("cost_per_shot") or 0),
+                    shot=n,
+                )
+            )
+    if "clip" in rebuilt:
+        from tools.drama_models import cost_entry, estimate_i2v
+
+        i2v_est = estimate_i2v(slug, shot)
+        if i2v_est.get("will_run") and float(i2v_est.get("cost_per_shot") or 0) > 0:
+            costs.append(
+                cost_entry(
+                    provider=str(i2v_est.get("provider") or ""),
+                    layer="motion",
+                    cost=float(i2v_est.get("cost_per_shot") or 0),
+                    shot=n,
+                )
+            )
+
     return {
         "n": shot.get("n"),
         "rebuilt": rebuilt,
         "degrades": degrades,
+        "costs": costs,
         "duration": shot.get("duration"),
         "camera": shot.get("camera"),
         "scene_source": shot.get("scene_source"),
@@ -1365,6 +1413,8 @@ def render_episode_video(
     if on_progress:
         on_progress(current=0, total=total, message="准备重渲…")
 
+    from tools.drama_models import append_cost
+
     for index, shot in enumerate(pending):
         if cancel_check:
             cancel_check()
@@ -1384,6 +1434,16 @@ def render_episode_video(
             degraded = [d for d in degraded if int(d.get("shot") or 0) != n]
             degraded.extend(info_degrades)
             shot["degrades"] = info_degrades
+        for cost in info.get("costs") or []:
+            if not isinstance(cost, dict):
+                continue
+            append_cost(
+                doc,
+                provider=str(cost.get("provider") or "") or "unknown",
+                layer=str(cost.get("layer") or ""),
+                cost=float(cost.get("cost") or 0),
+                shot=cost.get("shot"),
+            )
         if info.get("rebuilt"):
             rebuilt.append(n)
         else:
@@ -1403,6 +1463,8 @@ def render_episode_video(
     else:
         assemble = str(doc.get("assemble") or "unchanged")
         save_doc(doc)
+    from tools.drama_models import actual_episode_cost
+
     return _episode_result(
         doc,
         {
@@ -1410,6 +1472,7 @@ def render_episode_video(
             "skipped_shots": skipped,
             "assemble": assemble,
             "degraded": degraded,
+            "actual_spent": actual_episode_cost(slug, episode),
         },
     )
 
@@ -1479,6 +1542,24 @@ def rerender_shot(
 
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     info = render_shot_layers(slug, episode, shot, wanted, title=ep_title)
+
+    # P1-10: single-shot rerender must keep the degrade list visible (and the
+    # cost recorded), matching the bulk render_episode result.
+    shot["degrades"] = info.get("degrades") or []
+    from tools.drama_models import actual_episode_cost, append_cost
+
+    for cost in info.get("costs") or []:
+        if not isinstance(cost, dict):
+            continue
+        append_cost(
+            doc,
+            provider=str(cost.get("provider") or "") or "unknown",
+            layer=str(cost.get("layer") or ""),
+            cost=float(cost.get("cost") or 0),
+            shot=cost.get("shot"),
+        )
+    save_doc(doc)
+
     assemble = assemble_episode(doc)
     return _episode_result(
         doc,
@@ -1491,5 +1572,7 @@ def rerender_shot(
             "rebuilt_layers": info.get("rebuilt") or [],
             "skipped_layers": [layer for layer in (requested or wanted) if layer in locked],
             "assemble": assemble,
+            "degraded": info.get("degrades") or [],
+            "actual_spent": actual_episode_cost(slug, episode),
         },
     )
