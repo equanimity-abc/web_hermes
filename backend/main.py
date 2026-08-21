@@ -199,6 +199,17 @@ async def health():
     }
 
 
+@app.get("/api/usage")
+async def usage():
+    """P2-14: process-local LLM usage counters (calls / tokens / chars)."""
+    from llm_client import llm_client
+
+    return {
+        "model": llm_client.model,
+        **llm_client.usage.snapshot(),
+    }
+
+
 @app.get("/api/sessions")
 async def list_sessions():
     return {"sessions": store.list_summaries()}

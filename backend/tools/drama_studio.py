@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from typing import Any
 from urllib.parse import quote
@@ -54,8 +53,14 @@ from tools.drama_snapshots import (
     take_snapshot as _take_snapshot,
 )
 from tools.workspace import resolve_safe, workspace_root
+from tools.drama_common import (
+    DramaBadRequest,
+    DramaNotFound,
+    parse_episode,
+    parse_shot_n,
+    parse_slug,
+)
 
-_SLUG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$")
 _ROOT = "dramas"
 CAMERAS = (
     "punch_in",
@@ -68,43 +73,8 @@ CAMERAS = (
 )
 
 
-class DramaNotFound(LookupError):
-    pass
-
-
-class DramaBadRequest(ValueError):
-    pass
-
-
 def play_url(rel: str) -> str:
     return f"/api/workspace/file?path={quote(str(rel), safe='/')}"
-
-
-def parse_slug(raw: str) -> str:
-    slug = str(raw or "").strip()
-    if not _SLUG_RE.match(slug):
-        raise DramaBadRequest("slug 须为 1–40 位字母数字、下划线或短横线，且以字母或数字开头")
-    return slug
-
-
-def parse_episode(raw: Any) -> int:
-    try:
-        n = int(raw)
-    except (TypeError, ValueError) as e:
-        raise DramaBadRequest("episode 须为正整数 1–99") from e
-    if n < 1 or n > 99:
-        raise DramaBadRequest("episode 范围 1–99")
-    return n
-
-
-def parse_shot_n(raw: Any) -> int:
-    try:
-        n = int(raw)
-    except (TypeError, ValueError) as e:
-        raise DramaBadRequest("shot 须为正整数 1–99") from e
-    if n < 1 or n > 99:
-        raise DramaBadRequest("shot 范围 1–99")
-    return n
 
 
 def _rel(*parts: str) -> str:

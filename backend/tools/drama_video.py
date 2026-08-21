@@ -1111,10 +1111,14 @@ def sync_shots_doc(
 
 
 def _path_for(shot: dict[str, Any], layer: str) -> Path:
+    """Resolve a shot asset path with a readable error on missing/illegal value."""
     rel = (shot.get("assets") or {}).get(layer)
     if not rel:
-        raise ValueError(f"镜头 {shot.get('n')} 缺少 {layer} 路径")
-    path = resolve_safe(rel)
+        raise ValueError(f"镜头 {shot.get('n')} 缺少 {layer} 资产路径，请先生成该层")
+    try:
+        path = resolve_safe(rel)
+    except ValueError as e:
+        raise ValueError(f"镜头 {shot.get('n')} 的 {layer} 路径非法：{rel}") from e
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
