@@ -421,12 +421,45 @@ def _paste_character_refs(img, characters: list[dict[str, Any]]) -> None:
         img.paste(portrait, (x0 + i * (slot_w + gap), y0))
 
 
-def _generate_scene_image(prompt: str, dest: Path, *, seed: int, refs: tuple[str, ...] = ()) -> bool:
+def _generate_scene_image(
+    prompt: str,
+    dest: Path,
+    *,
+    seed: int,
+    refs: tuple[str, ...] = (),
+    slug: str = "",
+    shot: dict[str, Any] | None = None,
+    episode: int | None = None,
+) -> bool:
+    """Generate one scene via the image route table (P0-1).
+
+    The provider comes from image_route(slug, shot) — the same source the
+    workbench estimate reads. Unregistered provider ids (e.g. jimeng until a
+    real adapter lands) degrade to the global default instead of failing.
+    """
     provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+    if slug:
+        from tools.drama_styles import image_route
+
+        route = image_route(slug, shot or {}, episode=episode)
+        route_provider = str(route.get("provider") or "").strip().lower()
+        if route_provider:
+            provider = route_provider
     if provider in ("", "none", "off"):
         return False
+
     from tools.providers import registry
 
+    # Route provider not yet backed by an adapter → fall back to the global
+    # default (same as before P0-1), so adding a new model only needs a
+    # provider module and never a code change.
+    if not registry.has("image", provider):
+        provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+        if provider in ("", "none", "off") or not registry.has("image", provider):
+            return False
+
+    # The route model informs prompt wording via style_prompt_clause; the
+    # adapter itself keeps the historical contract (no model kwarg).
     return bool(
         registry.dispatch(
             "image",
@@ -437,6 +470,8 @@ def _generate_scene_image(prompt: str, dest: Path, *, seed: int, refs: tuple[str
             width=ZOOM_W,
             height=ZOOM_H,
             refs=tuple(refs),
+            slug=slug,
+            shot=shot,
         )
     )
 
@@ -504,7 +539,18 @@ def generate_shot_candidates(
         dest.parent.mkdir(parents=True, exist_ok=True)
         from tools.drama_retry import retry_call
 
-        ai_ok = bool(retry_call(_generate_scene_image, prompt, dest, seed=seed, refs=refs))
+        ai_ok = bool(
+            retry_call(
+                _generate_scene_image,
+                prompt,
+                dest,
+                seed=seed,
+                refs=refs,
+                slug=slug,
+                shot=shot,
+                episode=episode,
+            )
+        )
         if not ai_ok:
             _draw_fallback_scene(shot, dest, cast, seed=seed)
         source = "ai" if ai_ok else "fallback"

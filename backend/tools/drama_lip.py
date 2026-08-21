@@ -33,7 +33,12 @@ def lip_eligible(shot: dict[str, Any], *, models: dict[str, Any] | None = None) 
     roles = shot.get("角色") or []
     role_n = len(roles) if isinstance(roles, list) else len([x for x in str(roles).split(",") if x.strip()])
     dialogue = str(shot.get("对白") or "").strip()
-    only_kinds = list(((models or {}).get("lip") or {}).get("only_kinds") or list(LIP_KINDS))
+    lip_cfg = (models or {}).get("lip") if isinstance((models or {}).get("lip"), dict) else {}
+    # P0-2: a preset/project may explicitly disable lip (cheap), overriding the
+    # provider name. Presence of enabled=False wins over the default-on behavior.
+    if "enabled" in lip_cfg and not bool(lip_cfg.get("enabled")):
+        return {"ok": False, "reason": "口型已在节点配置中关闭"}
+    only_kinds = list(lip_cfg.get("only_kinds") or list(LIP_KINDS))
     if kind in BLOCKED_KINDS or (only_kinds and kind not in only_kinds):
         return {"ok": False, "reason": f"{kind} 镜不开口型"}
     if kind not in LIP_KINDS:
@@ -182,6 +187,7 @@ def try_generate_lip(
     shot: dict[str, Any],
     *,
     duration: float,
+    provider: str | None = None,
 ) -> str:
     if not scene.is_file():
         return "fallback"
@@ -189,11 +195,11 @@ def try_generate_lip(
         return "fallback"
     if not shutil.which(_ffmpeg_bin()):
         return "fallback"
-    provider = _provider()
+    provider = str(provider or _provider() or "").strip().lower()
     from tools.drama_retry import retry_call
     from tools.providers import registry
 
-    if provider in ("fail", "none", "off"):
+    if provider in ("fail", "none", "off", ""):
         return "fallback"
     if registry.has("lip", provider):
         return retry_call(
@@ -220,7 +226,9 @@ def generate_shot_lip(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
-    models = load_models(slug)
+    from tools.drama_models import models_with_overrides, resolve_provider
+
+    models = models_with_overrides(slug, shot=shot, episode=episode)
     gate = lip_eligible(shot, models=models)
     if not gate["ok"] and not force:
         shot["lip_source"] = "blocked"
@@ -232,7 +240,9 @@ def generate_shot_lip(
     voice = resolve_safe(str(assets.get("voice") or ""))
     dest = resolve_safe(rel)
     duration = float(shot.get("duration") or 3)
-    source = try_generate_lip(scene, voice, dest, shot, duration=duration)
+    wanted = str(((models or {}).get("lip") or {}).get("provider") or "musetalk").strip()
+    provider = resolve_provider(models, wanted)
+    source = try_generate_lip(scene, voice, dest, shot, duration=duration, provider=provider)
     shot["lip_source"] = source
     score = None
     if source != "fallback" and dest.is_file():

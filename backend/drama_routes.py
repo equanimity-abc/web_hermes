@@ -215,6 +215,9 @@ class PresetBody(BaseModel):
 
 class NodeBody(BaseModel):
     value: dict
+    scope: str = "project"
+    episode: int | None = None
+    shot: int | None = None
 
 
 @router.get("/projects")
@@ -281,7 +284,14 @@ async def drama_apply_preset(slug: str, body: PresetBody):
 @router.put("/projects/{slug}/config/nodes/{node}")
 async def drama_put_node_config(slug: str, node: str, body: NodeBody):
     try:
-        return put_node_config(slug, node, body.value)
+        return put_node_config(
+            slug,
+            node,
+            body.value,
+            scope=body.scope,
+            episode=body.episode,
+            shot=body.shot,
+        )
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 

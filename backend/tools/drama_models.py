@@ -52,6 +52,19 @@ CURRENCY = "CNY"
 PRESET_IDS = ("cheap", "balanced", "pro")
 DEFAULT_PRESET = "balanced"
 
+# Nodes that can be individually configured (mirrors drama_config.NODE_KEYS).
+NODE_KEYS = (
+    "script",
+    "image",
+    "motion",
+    "lip",
+    "tts",
+    "subtitle",
+    "bgm",
+    "sfx",
+    "qc",
+)
+
 _RESEARCH_FIELDS = ("cost_per_shot", "fallback", "notes")
 
 
@@ -627,3 +640,70 @@ def estimate_episode_i2v(
 
 def public_models(doc: dict[str, Any]) -> dict[str, Any]:
     return normalize_models(doc)
+
+
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``patch`` into ``base``; nested dicts merge by key."""
+    out: dict[str, Any] = dict(base)
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _load_episode_doc(slug: str, episode: int) -> dict[str, Any] | None:
+    from tools.drama_shots import load_doc
+
+    return load_doc(slug, int(episode))
+
+
+def models_with_overrides(
+    slug: str,
+    *,
+    shot: dict[str, Any] | None = None,
+    episode: int | None = None,
+    doc: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Full three-layer effective models for a render decision.
+
+    Layers (low → high): project models.json → episode style pack →
+    episode `models_overrides` → per-shot `shot_models[n]`. The result is
+    re-normalized so ladder/provider fallbacks stay valid.
+    """
+    from tools.drama_styles import load_style, overlay_style
+
+    models = load_models(slug)
+
+    ep_doc = doc
+    style_id = ""
+    if ep_doc is not None:
+        style_id = str(ep_doc.get("style_id") or "")
+    elif episode:
+        ep_doc = _load_episode_doc(slug, int(episode))
+        style_id = str((ep_doc or {}).get("style_id") or "")
+
+    if style_id:
+        style = load_style(slug, style_id)
+        if style:
+            models = overlay_style(models, style)
+
+    ep_doc = ep_doc or {}
+    node_ov = ep_doc.get("models_overrides")
+    if isinstance(node_ov, dict):
+        for node, value in node_ov.items():
+            if node in NODE_KEYS and isinstance(value, dict):
+                models[node] = _deep_merge(models.get(node) or {}, value)
+
+    if shot:
+        shot_models = ep_doc.get("shot_models")
+        if isinstance(shot_models, dict):
+            n = str(shot.get("n") or "").strip()
+            ov = shot_models.get(n)
+            if isinstance(ov, dict):
+                for node, value in ov.items():
+                    if node in NODE_KEYS and isinstance(value, dict):
+                        models[node] = _deep_merge(models.get(node) or {}, value)
+
+    return normalize_models(models)

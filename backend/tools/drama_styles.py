@@ -131,22 +131,21 @@ def overlay_style(models: dict[str, Any], style: dict[str, Any] | None) -> dict[
     return doc
 
 
-def effective_models(slug: str, *, episode: int | None = None, doc: dict[str, Any] | None = None) -> dict[str, Any]:
-    models = load_models(slug)
-    style_id = ""
-    if doc is not None:
-        style_id = str(doc.get("style_id") or "")
-    elif episode:
-        from tools.drama_shots import load_doc
+def effective_models(
+    slug: str,
+    *,
+    episode: int | None = None,
+    doc: dict[str, Any] | None = None,
+    shot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Full effective model config: project models → style pack → episode/shot overrides."""
+    from tools.drama_models import models_with_overrides
 
-        ep = load_doc(slug, int(episode))
-        style_id = str((ep or {}).get("style_id") or "")
-    style = load_style(slug, style_id) if style_id else None
-    return overlay_style(models, style)
+    return models_with_overrides(slug, episode=episode, doc=doc, shot=shot)
 
 
 def image_route(slug: str, shot: dict[str, Any], *, episode: int | None = None, models: dict[str, Any] | None = None) -> dict[str, Any]:
-    models = models or effective_models(slug, episode=episode)
+    models = models or effective_models(slug, episode=episode, shot=shot)
     kind = infer_kind(shot)
     route = dict((models.get("image") or {}).get(kind) or {})
     route["kind"] = kind
@@ -178,7 +177,7 @@ def estimate_image(
     episode: int | None = None,
     models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    models = models or effective_models(slug, episode=episode)
+    models = models or effective_models(slug, episode=episode, shot=shot)
     route = image_route(slug, shot, episode=episode, models=models)
     try:
         cost = float(route.get("cost_per_shot") or 0)

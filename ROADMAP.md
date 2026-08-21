@@ -637,8 +637,8 @@ Q8 依赖 Q0 路由表已稳定
 
 | 代号 | 做什么 | 验收 | 状态 |
 |------|--------|------|------|
-| **R0** | 统一配置中心：`presets/*.json` 三档 + 三层合并 + models.json 升级 schema + `get/put_node_config` API | 一键切 cheap/balanced/pro，节点配置落盘生效 | 建议 |
-| **R1** | Provider 适配器插件化：`providers/` 目录，统一 image/i2v/lip/tts 接口，动态加载 | 加新模型只写适配器不改业务 | 建议 |
+| **R0** | 统一配置中心：`presets/*.json` 三档 + 三层合并 + models.json 升级 schema + `get/put_node_config` API | 一键切 cheap/balanced/pro，节点配置落盘生效 | ✅ |
+| **R1** | Provider 适配器插件化：`providers/` 目录，统一 image/i2v/lip/tts 接口，动态加载 | 加新模型只写适配器不改业务 | ✅ |
 | **R2** | 节点配置面板：工作台检查器加「模型/参数」区，四层切换 | 不开代码给每镜换 provider/model | ✅ |
 | **R3** | 鲁棒性：出图/TTS/I2V/口型统一重试 + 熔断 + 降级清单 | 一集渲完出「降级/失败项」，无静默默片 | ✅ |
 | **R4** | 一致性硬闸：参考图引导(IP-Adapter 若可) + identity 余弦阈值 ≥0.65 + 标脏可重抽 | 同角色连续 5 镜 identity 达标 | ✅ |
@@ -714,6 +714,57 @@ R5 / R6 / R7 / R8 可与 R3/R4 部分并行
 | 分镜资产 / 单镜重渲（D0） | ✅ DONE |
 | 漫剧工作台 REST + 分镜台 UI（D1） | ✅ DONE |
 | 分层重做 + 锁（D2） | ✅ DONE |
+
+---
+
+## 健康检查与改进计划（R0–R8 完成后）
+
+> 完整逐条报告见 [`docs/漫剧智能体健康检查与改进计划.md`](./docs/漫剧智能体健康检查与改进计划.md)。本节只落开发决策与排期。
+
+**结论：** R 系列把统一配置 / provider 插件化 / 重试 / 一致性 / 批量 / 回滚 / 成本 / 验收的**骨架、接口、UI 占位**都搭起来了，但「配置中心决定一切」这条主线在生产路径上没完全穿透（出图 / 口型 / 剧本三个节点脱节），且 I2V 存在会误导验收的真 bug。修完下面的 P0 才谈「专业顶级」。
+
+### 一、P0 —— 已完成 ✅
+
+| # | 问题 | 落点 | 修法 |
+|---|------|------|------|
+| 1 | 出图不消费 `image` 路由表 | `drama_video._generate_scene_image` 读全局 `config.IMAGE_GEN_PROVIDER` | 改为 `drama_styles.image_route(slug, shot)` 取 provider，走 `registry.dispatch("image", ...)` |
+| 2 | 口型不消费 `lip` 路由表 | `drama_lip.try_generate_lip` 读 env `LIP_PROVIDER` | 与 `estimate_lip` 一致走 `resolve_provider(models, lip.provider)` |
+| 3 | I2V 返回值布尔误判 | `drama_i2v.try_generate_i2v`：`ok` 是字符串 `"ai"/"none"`，`if ok` 恒真 | `ok = (retry_call(...) == "ai")`，失败正确回退 Ken Burns |
+| 4 | L3 真 I2V 恒被 mock 短路 | `drama_i2v`：`planned=="L3"` 直接 `_provider_l3_mock` | L3 先走 `resolve_provider` 的 adapter，失败再回落 mock 并记 degraded |
+| 5 | 「三层覆盖」只有两层 | `drama_config` / `drama_styles.effective_models` 未读分集 overrides | 定义 `doc.models_overrides` schema，`effective_models` 合并第三层，`put_node_config` 支持 `scope=episode/shot` |
+
+**验收：** 工作台给任意镜换 image/lip provider 后真实生成走对应 adapter；I2V 失败诚实回退、`i2v_source` 不虚假；L3 在 kling 可用时真走 http。
+
+### 二、P1 —— 高优（约 1–2 周）
+
+| # | 问题 | 修法 |
+|---|------|------|
+| 6 | 只有顺序重试无熔断 | `drama_retry` 加 CircuitBreaker + 指数退避 + 结构化降级清单 |
+| 7 | 缺 ArcFace 时直方图余弦可「假通过」 | proxy 分数标 `degraded`，禁止 proxy 直接通过；只有 arcface 才能 ok+pass |
+| 8 | ArcFace 逐镜重建模型 | 模块级缓存单例 `FaceAnalysis` |
+| 9 | 预算闸只估不实、覆盖不全 | `_assert_budget` 扩到 render/candidates；成功生成落 `cost_log` 实际消费 |
+| 10 | 单镜 rerender 丢降级清单 | `rerender_shot` 回填本镜 `degrades` 到结果 |
+
+**验收：** 一集渲染后「成功/失败/降级」齐全可审计；无 ArcFace 时身份项为「未判定」而非「通过」；预算超支时整集 + 出图均被阻断。
+
+### 三、P2 —— 中优 / 长期
+
+| # | 问题 | 修法 |
+|---|------|------|
+| 11 | `script` 节点未接线 | `llm_client` 按 `script.provider/model/refine_model` 草稿→精修 |
+| 12 | 无测试 | 建 `backend/tests/`，守护 retry/路由/快照/预算/锁 |
+| 13 | 大单体 + 薄封装重复 | 抽公共参数解析与统一错误映射 |
+| 14 | LLM 用量无成本治理 | 计量 token/调用量，成本面板同显 LLM + 生成 |
+| 15 | `render_shot_layers._path_for` 未捕获非法路径 | 先校验 assets 存在，给出可读业务错误 |
+
+### 四、验收清单（对照「专业顶级」五条）
+
+- [ ] 不开代码，给**任意节点**换模型即生效（scene/motion/lip/tts/script 全打通），不止估费。
+- [ ] 一集渲染必有结构化「成功/失败/降级/熔断」清单，无静默默片、无虚假 `ai`。
+- [ ] 同角色连续 5 镜 identity 用 **ArcFace**（非 proxy）达标，不达标标脏可重抽。
+- [ ] 一集 8 镜批量改参数 ≤5 次操作（R5 已具备，保持）。
+- [ ] 预算闸覆盖整集 + 出图 + I2V/口型/关键帧，且区分「估算 vs 实际」。
+- [ ] 版本回滚（R6）改坏后可一键回退并恢复锁帧画面。
 
 ---
 

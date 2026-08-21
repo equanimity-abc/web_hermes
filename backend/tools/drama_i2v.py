@@ -31,9 +31,14 @@ def should_try_i2v(shot: dict[str, Any], *, slug: str | None = None) -> bool:
     mode = normalize_i2v_mode(shot.get("i2v"))
     if mode == "off":
         return False
-    from tools.drama_models import i2v_run_ladder
+    from tools.drama_models import i2v_run_ladder, models_with_overrides
 
-    ladder = i2v_run_ladder(shot, slug=slug or str(shot.get("_slug") or "") or None)
+    effective_slug = slug or str(shot.get("_slug") or "") or None
+    models = None
+    if effective_slug:
+        episode = int(shot.get("_episode") or 0) or None
+        models = models_with_overrides(effective_slug, shot=shot, episode=episode)
+    ladder = i2v_run_ladder(shot, slug=effective_slug, models=models)
     if ladder == "L0":
         return False
     if ladder == "L4":
@@ -319,9 +324,11 @@ def _provider_l3_mock(scene: Path, dest: Path, shot: dict[str, Any], seconds: fl
 def _resolved_i2v_provider(shot: dict[str, Any]) -> str:
     slug = str(shot.get("_slug") or "")
     if slug:
-        from tools.drama_models import estimate_i2v
+        from tools.drama_models import estimate_i2v, models_with_overrides
 
-        est = estimate_i2v(slug, shot)
+        episode = int(shot.get("_episode") or 0) or None
+        models = models_with_overrides(slug, shot=shot, episode=episode)
+        est = estimate_i2v(slug, shot, models=models)
         if est.get("expensive"):
             from tools.drama_models import MAX_EXPENSIVE_I2V
             from tools.drama_shots import load_doc
@@ -342,6 +349,50 @@ def _resolved_i2v_provider(shot: dict[str, Any]) -> str:
     return _provider() or "mock"
 
 
+_UNKNOWN_I2V_PROVIDERS = (
+    "mock",
+    "mock_ai",
+    "l0",
+    "fail",
+    "http",
+    "api",
+    "kling",
+    "hailuo",
+    "pollinations",
+    "none",
+    "off",
+    "",
+)
+
+
+def _run_i2v_provider(provider: str, scene: Path, dest: Path, shot: dict[str, Any], sec: float) -> bool:
+    """Dispatch one I2V adapter with retry; returns True only on real 'ai' output.
+
+    The registry failure sentinel is the string "none"; a successful adapter
+    returns "ai". retry_call returns the last result verbatim, so compare
+    explicitly rather than trusting string truthiness.
+    """
+    from tools.drama_retry import retry_call
+    from tools.providers import registry
+
+    result = retry_call(
+        registry.dispatch,
+        "i2v",
+        provider,
+        scene,
+        dest,
+        shot,
+        sec,
+        ok=lambda r: r == "ai",
+    )
+    if result == "ai":
+        return True
+    if provider not in _UNKNOWN_I2V_PROVIDERS:
+        # Unknown provider id: try http, then degraded local Ken Burns motion.
+        return bool(_provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec))
+    return False
+
+
 def try_generate_i2v(
     scene: Path,
     dest: Path,
@@ -349,50 +400,41 @@ def try_generate_i2v(
     *,
     seconds: float | None = None,
 ) -> str:
-    """Return i2v_source: ai | none (caller should still-image zoompan when none)."""
+    """Return i2v_source: ai | keys | none (caller should still-image zoompan when none)."""
     if not scene.is_file():
         raise FileNotFoundError(f"缺少画面：{scene}")
     if not shutil.which(_ffmpeg_bin()):
         return "none"
 
-    from tools.drama_models import effective_motion_ladder
+    from tools.drama_models import effective_motion_ladder, models_with_overrides
 
     sec = i2v_seconds(shot) if seconds is None else max(MIN_SECONDS, min(float(seconds), MAX_SECONDS))
-    planned = effective_motion_ladder(shot, slug=str(shot.get("_slug") or "") or None)
+    slug = str(shot.get("_slug") or "") or None
+    episode = int(shot.get("_episode") or 0) or None
+    models = models_with_overrides(slug, shot=shot, episode=episode) if slug else None
+    planned = effective_motion_ladder(shot, slug=slug, models=models)
     provider = _resolved_i2v_provider(shot)
     ok = False
+
     if planned == "L4":
         from tools.drama_keys import compose_keys_motion
 
         if compose_keys_motion(scene, dest, shot, max(sec, 3.0)):
             shot["i2v_ladder"] = "L4"
             return "keys"
+
     if planned == "L3":
-        ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
+        # P0-4: try the resolved (possibly expensive) adapter first; only on
+        # failure degrade to local dual-phase Ken Burns mock L3.
+        ok = _run_i2v_provider(provider, scene, dest, shot, max(sec, 3.0))
+        if not ok:
+            ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
         if ok:
             shot["i2v_ladder"] = "L3"
-    if not ok:
-        from tools.drama_retry import retry_call
-        from tools.providers import registry
-
-        ok = retry_call(
-            registry.dispatch,
-            "i2v",
-            provider,
-            scene,
-            dest,
-            shot,
-            sec,
-            ok=lambda r: r == "ai",
-        )
-        # Unknown providers: try http then degraded local motion.
-        if not ok and provider not in ("mock", "mock_ai", "l0", "fail", "http", "api", "kling", "hailuo", "pollinations", "none", "off", ""):
-            ok = bool(_provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec))
+    else:
+        ok = _run_i2v_provider(provider, scene, dest, shot, sec)
 
     if ok:
-        rel = str(shot.get("assets", {}).get("motion") or "")
-        if rel:
-            shot["assets"]["motion"] = rel
         if provider in ("kling", "hailuo") and not shot.get("i2v_deferred"):
             shot["i2v_expensive"] = True
         return "ai"

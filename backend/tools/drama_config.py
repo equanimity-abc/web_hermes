@@ -123,11 +123,69 @@ def get_config(slug: str) -> dict[str, Any]:
     }
 
 
-def put_node_config(slug: str, node: str, value: Any) -> dict[str, Any]:
+def put_node_config(
+    slug: str,
+    node: str,
+    value: Any,
+    *,
+    scope: str = "project",
+    episode: int | None = None,
+    shot: int | None = None,
+) -> dict[str, Any]:
+    """Write one node config into the layer selected by scope (P0-5).
+
+    scope=project → models.json (default). scope=episode → episode doc
+    `models_overrides[node]`. scope=shot → episode doc `shot_models[shot][node]`.
+    All layers deep-merge into the value already present at that scope.
+    """
     if node not in NODE_KEYS:
         raise ValueError(f"未知节点：{node}，可选 {', '.join(NODE_KEYS)}")
     if not isinstance(value, dict):
         raise ValueError("节点配置必须是 JSON 对象")
+
+    scope = str(scope or "project").strip().lower()
+    if scope == "episode":
+        if not episode:
+            raise ValueError("episode 覆盖需要 episode")
+        from tools.drama_shots import load_doc, save_doc
+
+        doc = load_doc(slug, int(episode))
+        if doc is None:
+            raise ValueError("该集尚无 shots.json，无法写入分集覆盖（请先 parse_shots / 渲染）")
+        overrides = doc.get("models_overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        current = overrides.get(node) if isinstance(overrides.get(node), dict) else {}
+        overrides[node] = {**current, **value}
+        doc["models_overrides"] = overrides
+        save_doc(doc)
+        return {"slug": slug, "scope": "episode", "episode": int(episode), "node": node, "value": overrides[node]}
+
+    if scope == "shot":
+        if not episode or not shot:
+            raise ValueError("shot 覆盖需要 episode 和 shot")
+        from tools.drama_shots import load_doc, save_doc
+
+        doc = load_doc(slug, int(episode))
+        if doc is None:
+            raise ValueError("该集尚无 shots.json，无法写入单镜覆盖（请先 parse_shots / 渲染）")
+        shot_models = doc.get("shot_models")
+        if not isinstance(shot_models, dict):
+            shot_models = {}
+        key = str(int(shot))
+        shot_ov = shot_models.get(key)
+        if not isinstance(shot_ov, dict):
+            shot_ov = {}
+        current = shot_ov.get(node) if isinstance(shot_ov.get(node), dict) else {}
+        shot_ov[node] = {**current, **value}
+        shot_models[key] = shot_ov
+        doc["shot_models"] = shot_models
+        save_doc(doc)
+        return {"slug": slug, "scope": "shot", "episode": int(episode), "shot": int(shot), "node": node, "value": shot_ov[node]}
+
+    if scope != "project":
+        raise ValueError(f"未知 scope：{scope}，可选 project / episode / shot")
+
     doc = load_models(slug)
     current = doc.get(node) if isinstance(doc.get(node), dict) else {}
     merged = {**current, **value}
@@ -135,6 +193,7 @@ def put_node_config(slug: str, node: str, value: Any) -> dict[str, Any]:
     doc = save_models(slug, doc)
     return {
         "slug": slug,
+        "scope": "project",
         "node": node,
         "value": doc.get(node),
         "models": normalize_models(doc),
