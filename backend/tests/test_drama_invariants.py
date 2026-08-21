@@ -164,3 +164,30 @@ def test_path_for_readable_error():
         _path_for({"n": 4, "assets": {}}, "scene")
     assert "scene" in str(exc.value)
     assert "4" in str(exc.value)
+
+
+# ------------------------------------------------ regression: budget_state UnboundLocalError
+def test_budget_state_nonempty_shots_no_unbound_local(monkeypatch):
+    """Regression: non-empty shots + episode must not raise UnboundLocalError.
+
+    The bug: `from tools.drama_shots import load_doc` lived inside a conditional
+    block but was later used unconditionally. Non-empty shots skipped the block
+    and left the local `load_doc` unbound.
+    """
+    import tools.drama_models as dm
+
+    monkeypatch.setattr(dm, "load_models", lambda slug: dm.default_models())
+    monkeypatch.setattr(
+        dm,
+        "estimate_episode_i2v",
+        lambda slug, shots, episode=None, doc=None: {
+            "i2v_estimate": 0.0,
+            "lip_estimate": 0.0,
+            "image_estimate": 0.0,
+        },
+    )
+    monkeypatch.setattr(dm, "actual_episode_cost", lambda slug, episode: 0.0)
+
+    result = dm.budget_state("test-slug", episode=1, shots=[{"n": 1}])
+    assert result["enabled"] is False
+    assert result["spent"] == 0.0

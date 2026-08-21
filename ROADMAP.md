@@ -1,20 +1,194 @@
-# 自研 Agent：源码消化 + 增量开发路线
+# AI 漫剧 · 专业级制作流水线路线图
 
-对照 `hermes-agent` / `hermes-webui`，在现有 Vue3 + FastAPI 脚手架上逐步长出真 Agent。
+目标：**一条能稳定产出可商用竖屏漫剧的专业生产线**——人是导演、Agent 是摄制组；每个节点可干预、可配模型、可量化验收；成片质量天花板由真实媒体模型决定，而不是由 mock / Ken Burns 兜底。
 
-**原则：** 学不变量与骨架，重写精简核心，不 fork 巨石。
+**原则：** 学不变量与骨架，重写精简核心，不 fork 巨石；业务能力放插件与 `/api/drama/*`，**不改 `agent/loop.py`**。
+
+---
+
+## 你现在的真实位置（2026-08 审计）
+
+| 层 | 状态 | 一句话 |
+|----|------|--------|
+| 通用 Agent 腰（P0–P6） | ✅ | 会话 / SSE / 审批 / 沙箱 / 记忆 / 压缩已齐 |
+| 草稿资产流水线（P7–P8 + D0–D8） | ✅ | 分镜资产化、锁/脏、工作台、候选墙、时间线、任务条 |
+| 摄制组能力（Q0–Q8） | ✅ 降级交付 | kind 路由 / BGM 版权 / 口型·运动·关键帧 / QC 骨架齐；真模型多为降级 |
+| 专业骨架（R0–R8 + 健康检查 P0–P2） | ✅ 骨架齐 | 预设 / provider 插件 / 重试熔断 / 预算 / 快照 / 验收清单已落地 |
+| **成片质量天花板** | ❌ **未达专业级** | 默认仍是 Pollinations 静图 + Ken Burns + edge-tts + mock 口型 |
+
+**结论：** 导演工作台与资产合同已经「专业级」；媒体后端与量产效率仍是「试稿级」。下一刀不是再堆功能开关，而是 **S 系列：把名字里的模型变成真适配器，并把流水线打造成可商用交付系统。** 见下文 **成片天花板与专业交付（S0–S8）**。
+
+历史阶段（Hermes 学习 / D / Q / R）保留在本文后半，作决策档案；日常只跟 S 系列与文首验收清单。
 
 ---
 
-## 你现在的真实位置
+## 八维差距诊断（对照专业级目标）
 
-**通用腰（P0–P6）已齐：** 会话耐久化、Agent loop、工具 registry、SSE、审批、工作区沙箱、记忆与压缩。
+### 1. 框架
 
-**漫剧草稿成片（P7–P8 + D0–D8）已齐：** 可改、可锁、可单镜重渲的竖屏草稿流水线；I2V 失败回退静图运镜。
+| 优点 | 问题 | 优化方向 |
+|------|------|----------|
+| 窄腰 + 尖端：ReAct loop 冻结，漫剧走 `tiktok_drama` + REST | `drama_studio.py` / `tiktok_drama.py` / `DramaStudio.vue` 体量过大，薄封装重复 | 按节点拆 facade；插件 action 表驱动 |
+| `shots.json` 为真相源，锁/脏语义清晰 | `drama_script.py` 草稿→精修已写，**未接入** `save_episode` / Agent 主路径 | 剧本节点真正走 script 配置 |
+| provider registry 已插件化 | `pro` 预设写 `jimeng`/`kling`/`musetalk`/`volcano`，多数是别名或未注册 → 静默回落 Pollinations/edge-tts | **名实相符**：无适配器不得标 available；UI 明示「降级中」 |
+| 工作台与聊天双通道 | README / 结构图滞后于真实模块 | 文档与能力清单同步代码 |
 
-**下一刀：R 系列（专业级流水线优化）。** Q 系列已齐；下一步把「统一配置、provider 插件化、生成鲁棒性、一致性硬闸、批量操作、版本回滚、成本治理、验收清单」补成专业顶级，见下文 **专业级流水线优化（R0–R8）**。
+### 2. 性能
+
+| 现状 | 风险 | 优化方向 |
+|------|------|----------|
+| **单线程** `DramaQueue` worker | 多镜出图/I2V 严格串行，量产吞吐差 | 可配置 worker 池；按 slug:episode 互斥，跨集可并行 |
+| TTS 等在同步工具里 `asyncio.run` | 嵌套事件循环 / 阻塞 worker | 统一异步或线程池跑 IO |
+| `models.json` 有 `rpm` 字段 | **运行时未限流** | 适配器前统一 token-bucket |
+| 无生成结果缓存（同 prompt+seed） | 重试与候选墙重复打 API | 内容寻址缓存（hash→资产） |
+| 进程内队列 + JSON 落盘 | 重启后状态易脏 | 队列恢复协议 + 僵死 job 清理 |
+| 上下文按字符压缩 | 长剧连聊仍易顶 `AGENT_MAX_TURNS` | 项目级短记忆（本集进度卡）替代整段历史 |
+
+### 3. 功能
+
+| 已有 | 缺口（专业生产线必补） |
+|------|------------------------|
+| 立项→Bible→大纲→分集→分镜→渲→导出→QC | 真·角色一致性出图（IP-Adapter / 即梦 / 角色 LoRA） |
+| L0–L4 运动阶梯 | 真 I2V（可灵/海螺等），而非 still+Ken Burns 冒充 |
+| dialogue 口型链路 | 真 MuseTalk/Wav2Lip（本地或托管），mock 仅作开发档 |
+| edge-tts | 高拟真 / 声音克隆（火山/Azure），角色音色库 |
+| 静态 PIL 字幕 | ASS 卡拉OK、逐字时间轴（preset 已写 karaoke 未实现） |
+| BGM + license 闸 | 商用 SFX 曲库、情绪 cue 自动建议（Skill `drama-audio` 仍缺） |
+| 单人 action 关键帧 | 多角色对手戏 / 群戏动作（明确延后，需单独立项） |
+| 本机单用户 | 多用户、权限、云端 GPU worker、计费（商用化后置） |
+
+### 4. 界面易用性
+
+| 现状 | 问题 | 优化方向 |
+|------|------|----------|
+| 模式多：分镜/剧本/角色/时间线/QC/配置/快照/预算… | 功能全但**路径长**，新用户不知「下一步」 | 按 14 节点做「制片进度条」；未完成节点高亮下一步 CTA |
+| 聊天 ↔ 漫剧侧栏切换 | Agent 与工作台状态弱联动 | 聊天完成 parse/render 后一键跳转对应镜 |
+| 检查器字段密 | 常用操作与高级配置平铺 | 默认「导演模式」三键（锁画面 / 重配音 / 重渲脏）；配置进二级 |
+| 成本估费已挂按钮 | 失败原因、降级原因不够显眼 | 任务条 + 镜上 badge：`ai` / ` kenburns` / `mock-lip` |
+
+### 5. 界面友好性
+
+| 现状 | 问题 | 优化方向 |
+|------|------|----------|
+| 功能型 SaaS：indigo 主色、白底、pill 分集钮 | 视觉偏「后台工具」，长时间审片疲劳 | 暗色审片主题（预览区优先）；信息层级以预览为中心 |
+| `DramaStudio.vue` 单体 | 改一处易回归 | 按 boardMode 拆子页组件 |
+| 错误靠 banner 文案 | 缺恢复指引 | 可操作错误：带「重试 / 打开配置 / 查看降级清单」按钮 |
+| 无引导 / 空态弱 | 空项目不知从 Agent 立项还是手建 | 空态三步：立项 → 定妆 → 出第一镜 |
+
+### 6. 智能体智能性
+
+| 现状 | 问题 | 优化方向 |
+|------|------|----------|
+| 单工具多 action + `_GUIDE` 工作流 | 无独立「导演规划」步，易漏锁/漏 QC | Skill 强制检查点：parse 后 classify；渲前 budget；导出前 checklist |
+| HITL：审批 / 锁 / 建议不自动锁 | Agent 仍可能绕开工作台直接整集重渲 | 危险 action 默认需工作台确认或只 enqueue |
+| MEMORY.md 跨会话 | 不感知「本集第几镜卡在哪」 | 写入 `episode_status.md` 短状态供 system 注入 |
+| QC / coverage 仅建议 | 无「未通过则自动只重下游」闭环（需人点） | 可选半自动：identity 失败自动标脏 scene 并入队（仍不自动点通过） |
+| `drama-vertical-short` / `drama-character-bible` Skill | ROADMAP 仍「计划」 | 补齐垂直短剧节奏与定妆 Skill |
+
+### 7. 流水线合理性
+
+| 现状 | 问题 | 优化方向 |
+|------|------|----------|
+| 节点顺序正确：结构→资产→渲→时间线→QC | 剧本精修节点脱节 | wire `drama_script` |
+| 锁/脏/降级回退设计合理 | 重跑 scene 未锁时仍耗额度且可能漂移 | 同 seed+prompt 缓存；换模型才强制新图 |
+| export 不毁源 clip | job retry 新 ID，非 exactly-once | 幂等 job key（slug+ep+kind+params hash） |
+| pro 名与真实能力不符 | 易在验收时误判「已专业」 | 预设健康检查：available 与 registry 对齐，启动告警 |
+| 字幕 karaoke 仅配置 | 成片观感仍「PPT 配音」 | 字幕节点真正实现或从 pro 描述中去掉直到落地 |
+
+### 8. 视频质量天花板
+
+| 维度 | 今天真实天花板 | 专业级目标 |
+|------|----------------|------------|
+| 画幅 | 1080×1920 @ 25fps | 保持；可选 60s+ 多段拼 |
+| 画面 | Pollinations/flux 静图，参考图≈prompt 文案 | 角色参考图引导 + ArcFace≥0.65 硬闸 |
+| 运动 | Ken Burns / mock I2V；Pollinations「I2V」实为再拉静图 | 真 I2V 2–4s；action 走 L3/L4 |
+| 口型 | mock 嘴动 + 可选 HTTP | MuseTalk 级；LSE 可过线 |
+| 配音 | edge-tts | 角色克隆 / 情感 TTS |
+| 剪辑 | xfade≈0.32s、trim、音量、BGM duck→−14 LUFS | 保留；加字幕动画与轻调色预设 |
+| 一致性 | 无 insightface 时 identity **不能真通过** | 安装 ArcFace 为 pro 默认依赖 |
+
+**一句话：** 今天能稳定出「精致试片」；要出「可上架漫剧」，必须先填满 `providers/` 真后端，再谈花活。
 
 ---
+
+## 成片天花板与专业交付（S0–S8）
+
+一句话目标：**让 pro 预设名实相符，让量产吞吐与导演体验配得上专业工作室，把质量闸从「能跑」抬到「能发」。**
+
+### 总验收（S 系列结束时必须全勾）
+
+- [ ] `pro` 预设下：dialogue/action 出图走已注册且 researched 的一致性模型；失败有降级清单且 UI 标红，不静默冒充。
+- [ ] 任意镜配置的 image/i2v/lip/tts **真实 dispatch** 到对应适配器；无适配器则配置面板禁用该项。
+- [ ] 同角色连续 ≥5 镜 ArcFace identity 达标率可统计；不达标自动标脏可重抽。
+- [ ] 一集 8–12 镜：出图可并行（≥2 worker），总耗时相对单线程明显下降。
+- [ ] 导演模式：新手 15 分钟内完成「立项→定妆→第一镜预览」；专家模式仍可达全部节点。
+- [ ] 导出前 checklist 全绿（或人工签署豁免）才能标「可发布」；`skipped` QC 不得当通过。
+- [ ] 剧本节点走 draft→refine；Agent `save_episode` 与工作台同一质量路径。
+- [ ] `.env.example` + 最小集成测试 + 预设/registry 一致性自检。
+
+### 开发阶段
+
+| 代号 | 周期 | 做什么 | 验收 | 状态 |
+|------|------|--------|------|------|
+| **S0** | 约 3–5 天 | **诚实层：** 启动/切换预设时校验 registry；未实现 provider 强制 `available:false`；工作台显示「当前真实后端」条；去掉虚假 pro 承诺文案 | 选 pro 但无 jimeng/kling key 时明确提示降级路径，不装作商用模型已开 | ⏳ |
+| **S1** | 约 2–4 周 | **真出图：** 即梦或等价角色一致性 HTTP 适配器 + ref 图上传协议；候选墙走同一路由；缓存同 seed | 锁参考图后连续 5 镜主观一致性明显提升；identity 可跑 ArcFace | ⏳ |
+| **S2** | 约 2–4 周 | **真运动：** Kling/Hailuo（或自建 I2V_API）适配器打通；Pollinations 不得再标为 ai I2V；L3 失败诚实回退 | action 镜 `i2v_source=ai` 时确为视频模型输出 | ⏳ |
+| **S3** | 约 2–4 周 | **真口型 + 真 TTS：** MuseTalk/Wav2Lip 托管或本地；volcano/Azure 真适配；去掉「别名伪装」 | dialogue CU 可过 LSE 基线；角色音色可换引擎 | ⏳ |
+| **S4** | 约 1–2 周 | **性能：** 队列多 worker + rpm 限流 + 生成缓存 + 跨集并行；TTS 不再嵌套 asyncio.run 堵死 | 同机 8 镜出图墙钟时间 ≤ 单线程约 50% | ⏳ |
+| **S5** | 约 1–2 周 | **流水线补洞：** `save_episode`/工作台接入 `drama_script`；幂等 job key；字幕 karaoke 或降级文案；SFX 最小曲库 | 剧本精修与配置中心 script 节点一致 | ⏳ |
+| **S6** | 约 1–2 周 | **导演 UX：** 14 节点进度条、空态三步、导演三键模式、聊天→镜头深链、降级 badge | 新用户无文档可出第一镜预览 | ⏳ |
+| **S7** | 约 1 周 | **Agent 智能：** episode 进度卡注入；渲前/导出前强制检查点 Skill；identity 失败半自动标脏入队 | Agent 少整集盲渲，多「建议→人锁→只渲脏」 | ⏳ |
+| **S8** | 约 1 周 | **交付工程：** `.env.example`、预设自检测试、关键路径集成测、结构化日志、README 结构刷新 | CI 可跑 `pytest`；新人按 README 十分钟起服 | ⏳ |
+
+**顺序硬约束：**
+
+```text
+S0（诚实层，立刻做）
+  → S1（真出图）与 S2（真 I2V）可并行（都依赖调研卡 + key）
+  → S3（口型/TTS）依赖 S1 锁脸质量，否则口型浪费
+  → S4（性能）可与 S1–S3 后半并行
+  → S5（流水线补洞）不阻塞 S1，但须在 S6 前完成 script 接线
+S6（UX）依赖 S0 降级可见
+S7（Agent）依赖 S5 检查点数据
+S8（工程）贯穿，S0 即可开始补 .env.example
+```
+
+### 每刀代码落点（保持窄腰）
+
+| 刀 | 主要落点 | 工作台 | 插件 / Skill |
+|----|----------|--------|--------------|
+| S0 | `drama_models` research 卡 + registry.has 对齐；`drama_config` 健康检查 | 顶栏「真实后端」条 | — |
+| S1 | `providers/image_providers.py` 新适配器；ref 协议 | 定妆/候选墙 | — |
+| S2 | `providers/i2v_providers.py`；禁止 pollinations 冒充 ai | 运动档与来源 badge | — |
+| S3 | `providers/lip_*.py` / `tts_*.py` 去伪别名 | 口型/音色面板 | — |
+| S4 | `drama_queue` worker 池；rpm；disk cache | 任务条显示并行进度 | — |
+| S5 | `tiktok_drama.save_episode` → `drama_script`；job 幂等；字幕 | 剧本页「精修」 | — |
+| S6 | 拆分 `DramaStudio` 子页；进度条组件 | 导演模式 | — |
+| S7 | `episode_status` + Skill 检查点 | — | `drama-director` / 新 vertical-short |
+| S8 | `.env.example`、tests、logging、README | — | — |
+
+### 明确不做（本系列）
+
+- 不改 `agent/loop.py`。
+- 不在无 API/无 GPU 时把外部模型标 `available: true`。
+- 不把多角色同框对打塞进本系列验收（另开 T 系列）。
+- 不做云端多租户计费（可另开 Ops 系列）。
+- 不用「再写一层巨石编排器」替代现有 shots 资产模型。
+
+### 与历史系列的关系
+
+```text
+P 腰 → D 资产工作台 → Q 摄制组路由 → R 配置/鲁棒/成本骨架
+                                         ↓
+                              S 真模型 + 吞吐 + 导演体验 + 可发布闸
+```
+
+R 解决「像不像专业工具」；S 解决「片好不好、能不能发」。
+
+---
+
+## 源码位置
+
 
 ## 源码位置
 
@@ -177,7 +351,7 @@ Tool Registry
 
 ## 建议的下一步行动
 
-P0–P8 + D0–D8 + Q0–Q8 已齐。下一刀 **R0（统一配置中心）**；业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。完整计划见下文 **专业级流水线优化（R0–R8）**。
+P0–P8 + D0–D8 + Q0–Q8 + R0–R8（含健康检查 P0–P2）骨架已齐。下一刀 **S0（诚实层）→ S1/S2（真出图 / 真 I2V）**；业务继续放插件与 `/api/drama/*`，**不要改 `agent/loop.py`**。完整计划见文首 **成片天花板与专业交付（S0–S8）**。
 
 ---
 
@@ -757,7 +931,9 @@ R5 / R6 / R7 / R8 可与 R3/R4 部分并行
 | 14 | LLM 用量无成本治理 | 计量 token/调用量，成本面板同显 LLM + 生成 |
 | 15 | `render_shot_layers._path_for` 未捕获非法路径 | 先校验 assets 存在，给出可读业务错误 |
 
-### 四、验收清单（对照「专业顶级」五条）
+### 四、验收清单（对照「专业顶级」—— R 骨架 + S 成片）
+
+**R 骨架（应已接近完成，回归时复查）：**
 
 - [ ] 不开代码，给**任意节点**换模型即生效（scene/motion/lip/tts/script 全打通），不止估费。
 - [ ] 一集渲染必有结构化「成功/失败/降级/熔断」清单，无静默默片、无虚假 `ai`。
@@ -766,11 +942,20 @@ R5 / R6 / R7 / R8 可与 R3/R4 部分并行
 - [ ] 预算闸覆盖整集 + 出图 + I2V/口型/关键帧，且区分「估算 vs 实际」。
 - [ ] 版本回滚（R6）改坏后可一键回退并恢复锁帧画面。
 
+**S 成片（当前主线，见文首 S0–S8）：**
+
+- [ ] pro 预设与 registry 名实相符；无适配器不高亮「商用模型已启用」。
+- [ ] 真一致性出图 + 真 I2V + 真口型/TTS 至少各接一条可演示路径。
+- [ ] 多 worker 量产吞吐达标；rpm 与生成缓存生效。
+- [ ] 导演模式可引导至第一镜；导出「可发布」闸与 QC 诚实。
+
 ---
 
 ## 相关文档
 
 - 项目 README：[`README.md`](./README.md)
+- 本文主线：**文首 · 成片天花板与专业交付（S0–S8）**
+- 专业级流水线优化计划（R 系列细节）：[`docs/漫剧专业流水线优化计划.md`](./docs/漫剧专业流水线优化计划.md)
+- 健康检查原文：[`docs/漫剧智能体健康检查与改进计划.md`](./docs/漫剧智能体健康检查与改进计划.md)
 - Canvas 可视化副本（Cursor）：`~/.cursor/projects/d-liangkai-myagent-my-tiktok-video/canvases/agent-learning-roadmap.canvas.tsx`
 - 专业级成片计划 Canvas：`~/.cursor/projects/d-liangkai-myagent-my-tiktok-video/canvases/drama-pro-roadmap.canvas.tsx`
-- 专业级流水线优化计划：[`docs/漫剧专业流水线优化计划.md`](./docs/漫剧专业流水线优化计划.md)

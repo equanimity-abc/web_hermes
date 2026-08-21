@@ -430,6 +430,8 @@ def budget_state(
     shot list. When budget.enabled and spent > per_episode, generation of
     expensive layers is blocked until the budget is raised or disabled.
     """
+    from tools.drama_shots import load_doc
+
     doc = load_models(slug)
     b = doc.get("budget") or {}
     try:
@@ -445,8 +447,6 @@ def budget_state(
     warn_at = max(0.05, min(warn_at, 1.0))
 
     if not shots and episode:
-        from tools.drama_shots import load_doc
-
         d = load_doc(slug, episode)
         shots = (d or {}).get("shots") or []
     shots = shots or []
