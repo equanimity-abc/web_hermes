@@ -43,6 +43,9 @@ export function useDramaStudio() {
   const snapshotsOpen = ref(false)
   const budgetDraft = ref({ enabled: false, per_episode: 0, warn_at: 0.8 })
   const budgetOpen = ref(false)
+  const qcChecklist = ref(null)
+  const checklistOpen = ref(false)
+  const rejectingAll = ref(false)
   const batchField = ref('camera')
   const batchValue = ref('')
   const batchFields = [
@@ -1089,6 +1092,40 @@ export function useDramaStudio() {
     }
   }
 
+  async function refreshQcChecklist() {
+    if (!slug.value || !episodeN.value) return
+    try {
+      const data = await dramaApi.getQcChecklist(slug.value, episodeN.value)
+      qcChecklist.value = data
+    } catch (e) {
+      error.value = e.message || String(e)
+    }
+    return qcChecklist.value
+  }
+
+  function toggleChecklistPanel() {
+    checklistOpen.value = !checklistOpen.value
+    if (checklistOpen.value) void refreshQcChecklist()
+  }
+
+  async function rejectAllProblems() {
+    if (!slug.value || !episodeN.value) return
+    rejectingAll.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.rejectAllQc(slug.value, episodeN.value)
+      qcChecklist.value = data
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已一键退回 ${data.summary?.total || 0} 镜（标脏待重渲）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rejectingAll.value = false
+    }
+  }
+
   async function runEpisodeQc() {
     if (!slug.value || !episodeN.value) return
     error.value = ''
@@ -1391,6 +1428,12 @@ export function useDramaStudio() {
     budgetOpen,
     toggleBudgetPanel,
     saveBudget,
+    qcChecklist,
+    checklistOpen,
+    rejectingAll,
+    toggleChecklistPanel,
+    refreshQcChecklist,
+    rejectAllProblems,
     toggleShotSelected,
     clearShotSelection,
     selectAllShots,

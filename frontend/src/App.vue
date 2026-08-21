@@ -117,6 +117,12 @@ const {
   budgetOpen: dramaBudgetOpen,
   toggleBudgetPanel,
   saveBudget,
+  qcChecklist: dramaQcChecklist,
+  checklistOpen: dramaChecklistOpen,
+  rejectingAll: dramaRejectingAll,
+  toggleChecklistPanel,
+  refreshQcChecklist,
+  rejectAllProblems,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -339,6 +345,9 @@ onMounted(() => {
       :budget-warn="dramaBudgetWarn"
       :budget-draft="dramaBudgetDraft"
       :budget-open="dramaBudgetOpen"
+      :qc-checklist="dramaQcChecklist"
+      :checklist-open="dramaChecklistOpen"
+      :rejecting-all="dramaRejectingAll"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
       @select-config-node="selectConfigNode"
@@ -352,6 +361,9 @@ onMounted(() => {
       @delete-snapshot="deleteSnapshotVersion"
       @toggle-budget="toggleBudgetPanel"
       @save-budget="saveBudget"
+      @toggle-checklist="toggleChecklistPanel"
+      @refresh-checklist="refreshQcChecklist"
+      @reject-all-qc="rejectAllProblems"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"

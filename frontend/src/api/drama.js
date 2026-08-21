@@ -334,6 +334,19 @@ export function qcEpisode(slug, episode) {
   )
 }
 
+export function getQcChecklist(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc/checklist`,
+  )
+}
+
+export function rejectAllQc(slug, episode) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc/reject-all`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 export function passEpisodeQc(slug, episode) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/qc/pass`,

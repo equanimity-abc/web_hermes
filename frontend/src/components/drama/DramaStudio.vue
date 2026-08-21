@@ -50,6 +50,9 @@ const props = defineProps({
   budgetWarn: { type: Boolean, default: false },
   budgetDraft: { type: Object, required: true },
   budgetOpen: { type: Boolean, default: false },
+  qcChecklist: { type: Object, default: null },
+  checklistOpen: { type: Boolean, default: false },
+  rejectingAll: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -116,6 +119,9 @@ const emit = defineEmits([
   'delete-snapshot',
   'toggle-budget',
   'save-budget',
+  'toggle-checklist',
+  'refresh-checklist',
+  'reject-all-qc',
 ])
 
 const previewMode = ref('shot')
@@ -1203,6 +1209,37 @@ function onDrop(n) {
           <p class="drama-empty-hint">改动只作用于当前节点，立即落盘生效，下次渲染按新配置路由。</p>
         </template>
         <template v-else-if="boardMode === 'qc'">
+          <div class="drama-freeze">
+            <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-checklist')">
+              {{ checklistOpen ? '收起清单' : '一屏验收清单' }}
+            </button>
+            <span>skipped 不能点通过</span>
+          </div>
+          <div v-if="checklistOpen" class="drama-checklist-panel">
+            <p v-if="!qcChecklist" class="drama-empty-hint">点「跑验收」或直接点「刷新」生成清单。</p>
+            <template v-else>
+              <p class="drama-empty-hint" :class="qcChecklist.can_pass ? 'drama-qc-pass' : 'drama-qc-fail'">
+                整集 {{ qcChecklist.can_pass ? '可通过' : '待修' }}
+                <template v-if="qcChecklist.block_reason"> · {{ qcChecklist.block_reason }}</template>
+              </p>
+              <div class="drama-checklist-summary">
+                <span v-for="(n, g) in qcChecklist.summary" :key="g" :class="{ zero: !n }">
+                  {{ g }} {{ n }}
+                </span>
+              </div>
+              <div v-for="(labels, g) in qcChecklist.groups" :key="g">
+                <p v-if="labels.length" class="drama-check-group"><strong>{{ g }}</strong></p>
+                <ul v-if="labels.length" class="drama-impact-list">
+                  <li v-for="label in labels" :key="label">{{ label }}</li>
+                </ul>
+              </div>
+              <div class="drama-actions">
+                <button type="button" class="btn-primary" :disabled="rejectingAll || saving" @click="emit('reject-all-qc')">
+                  {{ rejectingAll ? '退回中…' : '一键退回问题镜（标脏）' }}
+                </button>
+              </div>
+            </template>
+          </div>
           <p class="drama-empty-hint" :class="episodeQc?.verdict === '通过' ? 'drama-qc-pass' : ''">
             整集 {{ episodeQc?.verdict || '待修' }}
             · 通过 {{ episodeQc?.summary?.passed ?? 0 }}

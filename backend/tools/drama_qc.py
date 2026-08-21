@@ -899,3 +899,92 @@ def mark_episode_passed(doc: dict[str, Any], *, passed: bool) -> dict[str, Any]:
         qc["block_reason"] = report.get("block_reason") or ""
     doc["qc"] = qc
     return public_episode_qc(doc)
+
+
+def _shot_block_type(shot: dict[str, Any], bundle: dict[str, Any]) -> list[tuple[str, str]]:
+    """R8: classify shot problems into one-screen checklist groups.
+
+    Returns (group, label) pairs. Groups: dirty / fallback / identity / lip /
+    flicker / unlocked / voice.
+    """
+    n = int(shot.get("n") or 0)
+    out: list[tuple[str, str]] = []
+    dirty = [str(x) for x in (shot.get("dirty") or [])]
+    if dirty:
+        out.append(("dirty", f"Shot {n} 脏层：{'/'.join(dirty)}"))
+
+    scene_source = str(shot.get("scene_source") or "")
+    if scene_source == "fallback":
+        out.append(("fallback", f"Shot {n} 画面降级为静图"))
+    if str(shot.get("i2v_source") or "") == "fallback":
+        out.append(("fallback", f"Shot {n} 运动降级为静图运镜"))
+    if str(shot.get("lip_source") or "") == "fallback":
+        out.append(("fallback", f"Shot {n} 口型回退闭口"))
+
+    for key, label in (("identity", "身份"), ("lip", "口型"), ("flicker", "闪烁")):
+        check = bundle.get(key)
+        status = str((check or {}).get("status") or "")
+        if status == "skip" or status == "skipped":
+            out.append((key, f"Shot {n} {label} skipped（不得记为通过）"))
+        elif status == "ok" and not (check or {}).get("pass"):
+            out.append((key, f"Shot {n} {label} 未通过"))
+
+    need_voice = bool(str(shot.get("对白") or "").strip() or str(shot.get("字幕") or "").strip())
+    if need_voice:
+        voice = _asset_file(shot, "voice")
+        if voice is None:
+            out.append(("voice", f"Shot {n} 无声（TTS 未生成/失败）"))
+
+    locked = set(shot.get("locked") or [])
+    if infer_kind(shot) == "dialogue" and need_voice and "shot" not in locked and "scene" not in locked:
+        out.append(("unlocked", f"Shot {n} 对白镜画面未锁，改剧本可能被覆盖"))
+
+    return out
+
+
+def qc_episode_checklist(slug: str, episode: int, doc: dict[str, Any]) -> dict[str, Any]:
+    """R8: one-screen 'can this episode pass' checklist with one-click reject."""
+    from tools.drama_shots import ordered_shots_from_doc
+
+    doc = doc or {}
+    ordered = ordered_shots_from_doc(doc)
+    rows: list[dict[str, Any]] = []
+    groups: dict[str, list[str]] = {}
+    order = ("dirty", "fallback", "identity", "lip", "flicker", "voice", "unlocked")
+    for shot in ordered:
+        bundle = normalize_shot_qc(shot.get("qc")) or {}
+        problems = _shot_block_type(shot, bundle)
+        row = {
+            "n": int(shot.get("n") or 0),
+            "kind": infer_kind(shot),
+            "can_pass": all(check_allows_pass(bundle.get(key)) for key in ("identity", "lip", "flicker")),
+            "verdict": str(bundle.get("verdict") or "待修"),
+            "problems": [label for _, label in problems],
+        }
+        for group, label in problems:
+            groups.setdefault(group, []).append(label)
+        rows.append(row)
+
+    summary = {g: len(groups.get(g) or []) for g in order}
+    summary["total"] = len(rows)
+    can_pass = bool(rows) and all(r["can_pass"] for r in rows)
+    loudness = normalize_episode_qc(doc.get("qc")).get("loudness")
+    if not check_allows_pass(loudness):
+        can_pass = False
+
+    reasons = []
+    for g in order:
+        for label in groups.get(g) or []:
+            reasons.append(label)
+    if loudness and not check_allows_pass(loudness):
+        reasons.append(str((loudness or {}).get("hint") or "响度未达 -14 LUFS"))
+
+    return {
+        "slug": slug,
+        "episode": episode,
+        "can_pass": can_pass,
+        "summary": summary,
+        "groups": {g: groups.get(g, []) for g in order},
+        "shots": rows,
+        "block_reason": next(iter(reasons), "" if can_pass else "尚未跑验收"),
+    }

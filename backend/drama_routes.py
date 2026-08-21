@@ -47,6 +47,8 @@ from tools.drama_studio import (
     lock_key,
     qc_shot,
     qc_episode,
+    qc_checklist,
+    reject_all_qc,
     pass_episode_qc,
     pass_shot_qc,
     reject_shot_qc,
@@ -503,6 +505,22 @@ async def drama_qc_episode(slug: str, episode: int):
     try:
         return qc_episode(slug, episode)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/episodes/{episode}/qc/checklist")
+async def drama_qc_checklist(slug: str, episode: int):
+    try:
+        return qc_checklist(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/qc/reject-all")
+async def drama_reject_all_qc(slug: str, episode: int):
+    try:
+        return reject_all_qc(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 
 

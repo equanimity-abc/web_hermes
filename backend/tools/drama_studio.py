@@ -1048,6 +1048,44 @@ def qc_episode(slug: str, episode: int) -> dict[str, Any]:
     return {"slug": slug, "episode": n, "qc": ep.get("qc"), "hint": (ep.get("qc") or {}).get("block_reason") or "验收已跑，通过必须以脚本为准"}
 
 
+def qc_checklist(slug: str, episode: int) -> dict[str, Any]:
+    """R8: one-screen checklist of what blocks this episode from passing."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_qc import qc_episode_checklist
+
+    return qc_episode_checklist(slug, n, doc)
+
+
+def reject_all_qc(slug: str, episode: int) -> dict[str, Any]:
+    """R8: reject every problem shot at once (mark 待修 + dirty)."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
+    from tools.drama_qc import mark_shot_verdict
+
+    rejected: list[int] = []
+    for shot in doc.get("shots") or []:
+        sn = int(shot.get("n") or 0)
+        if sn < 1 or "shot" in (shot.get("locked") or []):
+            continue
+        try:
+            mark_shot_verdict(shot, "待修")
+        except ValueError:
+            continue
+        dirty = [str(x) for x in (shot.get("dirty") or [])]
+        for layer in ("scene", "motion", "lip", "clip"):
+            if layer not in dirty and layer not in (shot.get("locked") or []):
+                dirty.append(layer)
+        shot["dirty"] = dirty
+        if dirty:
+            shot["status"] = "dirty"
+        rejected.append(sn)
+    save_doc(doc)
+    return qc_checklist(slug, n)
+
+
 def pass_episode_qc(slug: str, episode: int) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
