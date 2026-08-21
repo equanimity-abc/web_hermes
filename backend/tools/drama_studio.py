@@ -24,6 +24,7 @@ from tools.drama_characters import (
 from tools.drama_models import (
     SHOT_KINDS,
     SHOT_SIZES,
+    budget_state as _budget_state,
     estimate_episode_i2v,
     estimate_i2v,
     load_models,
@@ -397,6 +398,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "shot_sizes": list(SHOT_SIZES),
         "models": public_models(models),
         "cost": estimate_episode_i2v(slug, (doc or {}).get("shots") or [], episode=n, doc=doc),
+        "budget": _budget_state(slug, episode=n, shots=(doc or {}).get("shots") or []),
         "style_id": str((doc or {}).get("style_id") or ""),
         "styles": [public_style(item) for item in list_styles(slug)],
         "coverage": _public_coverage(doc),
@@ -983,10 +985,19 @@ def retry_render_job(job_id: str) -> dict[str, Any]:
         raise DramaBadRequest(str(e)) from e
 
 
+def _assert_budget(slug: str, episode: int) -> None:
+    state = _budget_state(slug, episode=episode)
+    if state.get("blocked"):
+        raise DramaBadRequest(
+            f"{state.get('reason') or '本集预算已超支'}（已估 {state.get('spent')} / {state.get('per_episode')} {state.get('currency')}）"
+        )
+
+
 def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
+    _assert_budget(slug, n)
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
     if shot is None:
@@ -1187,6 +1198,7 @@ def generate_lip_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
+    _assert_budget(slug, n)
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
     if shot is None:
@@ -1217,6 +1229,7 @@ def generate_keys_shot(slug: str, episode: int, shot_n: int, count: int | None =
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
+    _assert_budget(slug, n)
     doc = _ensure_shots_doc(slug, n)
     shot = find_shot(doc, shot_n)
     if shot is None:
@@ -1311,6 +1324,11 @@ def patch_models(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     current = load_models(slug)
     if "currency" in patch and patch["currency"]:
         current["currency"] = str(patch["currency"]).strip().upper()
+    if "budget" in patch and isinstance(patch["budget"], dict):
+        budget = current.setdefault("budget", {})
+        for key, value in patch["budget"].items():
+            if key in ("enabled", "per_episode", "warn_at", "note") and value is not None:
+                budget[key] = value
     doc = save_models(slug, current)
     return {"slug": slug, "models": public_models(doc)}
 

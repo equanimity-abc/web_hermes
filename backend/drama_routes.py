@@ -179,6 +179,7 @@ class ModelsPatch(BaseModel):
     provider: str | None = None
     available: bool | None = None
     currency: str | None = None
+    budget: dict | None = None
 
 
 class ExportBody(BaseModel):

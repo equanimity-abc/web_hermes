@@ -457,6 +457,17 @@ export function classifyShots(slug, episode, force = false) {
   )
 }
 
+export function getModels(slug) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/models`)
+}
+
+export function patchModels(slug, body) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/models`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
 export function applyStyle(slug, episode, styleId = '') {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/style`,

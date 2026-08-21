@@ -110,6 +110,13 @@ const {
   toggleSnapshotsPanel,
   restoreSnapshotVersion,
   deleteSnapshotVersion,
+  budget: dramaBudget,
+  budgetBlocked: dramaBudgetBlocked,
+  budgetWarn: dramaBudgetWarn,
+  budgetDraft: dramaBudgetDraft,
+  budgetOpen: dramaBudgetOpen,
+  toggleBudgetPanel,
+  saveBudget,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -327,6 +334,11 @@ onMounted(() => {
       :selected-shot-ids="dramaSelectedShotIds"
       :snapshots="dramaSnapshots"
       :snapshots-open="dramaSnapshotsOpen"
+      :budget="dramaBudget"
+      :budget-blocked="dramaBudgetBlocked"
+      :budget-warn="dramaBudgetWarn"
+      :budget-draft="dramaBudgetDraft"
+      :budget-open="dramaBudgetOpen"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
       @select-config-node="selectConfigNode"
@@ -338,6 +350,8 @@ onMounted(() => {
       @toggle-snapshots="toggleSnapshotsPanel"
       @restore-snapshot="restoreSnapshotVersion"
       @delete-snapshot="deleteSnapshotVersion"
+      @toggle-budget="toggleBudgetPanel"
+      @save-budget="saveBudget"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"

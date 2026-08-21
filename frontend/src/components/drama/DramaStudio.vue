@@ -45,6 +45,11 @@ const props = defineProps({
   selectedShotIds: { type: Array, default: () => [] },
   snapshots: { type: Array, default: () => [] },
   snapshotsOpen: { type: Boolean, default: false },
+  budget: { type: Object, default: null },
+  budgetBlocked: { type: Boolean, default: false },
+  budgetWarn: { type: Boolean, default: false },
+  budgetDraft: { type: Object, required: true },
+  budgetOpen: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -109,6 +114,8 @@ const emit = defineEmits([
   'toggle-snapshots',
   'restore-snapshot',
   'delete-snapshot',
+  'toggle-budget',
+  'save-budget',
 ])
 
 const previewMode = ref('shot')
@@ -893,6 +900,36 @@ function onDrop(n) {
                     ? '节点编辑'
                     : '检查器'
         }}</h2>
+        <div v-if="budget?.enabled" class="drama-budget-bar" :class="{ blocked: budgetBlocked, warn: budgetWarn }">
+          <span>预算 {{ budget.currency }} {{ budget.spent }} / {{ budget.per_episode }}</span>
+          <em v-if="budgetBlocked">已超支 · 生成已禁用（先在下方调高或关闭）</em>
+          <em v-else-if="budgetWarn">{{ budget.reason }}</em>
+          <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-budget')">
+            {{ budgetOpen ? '收起预算' : '设置' }}
+          </button>
+        </div>
+        <div v-else>
+          <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-budget')">
+            预算闸（未启用）
+          </button>
+        </div>
+        <div v-if="budgetOpen" class="drama-budget-panel">
+          <label class="drama-check">
+            <input v-model="budgetDraft.enabled" type="checkbox" />
+            启用预算闸
+          </label>
+          <label>
+            每集预算（{{ budget?.currency || 'CNY' }}）
+            <input v-model.number="budgetDraft.per_episode" type="number" min="0" step="0.1" />
+          </label>
+          <label>
+            警告线（0–1）
+            <input v-model.number="budgetDraft.warn_at" type="number" min="0.05" max="1" step="0.05" />
+          </label>
+          <button type="button" class="btn-primary" :disabled="saving" @click="emit('save-budget')">
+            {{ saving ? '保存中…' : '保存预算' }}
+          </button>
+        </div>
         <div v-if="boardMode === 'shots' && selectedShotIds.length" class="drama-batch-panel">
           <h3 class="drama-layers-title">批量编辑（已选 {{ selectedShotIds.length }} 镜）</h3>
           <label>

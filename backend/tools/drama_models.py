@@ -231,6 +231,12 @@ def default_models() -> dict[str, Any]:
         "script": {"provider": "deepseek", "model": "deepseek-v4-flash", "refine_model": "deepseek-reasoner"},
         "tts": {"provider": "edge-tts"},
         "subtitle": {"style": "static"},
+        "budget": {
+            "enabled": False,
+            "per_episode": 0.0,
+            "warn_at": 0.8,
+            "note": "",
+        },
     }
 
 
@@ -306,6 +312,78 @@ def normalize_models(raw: Any) -> dict[str, Any]:
         "tts": {**base["tts"], **(data.get("tts") if isinstance(data.get("tts"), dict) else {})},
         "subtitle": {**base["subtitle"], **(data.get("subtitle") if isinstance(data.get("subtitle"), dict) else {})},
         "qc": {**base["qc"], **(data.get("qc") if isinstance(data.get("qc"), dict) else {})},
+        "budget": {**base["budget"], **(data.get("budget") if isinstance(data.get("budget"), dict) else {})},
+    }
+
+
+def budget_state(
+    slug: str,
+    episode: int | None = None,
+    shots: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """R7: per-episode estimated spend + budget gate (warn/block).
+
+    spent = i2v estimate + lip estimate + image estimate from the current
+    shot list. When budget.enabled and spent > per_episode, generation of
+    expensive layers is blocked until the budget is raised or disabled.
+    """
+    doc = load_models(slug)
+    b = doc.get("budget") or {}
+    try:
+        enabled = bool(b.get("enabled"))
+        per_episode = float(b.get("per_episode") or 0)
+        warn_at = float(b.get("warn_at") or 0.8)
+    except (TypeError, ValueError):
+        enabled = False
+        per_episode = 0.0
+        warn_at = 0.8
+    if per_episode < 0:
+        per_episode = 0.0
+    warn_at = max(0.05, min(warn_at, 1.0))
+
+    if not shots and episode:
+        from tools.drama_shots import load_doc
+
+        d = load_doc(slug, episode)
+        shots = (d or {}).get("shots") or []
+    shots = shots or []
+    est = estimate_episode_i2v(slug, shots, episode=episode, doc=load_doc(slug, episode) if episode else None)
+    spent = round(float(est.get("i2v_estimate") or 0) + float(est.get("lip_estimate") or 0) + float(est.get("image_estimate") or 0), 4)
+
+    if not enabled or per_episode <= 0:
+        return {
+            "enabled": False,
+            "per_episode": round(per_episode, 2),
+            "warn_at": warn_at,
+            "spent": spent,
+            "remaining": None,
+            "ratio": None,
+            "warn": False,
+            "blocked": False,
+            "reason": "预算未启用",
+            "currency": str(doc.get("currency") or CURRENCY),
+        }
+
+    remaining = round(per_episode - spent, 4)
+    ratio = round(spent / per_episode, 4) if per_episode > 0 else 0.0
+    blocked = ratio >= 1.0
+    warn = ratio >= warn_at and not blocked
+    reason = ""
+    if blocked:
+        reason = f"本集预算已超支（已估 {spent} / {per_episode}），请先调高预算或关闭闸门"
+    elif warn:
+        reason = f"本集预算已用 {ratio * 100:.0f}%（{spent} / {per_episode}），接近上限"
+    return {
+        "enabled": True,
+        "per_episode": round(per_episode, 2),
+        "warn_at": warn_at,
+        "spent": spent,
+        "remaining": remaining,
+        "ratio": ratio,
+        "warn": warn,
+        "blocked": blocked,
+        "reason": reason,
+        "currency": str(doc.get("currency") or CURRENCY),
     }
 
 

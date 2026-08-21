@@ -41,6 +41,8 @@ export function useDramaStudio() {
   const selectedShotIds = ref([])
   const snapshots = ref([])
   const snapshotsOpen = ref(false)
+  const budgetDraft = ref({ enabled: false, per_episode: 0, warn_at: 0.8 })
+  const budgetOpen = ref(false)
   const batchField = ref('camera')
   const batchValue = ref('')
   const batchFields = [
@@ -366,6 +368,48 @@ export function useDramaStudio() {
 
   function selectAllShots() {
     selectedShotIds.value = shots.value.map((s) => s.n)
+  }
+
+  const budget = computed(() => episode.value?.budget || null)
+  const budgetBlocked = computed(() => Boolean(budget.value?.blocked))
+  const budgetWarn = computed(() => Boolean(budget.value?.warn))
+
+  function fillBudgetDraft() {
+    const b = episode.value?.budget || {}
+    budgetDraft.value = {
+      enabled: Boolean(b.enabled),
+      per_episode: Number(b.per_episode || 0),
+      warn_at: Number(b.warn_at ?? 0.8),
+    }
+  }
+
+  function toggleBudgetPanel() {
+    budgetOpen.value = !budgetOpen.value
+    if (budgetOpen.value) fillBudgetDraft()
+  }
+
+  async function saveBudget() {
+    if (!slug.value) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.patchModels(slug.value, {
+        budget: {
+          enabled: Boolean(budgetDraft.value.enabled),
+          per_episode: Number(budgetDraft.value.per_episode || 0),
+          warn_at: Number(budgetDraft.value.warn_at ?? 0.8),
+        },
+      })
+      await openEpisode(episodeN.value || 1)
+      notice.value = budgetDraft.value.enabled
+        ? `预算闸已开启（每集 ¥${budgetDraft.value.per_episode}，警告线 ${Math.round(budgetDraft.value.warn_at * 100)}%）`
+        : '预算闸已关闭'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
   }
 
   async function refreshSnapshots() {
@@ -1340,6 +1384,13 @@ export function useDramaStudio() {
     batchFields,
     snapshots,
     snapshotsOpen,
+    budget,
+    budgetBlocked,
+    budgetWarn,
+    budgetDraft,
+    budgetOpen,
+    toggleBudgetPanel,
+    saveBudget,
     toggleShotSelected,
     clearShotSelection,
     selectAllShots,

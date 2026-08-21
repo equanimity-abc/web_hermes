@@ -644,7 +644,7 @@ Q8 依赖 Q0 路由表已稳定
 | **R4** | 一致性硬闸：参考图引导(IP-Adapter 若可) + identity 余弦阈值 ≥0.65 + 标脏可重抽 | 同角色连续 5 镜 identity 达标 | ✅ |
 | **R5** | 批量操作：分镜多选 + 批量改运镜/音色/kind/i2v/speaker | 一集 8 镜改参数 ≤5 次操作 | ✅ |
 | **R6** | 版本回滚：scene/shots.json 自动快照 + 撤销 | 改坏一键回退上一版 | ✅ |
-| **R7** | 成本治理：provider 带 cost_per_shot，渲染前预估 + 按钮显示 + 预算闸 | 开工前见账单，贵模型按镜花 | 建议 |
+| **R7** | 成本治理：provider 带 cost_per_shot，渲染前预估 + 按钮显示 + 预算闸 | 开工前见账单，贵模型按镜花 | ✅ |
 | **R8** | 验收清单页：汇总 fallback/无声/未锁/未过 identity，一键退回 | 一集能不能过一屏看清 | 建议 |
 
 **顺序硬约束：**
@@ -669,7 +669,7 @@ R5 / R6 / R7 / R8 可与 R3/R4 部分并行
 | R4 | 扩 `drama_qc.py` + IP-Adapter 适配器 | identity 分数/重抽 | `qc_shot` |
 | R5 | 扩 `useDramaStudio.js` + `drama_studio.py` | 分镜多选 + 批量改（camera/voice/kind/i2v/speaker） | `patch_shots` |
 | R6 | `drama_snapshots.py` | 时间线「版本历史」面板：自动快照/恢复/删除 | `restore_snapshot` |
-| R7 | 扩 `drama_models.py` cost | 生成按钮估费/预算条 | 复用估费 |
+| R7 | 扩 `drama_models.py` cost | 预算条 + 设置面板 + 生成入口禁用 | `budget_state` + `_assert_budget` |
 | R8 | 扩 `drama_qc.py` + `DramaStudio.vue` | 验收清单页 | `qc_episode` |
 
 ### 明确不做（本系列）
