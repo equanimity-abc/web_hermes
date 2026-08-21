@@ -432,6 +432,24 @@ export function lockCoverage(slug, episode, sid) {
   )
 }
 
+export function listSnapshots(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots`)
+}
+
+export function restoreSnapshot(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots/restore/${encodeURIComponent(sid)}`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function deleteSnapshot(slug, episode, sid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/snapshots/${encodeURIComponent(sid)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export function classifyShots(slug, episode, force = false) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/classify`,

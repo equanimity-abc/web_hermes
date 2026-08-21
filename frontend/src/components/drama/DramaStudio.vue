@@ -43,6 +43,8 @@ const props = defineProps({
   selectedConfigNode: { type: String, default: 'script' },
   configNodeDraft: { type: String, default: '' },
   selectedShotIds: { type: Array, default: () => [] },
+  snapshots: { type: Array, default: () => [] },
+  snapshotsOpen: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -104,6 +106,9 @@ const emit = defineEmits([
   'clear-shot-selection',
   'select-all-shots',
   'apply-batch-edit',
+  'toggle-snapshots',
+  'restore-snapshot',
+  'delete-snapshot',
 ])
 
 const previewMode = ref('shot')
@@ -1007,6 +1012,29 @@ function onDrop(n) {
           </template>
         </template>
         <template v-else-if="boardMode === 'timeline'">
+          <div class="drama-freeze">
+            <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-snapshots')">
+              {{ snapshotsOpen ? '收起版本历史' : '版本历史' }}
+            </button>
+            <span>{{ snapshots.length ? `已留档 ${snapshots.length} 条` : '无快照' }}</span>
+          </div>
+          <div v-if="snapshotsOpen" class="drama-snapshots-panel">
+            <p v-if="!snapshots.length" class="drama-empty-hint">保存分镜/画面/批量编辑/剧本/分类前会自动留档（最多 20 条）。</p>
+            <div v-for="snap in snapshots" :key="snap.sid" class="drama-snap-row">
+              <span class="drama-snap-meta">
+                <strong>{{ snap.tag }}</strong>
+                <em>{{ snap.created_at }} · {{ snap.shots }} 镜{{ snap.scenes ? ` · 还原 ${snap.scenes} 图` : '' }}</em>
+              </span>
+              <span class="drama-snap-actions">
+                <button type="button" class="btn-tiny" :disabled="saving" @click="emit('restore-snapshot', snap.sid)">
+                  恢复
+                </button>
+                <button type="button" class="btn-tiny" :disabled="saving" @click="emit('delete-snapshot', snap.sid)">
+                  删除
+                </button>
+              </span>
+            </div>
+          </div>
           <label>
             曲库
             <select v-model="mixDraft.catalog_id" :disabled="saving || !catalogTracks.length">

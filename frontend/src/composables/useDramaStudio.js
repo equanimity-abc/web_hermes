@@ -39,6 +39,8 @@ export function useDramaStudio() {
     { id: 'qc', label: 'QC 阈值' },
   ]
   const selectedShotIds = ref([])
+  const snapshots = ref([])
+  const snapshotsOpen = ref(false)
   const batchField = ref('camera')
   const batchValue = ref('')
   const batchFields = [
@@ -364,6 +366,56 @@ export function useDramaStudio() {
 
   function selectAllShots() {
     selectedShotIds.value = shots.value.map((s) => s.n)
+  }
+
+  async function refreshSnapshots() {
+    if (!slug.value || !episodeN.value) return
+    try {
+      const data = await dramaApi.listSnapshots(slug.value, episodeN.value)
+      snapshots.value = data.snapshots || []
+    } catch {
+      snapshots.value = []
+    }
+    return snapshots.value
+  }
+
+  function toggleSnapshotsPanel() {
+    snapshotsOpen.value = !snapshotsOpen.value
+    if (snapshotsOpen.value) void refreshSnapshots()
+  }
+
+  async function restoreSnapshotVersion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const data = await dramaApi.restoreSnapshot(slug.value, episodeN.value, sid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      await refreshSnapshots()
+      notice.value = `已恢复到 ${sid}（还原 ${data.restored?.restored_scenes || 0} 张画面）`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function deleteSnapshotVersion(sid) {
+    if (!slug.value || !episodeN.value || !sid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.deleteSnapshot(slug.value, episodeN.value, sid)
+      await refreshSnapshots()
+      notice.value = `已删除快照 ${sid}`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
   }
 
   async function applyBatchEdit(field, value) {
@@ -1286,10 +1338,16 @@ export function useDramaStudio() {
     batchField,
     batchValue,
     batchFields,
+    snapshots,
+    snapshotsOpen,
     toggleShotSelected,
     clearShotSelection,
     selectAllShots,
     applyBatchEdit,
+    refreshSnapshots,
+    toggleSnapshotsPanel,
+    restoreSnapshotVersion,
+    deleteSnapshotVersion,
     timelineItems,
     orderedShots,
     transitions,

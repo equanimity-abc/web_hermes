@@ -46,6 +46,12 @@ from tools.drama_shots import (
     normalize_i2v_mode,
 )
 from tools.drama_timeline import apply_timeline_patch, patch_timeline_doc, public_timeline
+from tools.drama_snapshots import (
+    drop_snapshot as _drop_snapshot,
+    list_snapshots as _list_snapshots,
+    restore_snapshot as _restore_snapshot,
+    take_snapshot as _take_snapshot,
+)
 from tools.workspace import resolve_safe, workspace_root
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$")
@@ -478,6 +484,7 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
         raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
 
     doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="patch_shot")
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
@@ -541,6 +548,7 @@ def patch_shots(slug: str, episode: int, shot_ns: list[int], field: str, value: 
         raise DramaBadRequest("批量操作最多 99 镜")
 
     doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="patch_shots")
 
     if field == "kind":
         from tools.drama_models import normalize_kind
@@ -608,6 +616,7 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     if "shot" in (shot.get("locked") or []):
         raise DramaBadRequest("整镜已锁定，不能重抽出图")
+    _take_snapshot(slug, n, doc, tag="candidates")
     from tools.drama_video import generate_shot_candidates
 
     ep_title = str(doc.get("title") or f"第{n}集")
@@ -647,6 +656,7 @@ def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
+    _take_snapshot(slug, n, doc, tag="scene")
     from tools.drama_video import choose_shot_candidate
 
     try:
@@ -675,6 +685,7 @@ def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
+    _take_snapshot(slug, n, doc, tag="scene")
     from tools.drama_video import upload_shot_candidate
 
     try:
@@ -853,6 +864,7 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
 
     project = load_project(slug)
     existing = load_doc(slug, n)
+    _take_snapshot(slug, n, existing, tag="script")
     parsed = parse_episode_markdown(text)
     if not parsed.get("shots"):
         raise DramaBadRequest("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
@@ -1329,11 +1341,40 @@ def apply_style(slug: str, episode: int, style_id: str) -> dict[str, Any]:
     return ep
 
 
+def list_snapshots(slug: str, episode: int) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    _ensure_shots_doc(slug, n)
+    return {"slug": slug, "episode": n, "snapshots": _list_snapshots(slug, n)}
+
+
+def restore_snapshot(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        result = _restore_snapshot(slug, n, str(sid or ""))
+    except LookupError as e:
+        raise DramaNotFound(str(e)) from e
+    ep = get_episode(slug, n)
+    ep["restored"] = result
+    return ep
+
+
+def drop_snapshot(slug: str, episode: int, sid: str) -> dict[str, Any]:
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    try:
+        return _drop_snapshot(slug, n, str(sid or ""))
+    except LookupError as e:
+        raise DramaNotFound(str(e)) from e
+
+
 def classify_shots(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
     load_models(slug)
     doc = _ensure_shots_doc(slug, n)
+    _take_snapshot(slug, n, doc, tag="classify")
     changed: list[int] = []
     for shot in doc.get("shots") or []:
         before = (shot.get("kind"), shot.get("size"), shot.get("speaker"))

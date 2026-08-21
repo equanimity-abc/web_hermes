@@ -57,6 +57,9 @@ from tools.drama_studio import (
     lock_coverage,
     classify_shots,
     apply_style,
+    list_snapshots,
+    restore_snapshot,
+    drop_snapshot,
     get_models,
     get_mix,
     mix_episode,
@@ -276,6 +279,30 @@ async def drama_apply_preset(slug: str, body: PresetBody):
 async def drama_put_node_config(slug: str, node: str, body: NodeBody):
     try:
         return put_node_config(slug, node, body.value)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/episodes/{episode}/snapshots")
+async def drama_list_snapshots(slug: str, episode: int):
+    try:
+        return list_snapshots(slug, episode)
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/snapshots/restore/{sid}")
+async def drama_restore_snapshot(slug: str, episode: int, sid: str):
+    try:
+        return restore_snapshot(slug, episode, sid)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.delete("/projects/{slug}/episodes/{episode}/snapshots/{sid}")
+async def drama_drop_snapshot(slug: str, episode: int, sid: str):
+    try:
+        return drop_snapshot(slug, episode, sid)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 
