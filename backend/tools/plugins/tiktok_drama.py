@@ -586,9 +586,8 @@ def _action_save_character(args: dict) -> str:
 
 
 def _action_generate_character_ref(args: dict) -> str:
-    """根据角色卡 look/colors 免费生成定妆参考图（不自动锁定）。"""
+    """根据角色卡 look/colors 生成定妆参考图（走项目 image 路由，默认不锁定）。"""
     from tools.drama_characters import find_character, load_characters, save_character_ref
-    from tools.providers import registry
 
     slug = _slug(str(args.get("slug") or ""))
     if not slug:
@@ -629,22 +628,27 @@ def _action_generate_character_ref(args: dict) -> str:
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="char-ref-"))
     tmp_img = tmp_dir / f"{cid}.png"
+    # 走项目 image 路由（对话/角色一致性模型），而不是写死免费图：
+    # pro 预设 + CONSISTENT_IMAGE_URL 配置后即为专业一致性出图；未配置则诚实降级到免费图。
+    from tools.drama_video import _generate_scene_image
+
+    pseudo_shot: dict[str, Any] = {"kind": "dialogue", "角色": [str(char.get("name") or cid)]}
     try:
-        ok = registry.dispatch(
-            "image",
-            "pollinations",
-            prompt,
-            tmp_img,
-            seed=seed,
-            slug=slug,
-            width=1024,
-            height=1792,
+        ok = bool(
+            _generate_scene_image(
+                prompt,
+                tmp_img,
+                seed=seed,
+                slug=slug,
+                shot=pseudo_shot,
+            )
         )
     except Exception:  # pragma: no cover - 出图失败下沉为 _err
         ok = False
     if not ok or not tmp_img.is_file() or tmp_img.stat().st_size <= 1000:
         return _err(
-            "免费出图失败（pollinations 不可用或返回空），可稍后重试或手动上传定妆图",
+            "出图失败。要专业级出图：在工作台把项目切到 pro 预设，并在 backend/.env 配置 "
+            "CONSISTENT_IMAGE_URL（角色一致性模型）；未配置时按当前预设降级。也可稍后手动上传定妆图。",
             slug=slug, character_id=cid,
         )
 
@@ -663,7 +667,7 @@ def _action_generate_character_ref(args: dict) -> str:
         ref=ref_rel,
         play_url=f"/api/workspace/file?path={ref_rel}",
         ref_locked=bool(rec.get("ref_locked")),
-        hint="已免费生成定妆图（未锁定）。满意后在工作台锁定；不满意可重生成或手动上传覆盖。",
+        hint="已生成定妆图（未锁定）。满意后在工作台锁定；不满意可重生成或手动上传覆盖。若清晰度不足，请在工作台切 pro 预设并在 .env 配置 CONSISTENT_IMAGE_URL 后重试。",
     )
 
 
@@ -1080,7 +1084,7 @@ def register_tiktok_drama() -> None:
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、refine_script（按项目 script 节点精修剧本草稿）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
-            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 免费生成定妆参考图，不自动锁）、"
+"rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
             "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
@@ -1279,7 +1283,7 @@ def register_tiktok_drama() -> None:
         "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕；"
         "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
-        "定妆图可用 generate_character_ref 按 look 免费生成（不自动锁，人在工作台满意后再锁）。"
+"定妆图可用 generate_character_ref 按 look 走项目出图路由生成（不自动锁，人在工作台满意后再锁）；专业级需切 pro 预设并配置 CONSISTENT_IMAGE_URL。"
         "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
         "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
         "render_episode / rerender_dirty / generate_i2v / generate_lip / generate_keys / export 都是后台任务，"
