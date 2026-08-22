@@ -139,7 +139,9 @@ export function useDramaStudio() {
   const currentPreset = computed(() => config.value?.preset || 'balanced')
   const providerHealth = computed(() => config.value?.health || null)
   const degradedProviders = computed(() =>
-    (providerHealth.value?.items || []).filter((it) => it.status === 'alias' || it.status === 'missing'),
+    (providerHealth.value?.items || []).filter(
+      (it) => it.status === 'alias' || it.status === 'missing' || it.status === 'gated',
+    ),
   )
   const mixUnlicensed = computed(() => {
     const mix = episode.value?.mix

@@ -816,10 +816,16 @@ def models_with_overrides(
 # (pollinations / flux / mock / l0 / edge-tts / http / none / off), so it is
 # reported live regardless of its runtime gate.
 _COMMERCIAL_PROMISES: dict[str, dict[str, str | None]] = {
-    "image": {"jimeng": None},
     "i2v": {"kling": None, "hailuo": None},
     "lip": {"musetalk": None, "wav2lip": None},
     "tts": {"volcano": "edge-tts", "ms": "edge-tts", "azure": "edge-tts"},
+}
+
+# S1: adapters that exist but need an env URL/key before they can produce a
+# true output. Until configured, they honestly degrade (not "missing").
+# capability -> provider -> config attribute name that must be non-empty.
+_ENV_GATED: dict[str, dict[str, str]] = {
+    "image": {"jimeng": "CONSISTENT_IMAGE_URL"},
 }
 
 
@@ -873,6 +879,19 @@ def provider_health(models: dict[str, Any]) -> dict[str, Any]:
                 )
             return entry
 
+        # S1: 适配器已装但缺 env 配置 → 诚实 gated（会降级到免费后端）。
+        env_attr = _ENV_GATED.get(capability, {}).get(written)
+        if env_attr:
+            from config import config as _cfg
+
+            if not str(getattr(_cfg, env_attr, "") or "").strip():
+                entry.update(
+                    real=written,
+                    status="gated",
+                    reason=f"{written} 适配器已装但未配置 {env_attr}，降级到免费后端",
+                )
+                return entry
+
         # 非商用名：名实相符，只看是否有适配器。
         has_adapter = bool(snap.get(capability, {}).get(written))
         if not has_adapter:
@@ -908,7 +927,7 @@ def provider_health(models: dict[str, Any]) -> dict[str, Any]:
     healthy = all(it["status"] in ("live", "idle") for it in items)
     return {
         "healthy": healthy,
-        "degraded_count": sum(1 for it in items if it["status"] in ("alias", "missing")),
+        "degraded_count": sum(1 for it in items if it["status"] in ("alias", "missing", "gated")),
         "items": items,
         "by_capability": by_cap,
     }

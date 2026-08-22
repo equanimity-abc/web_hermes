@@ -5,8 +5,8 @@ from __future__ import annotations
 from tools.drama_models import default_models, provider_health
 
 
-def test_jimeng_is_missing_not_silent():
-    """jimeng is written in pro.json but has no adapter — must be flagged missing."""
+def test_jimeng_gated_without_env():
+    """S1: jimeng adapter exists but needs CONSISTENT_IMAGE_URL → gated (honest)."""
     models = default_models()
     models["image"]["dialogue"]["provider"] = "jimeng"
     health = provider_health(models)
@@ -14,8 +14,23 @@ def test_jimeng_is_missing_not_silent():
         it for it in health["items"]
         if it["capability"] == "image" and it["written"] == "jimeng"
     )
-    assert jimeng["status"] == "missing"
-    assert "无真适配器" in jimeng["reason"] or "无 image 适配器" in jimeng["reason"]
+    assert jimeng["status"] == "gated"
+    assert "CONSISTENT_IMAGE_URL" in jimeng["reason"]
+
+
+def test_jimeng_live_with_env(monkeypatch):
+    """S1: with the env URL set, jimeng is live (adapter registered)."""
+    from config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "CONSISTENT_IMAGE_URL", "https://img.example.com/consist")
+    models = default_models()
+    models["image"]["dialogue"]["provider"] = "jimeng"
+    health = provider_health(models)
+    jimeng = next(
+        it for it in health["items"]
+        if it["capability"] == "image" and it["written"] == "jimeng"
+    )
+    assert jimeng["status"] == "live"
 
 
 def test_volcano_is_edge_tts_alias():
@@ -55,6 +70,23 @@ def test_local_backends_are_live():
 def test_default_models_reports_pro_promise_degraded():
     """default models promise musetalk (lip) + kling (action) but have no real adapter."""
     health = provider_health(default_models())
-    degraded = {it["written"] for it in health["items"] if it["status"] in ("alias", "missing")}
+    degraded = {
+        it["written"]
+        for it in health["items"]
+        if it["status"] in ("alias", "missing", "gated")
+    }
     assert "musetalk" in degraded
     assert "kling" in degraded
+
+
+def test_image_cache_key_is_content_addressed():
+    """S1: cache key is deterministic and sensitive to prompt/seed/refs."""
+    from tools.providers.image_providers import _cache_key
+
+    a = _cache_key("wukong faces the sky", seed=1, width=1620, height=2880, model="char-consistent")
+    b = _cache_key("wukong faces the sky", seed=1, width=1620, height=2880, model="char-consistent")
+    c = _cache_key("wukong faces the sky", seed=2, width=1620, height=2880, model="char-consistent")
+    d = _cache_key("wukong faces the sky", seed=1, width=1620, height=2880, model="char-consistent", refs=("dramas/s/shots/p.png",))
+    assert a == b
+    assert a != c
+    assert a != d

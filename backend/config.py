@@ -55,6 +55,13 @@ class Config:
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")
 
+    # 角色一致性出图（S1）：通用 HTTP 适配器协议。
+    # 未配置 URL 时诚实回退 pollinations；配置后即走真一致性模型（img2img / IP-Adapter）。
+    # 适配器契约：multipart POST { image: 参考图(可多个), prompt, seed, width, height, model }
+    CONSISTENT_IMAGE_URL: str = os.getenv("CONSISTENT_IMAGE_URL", "")
+    CONSISTENT_IMAGE_KEY: str = os.getenv("CONSISTENT_IMAGE_KEY", "")
+    CONSISTENT_IMAGE_MODEL: str = os.getenv("CONSISTENT_IMAGE_MODEL", "char-consistent")
+
     # I2V（D8）：对已锁关键帧试 2–3s 运动；失败回退静图 zoompan
     # none | mock | fail | http | pollinations
     I2V_PROVIDER: str = os.getenv("I2V_PROVIDER", "none")
