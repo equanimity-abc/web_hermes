@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -150,68 +149,118 @@ def _provider_fail(_scene: Path, _dest: Path, _shot: dict[str, Any], _seconds: f
 
 
 def _provider_http(scene: Path, dest: Path, shot: dict[str, Any], seconds: float) -> bool:
+    """S2: real I2V via a self-hosted gateway (async submit → poll → download).
+
+    Submit contract (multipart/form-data):
+        image    = locked keyframe PNG
+        ref      = locked character reference PNG (optional)
+        prompt   = motion prompt
+        duration = seconds (str)
+        model    = provider model id (e.g. kling-i2v)
+
+    Response:
+        - video/* content                → written directly (synchronous gateway)
+        - JSON {job_id, poll_url?}       → poll until done, then download video
+        - JSON {status: done, video_url} → download the mp4
+
+    Never claims "ai" unless a real video was written; any failure/timeout returns
+    False so the caller falls back to Ken Burns still motion.
+    """
+    import time
+
+    import httpx
+
     url = (config.I2V_API_URL or os.getenv("I2V_API_URL") or "").strip()
     if not url:
         return False
-    try:
-        import httpx
 
-        prompt = _motion_prompt(shot)
-        files: dict[str, tuple[str, bytes, str]] = {
-            "image": (scene.name, scene.read_bytes(), "image/png"),
-        }
-        slug = str(shot.get("_slug") or "")
-        if slug:
-            from tools.drama_qc import locked_ref_path
+    prompt = _motion_prompt(shot)
+    headers = {"User-Agent": "my-tiktok-video-agent/1.0"}
+    auth = (getattr(config, "I2V_API_KEY", "") or os.getenv("I2V_API_KEY") or "").strip()
+    if auth:
+        headers["Authorization"] = f"Bearer {auth}"
 
-            ref = locked_ref_path(slug, shot)
-            if ref is not None:
-                files["ref"] = (ref.name, ref.read_bytes(), "image/png")
-        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
-            resp = client.post(
-                url,
-                files=files,
-                data={
-                    "prompt": prompt,
-                    "duration": str(seconds),
-                    "model": config.I2V_MODEL or "default",
-                },
-                headers={"User-Agent": "my-tiktok-video-agent/0.8"},
-            )
-            resp.raise_for_status()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(resp.content)
+    files: dict[str, tuple[str, bytes, str]] = {
+        "image": (scene.name, scene.read_bytes(), "image/png"),
+    }
+    slug = str(shot.get("_slug") or "")
+    if slug:
+        from tools.drama_qc import locked_ref_path
+
+        ref = locked_ref_path(slug, shot)
+        if ref is not None:
+            files["ref"] = (ref.name, ref.read_bytes(), "image/png")
+
+    data = {
+        "prompt": prompt,
+        "duration": str(seconds),
+        "model": config.I2V_MODEL or "default",
+    }
+
+    interval = max(0.5, float(getattr(config, "I2V_POLL_INTERVAL", 2.0)))
+    timeout = max(interval, float(getattr(config, "I2V_POLL_TIMEOUT", 300.0)))
+
+    def _write_video(content: bytes) -> bool:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
         return dest.is_file() and dest.stat().st_size > 1000
+
+    try:
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            resp = client.post(url, headers=headers, files=files, data=data)
+            resp.raise_for_status()
+            ctype = str(resp.headers.get("content-type") or "").lower()
+
+            # Synchronous gateway: body is the video directly.
+            if "video" in ctype:
+                return _write_video(resp.content)
+
+            # Async gateway: body is a job descriptor JSON.
+            try:
+                payload = resp.json()
+            except Exception:
+                payload = {}
+
+            job_id = str(payload.get("job_id") or payload.get("id") or "").strip()
+            if not job_id:
+                return False
+
+            poll_url = str(payload.get("poll_url") or "").strip()
+            if not poll_url:
+                poll_url = url.rstrip("/") + f"/{job_id}"
+
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                time.sleep(interval)
+                st = client.get(poll_url, headers=headers)
+                st.raise_for_status()
+                stype = str(st.headers.get("content-type") or "").lower()
+                if "video" in stype:
+                    return _write_video(st.content)
+                try:
+                    info = st.json()
+                except Exception:
+                    info = {}
+                status = str(info.get("status") or "").lower()
+                if status in ("done", "completed", "success", "succeeded"):
+                    video_url = str(
+                        info.get("video_url") or info.get("url") or info.get("result_url") or ""
+                    ).strip()
+                    if not video_url:
+                        return False
+                    v = client.get(video_url, headers=headers)
+                    v.raise_for_status()
+                    return _write_video(v.content)
+                if status in ("failed", "error", "cancelled"):
+                    return False
+            return False
     except Exception:
         return False
 
 
 def _provider_pollinations(scene: Path, dest: Path, shot: dict[str, Any], seconds: float) -> bool:
-    """Best-effort remote I2V; returns False so caller uses still fallback when unavailable."""
-    try:
-        import httpx
-
-        prompt = urllib.parse.quote(_motion_prompt(shot))
-        seed = int(shot.get("n") or 1) * 131
-        url = (
-            "https://image.pollinations.ai/prompt/"
-            f"{prompt}?width=768&height=1344&nologo=true&seed={seed}"
-        )
-        with httpx.Client(timeout=90.0, follow_redirects=True) as client:
-            resp = client.get(url, headers={"User-Agent": "my-tiktok-video-agent/0.8"})
-            resp.raise_for_status()
-            if "image" not in str(resp.headers.get("content-type") or "").lower():
-                return False
-            tmp = dest.with_suffix(".png")
-            tmp.write_bytes(resp.content)
-            _kenburns_motion_mp4(tmp, dest, shot, seconds)
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        return dest.is_file() and dest.stat().st_size > 500
-    except Exception:
-        return False
+    """S2: pollinations is IMAGE generation, not I2V — never claim ai video output."""
+    return False
 
 
 def _concat_motion(first: Path, second: Path, dest: Path) -> bool:

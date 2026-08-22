@@ -62,11 +62,14 @@ class Config:
     CONSISTENT_IMAGE_KEY: str = os.getenv("CONSISTENT_IMAGE_KEY", "")
     CONSISTENT_IMAGE_MODEL: str = os.getenv("CONSISTENT_IMAGE_MODEL", "char-consistent")
 
-    # I2V（D8）：对已锁关键帧试 2–3s 运动；失败回退静图 zoompan
-    # none | mock | fail | http | pollinations
+    # I2V（D8 + S2）：真 I2V 走自建网关（异步提交→轮询→下载）；失败回退静图 zoompan
+    # none | mock | fail | http | kling | hailuo
     I2V_PROVIDER: str = os.getenv("I2V_PROVIDER", "none")
     I2V_MODEL: str = os.getenv("I2V_MODEL", "default")
-    I2V_API_URL: str = os.getenv("I2V_API_URL", "")
+    I2V_API_URL: str = os.getenv("I2V_API_URL", "")       # 提交端点（multipart 提交，返回 job_id 或直接结果）
+    I2V_API_KEY: str = os.getenv("I2V_API_KEY", "")        # Bearer token（自建网关鉴权）
+    I2V_POLL_INTERVAL: float = float(os.getenv("I2V_POLL_INTERVAL", "2.0"))
+    I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "300.0"))
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
     # 口型（Q2）：仅 dialogue CU/MCU；none|mock|fail|http

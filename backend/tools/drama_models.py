@@ -816,16 +816,16 @@ def models_with_overrides(
 # (pollinations / flux / mock / l0 / edge-tts / http / none / off), so it is
 # reported live regardless of its runtime gate.
 _COMMERCIAL_PROMISES: dict[str, dict[str, str | None]] = {
-    "i2v": {"kling": None, "hailuo": None},
     "lip": {"musetalk": None, "wav2lip": None},
     "tts": {"volcano": "edge-tts", "ms": "edge-tts", "azure": "edge-tts"},
 }
 
-# S1: adapters that exist but need an env URL/key before they can produce a
+# S1/S2: adapters that exist but need an env URL/key before they can produce a
 # true output. Until configured, they honestly degrade (not "missing").
 # capability -> provider -> config attribute name that must be non-empty.
 _ENV_GATED: dict[str, dict[str, str]] = {
     "image": {"jimeng": "CONSISTENT_IMAGE_URL"},
+    "i2v": {"kling": "I2V_API_URL", "hailuo": "I2V_API_URL"},
 }
 
 

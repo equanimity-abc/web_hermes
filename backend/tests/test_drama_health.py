@@ -90,3 +90,41 @@ def test_image_cache_key_is_content_addressed():
     assert a == b
     assert a != c
     assert a != d
+
+
+def test_kling_gated_without_i2v_url():
+    """S2: kling adapter exists but needs I2V_API_URL → gated (honest)."""
+    models = default_models()
+    models["motion"]["action"]["provider"] = "kling"
+    health = provider_health(models)
+    kling = next(
+        it for it in health["items"]
+        if it["capability"] == "i2v" and it["written"] == "kling"
+    )
+    assert kling["status"] == "gated"
+    assert "I2V_API_URL" in kling["reason"]
+
+
+def test_kling_live_with_i2v_url(monkeypatch):
+    """S2: with I2V_API_URL set, kling is live via the gateway adapter."""
+    from config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "I2V_API_URL", "https://i2v.example.com/submit")
+    models = default_models()
+    models["motion"]["action"]["provider"] = "kling"
+    health = provider_health(models)
+    kling = next(
+        it for it in health["items"]
+        if it["capability"] == "i2v" and it["written"] == "kling"
+    )
+    assert kling["status"] == "live"
+
+
+def test_pollinations_i2v_never_claims_ai():
+    """S2: pollinations is an image service, not I2V — honest fallback to still."""
+    from pathlib import Path
+
+    from tools.drama_i2v import _provider_pollinations
+
+    ok = _provider_pollinations(Path("scene.png"), Path("out.mp4"), {"画面": "x"}, 2.0)
+    assert ok is False
