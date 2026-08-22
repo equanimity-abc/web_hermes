@@ -24,6 +24,6 @@
     },
     "lip": { "provider": "musetalk", "enabled": true },
     "tts": { "provider": "volcano", "model": "high-fidelity" },
-    "subtitle": { "style": "karaoke" }
+    "subtitle": { "style": "static", "note": "karaoke 未实现，降级为静态字幕；待 S7 逐字卡点" }
   }
 }

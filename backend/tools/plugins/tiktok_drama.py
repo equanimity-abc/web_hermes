@@ -361,6 +361,26 @@ def _episode_number(args: dict) -> tuple[str | None, int | None, str | None]:
     return slug, n, None
 
 
+def _action_refine_script(args: dict) -> str:
+    """S5: refine a script draft through the project's script node model."""
+    from tools.drama_script import refine_text_sync
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要合法 slug")
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+    draft = args.get("content")
+    if draft is None or not str(draft).strip():
+        return _err("content 不能为空")
+    instruction = str(args.get("instruction") or "精修改写，保留原意并提升剧本表达。").strip()
+    try:
+        refined = refine_text_sync(slug, str(draft), instruction=instruction)
+    except Exception as e:
+        return _err(f"精修失败：{e}")
+    return _ok(action="refine_script", slug=slug, chars=len(refined), content=refined)
+
+
 def _action_parse_shots(args: dict) -> str:
     from tools.drama_shots import public_shot
     from tools.drama_video import sync_shots_doc
@@ -918,6 +938,7 @@ def _tiktok_drama(args: dict) -> str:
         "save_bible": lambda a: _action_save_md(a, filename="bible.md", label="bible"),
         "save_outline": lambda a: _action_save_md(a, filename="outline.md", label="outline"),
         "save_episode": _action_save_episode,
+        "refine_script": _action_refine_script,
         "parse_shots": _action_parse_shots,
         "render_episode": _action_render_episode,
         "rerender_shot": _action_rerender_shot,
@@ -961,7 +982,7 @@ def register_tiktok_drama() -> None:
         description=(
             "抖音竖屏漫剧项目工具。action: "
             "guide（规范与剧本格式）、init（建项目）、list、get、"
-            "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、"
+            "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、refine_script（按项目 script 节点精修剧本草稿）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
             "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
@@ -974,7 +995,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -983,6 +1004,7 @@ def register_tiktok_drama() -> None:
                         "save_bible",
                         "save_outline",
                         "save_episode",
+                        "refine_script",
                         "parse_shots",
                         "render_episode",
                         "rerender_shot",

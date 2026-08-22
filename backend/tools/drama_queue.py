@@ -43,6 +43,7 @@ class DramaJob:
     slug: str
     episode: int
     params: dict[str, Any] = field(default_factory=dict)
+    idem_key: str = ""
     status: str = "pending"
     progress: dict[str, Any] = field(default_factory=dict)
     result: dict[str, Any] | None = None
@@ -125,6 +126,17 @@ class DramaQueue:
         rows.sort(key=lambda j: j.created_at, reverse=True)
         return [public_job(j) for j in rows[: max(1, limit)]]
 
+    def _idem_key(self, kind: str, slug: str, episode: int, params: dict[str, Any] | None) -> str:
+        """S5: stable key for exactly-once submit dedupe."""
+        from hashlib import sha256
+
+        raw = json.dumps(
+            {"kind": kind, "slug": slug, "episode": int(episode), "params": params or {}},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return sha256(raw.encode("utf-8")).hexdigest()
+
     def submit(
         self,
         kind: str,
@@ -136,14 +148,22 @@ class DramaQueue:
         kind = str(kind or "").strip()
         if kind not in KINDS:
             raise ValueError(f"未知任务类型：{kind}")
+        idem = self._idem_key(kind, slug, int(episode), params)
         key = f"{slug}:ep{int(episode):02d}"
         with self._lock:
             busy = self._slug_busy.get(key)
             if busy:
                 cur = self._jobs.get(busy)
                 if cur and cur.status in ("pending", "running"):
+                    # S5: same idempotent request reuses the in-flight job.
+                    if cur.idem_key == idem:
+                        return public_job(cur)
                     raise RuntimeError(f"该项目集已有进行中的任务：{busy}")
                 self._slug_busy.pop(key, None)
+            # S5: dedupe against a recent identical terminal job too.
+            for job in self._jobs.values():
+                if job.idem_key == idem and job.status == "done":
+                    return public_job(job)
 
         job = DramaJob(
             job_id=uuid.uuid4().hex[:12],
@@ -151,6 +171,7 @@ class DramaQueue:
             slug=slug,
             episode=int(episode),
             params=dict(params or {}),
+            idem_key=idem,
         )
         with self._lock:
             self._jobs[job.job_id] = job
