@@ -174,6 +174,30 @@ const dirtyShotCount = computed(
   () => (props.shots || []).filter((s) => (s.dirty || []).length).length,
 )
 
+// S6: 14-node pipeline progress bar, derived from episode/shot state.
+const pipelineStages = computed(() => {
+  const ep = props.episode
+  const shots = props.shots || []
+  const hasLayer = (layer) => shots.some((s) => s.files?.[layer]?.exists)
+  const stages = [
+    { id: 'project', label: '立项', done: Boolean(props.project) },
+    { id: 'bible', label: '人设', done: Boolean(props.project?.bible) },
+    { id: 'cast', label: '角色', done: (props.characters || []).length > 0 },
+    { id: 'outline', label: '大纲', done: Boolean(props.project?.outline) },
+    { id: 'script', label: '剧本', done: Boolean(ep?.script) },
+    { id: 'shots', label: '分镜', done: shots.length > 0 },
+    { id: 'scene', label: '画面', done: hasLayer('scene') },
+    { id: 'voice', label: '配音', done: hasLayer('voice') },
+    { id: 'lip', label: '口型', done: shots.some((s) => s.lip_source && s.lip_source !== 'fallback') },
+    { id: 'subtitle', label: '字幕', done: hasLayer('overlay') },
+    { id: 'motion', label: '剪辑', done: Boolean(ep?.play_url) },
+    { id: 'audio', label: '配乐', done: Boolean(ep?.mix?.has_bgm) },
+    { id: 'assemble', label: '成片', done: Boolean(ep?.play_url) },
+    { id: 'qc', label: '验收', done: Boolean(ep?.qc?.verdict === '通过' || ep?.qc?.can_pass) },
+  ]
+  return { stages, done: stages.filter((s) => s.done).length, total: stages.length }
+})
+
 function impactFor(n) {
   return (props.scriptImpact?.shots || []).find((item) => item.n === n) || null
 }
@@ -505,6 +529,32 @@ function onDrop(n) {
 
     <p v-if="error" class="drama-banner drama-banner--err">{{ error }}</p>
     <p v-else-if="notice" class="drama-banner">{{ notice }}</p>
+
+    <div v-if="project" class="drama-pipeline">
+      <span
+        v-for="st in pipelineStages.stages"
+        :key="st.id"
+        class="drama-pipeline-step"
+        :class="{ done: st.done }"
+        :title="st.label"
+      >
+        {{ st.done ? '✓' : st.label }}
+      </span>
+      <em class="drama-pipeline-count">{{ pipelineStages.done }}/{{ pipelineStages.total }} 节点</em>
+    </div>
+
+    <div v-if="project && selected" class="drama-director-bar">
+      <span class="drama-director-label">导演三键</span>
+      <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('toggle-lock', 'scene')">
+        {{ isLocked('scene') ? '解锁画面' : '锁画面' }}
+      </button>
+      <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="emit('rerender-layer', 'voice')">
+        重配音
+      </button>
+      <button type="button" class="btn-tiny" :disabled="rendering || !dirtyShotCount" @click="emit('rerender-dirty')">
+        重渲脏镜{{ dirtyShotCount ? ` (${dirtyShotCount})` : '' }}
+      </button>
+    </div>
 
     <div v-if="project" class="drama-board">
       <section class="drama-shots">
@@ -1551,7 +1601,12 @@ function onDrop(n) {
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
-      <p>从左侧打开一个漫剧项目。分镜页可重抽候选、对已锁画面生成 I2V；时间线页改镜序/切点/转场后导出整集，不覆盖各镜 clip。</p>
+      <ol class="drama-idle-steps">
+        <li><strong>1. 立项</strong> 在对话里说「帮我立项一个 xxx 漫剧」或点左侧项目</li>
+        <li><strong>2. 定妆</strong> 打开项目 → 角色页上传并锁定参考图</li>
+        <li><strong>3. 出第一镜</strong> 写剧本 → 分镜页「重抽 4 张」锁定画面</li>
+      </ol>
+      <p class="drama-idle-hint">分镜页可重抽候选、对已锁画面生成 I2V；时间线页改镜序/切点/转场后导出整集。</p>
     </div>
   </main>
 </template>
