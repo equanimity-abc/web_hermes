@@ -22,6 +22,7 @@ from tools.drama_models import (
     PRESET_IDS,
     load_models,
     normalize_models,
+    provider_health,
     save_models,
 )
 from tools.workspace import resolve_safe
@@ -108,6 +109,7 @@ def apply_preset(slug: str, preset_id: str) -> dict[str, Any]:
         "title": preset.get("title") or preset_id,
         "description": preset.get("description") or "",
         "models": normalize_models(doc),
+        "health": provider_health(doc),
     }
 
 
@@ -120,6 +122,7 @@ def get_config(slug: str) -> dict[str, Any]:
         "currency": doc.get("currency"),
         "nodes": {node: doc.get(node) for node in NODE_KEYS if node in doc},
         "models": normalize_models(doc),
+        "health": provider_health(doc),
     }
 
 

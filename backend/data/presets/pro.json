@@ -2,7 +2,7 @@
   "id": "pro",
   "title": "专业顶级",
   "tag": "商用",
-  "description": "角色一致性模型 + L3/L4 真 I2V + MuseTalk 口型 + 高拟真配音。精品/商用，按镜计费。",
+  "description": "专业档（条件启用）：需配置即梦人物一致性、可灵/海螺 I2V、MuseTalk 口型、火山/微软高拟真配音的 API 后方为专业级；未配置时自动降级为 flux 静图 + mock 口型 + edge-tts。",
   "models": {
     "image": {
       "establishing": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },

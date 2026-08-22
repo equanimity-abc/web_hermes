@@ -39,6 +39,7 @@ const props = defineProps({
   mixUnlicensed: { type: Boolean, default: false },
   presets: { type: Array, default: () => [] },
   currentPreset: { type: String, default: 'balanced' },
+  degradedProviders: { type: Array, default: () => [] },
   configNodeList: { type: Array, default: () => [] },
   selectedConfigNode: { type: String, default: 'script' },
   configNodeDraft: { type: String, default: '' },
@@ -810,6 +811,12 @@ function onDrop(n) {
       </section>
 
       <section v-else-if="boardMode === 'config'" class="drama-script">
+        <div v-if="degradedProviders.length" class="drama-health-bar">
+          <strong>当前真实后端（有降级）</strong>
+          <span v-for="it in degradedProviders" :key="`${it.capability}:${it.kind || 'node'}`" class="drama-health-item">
+            {{ it.written }} → {{ it.real || '本地兜底' }}（{{ it.reason }}）
+          </span>
+        </div>
         <textarea
           :value="configNodeDraft"
           spellcheck="false"

@@ -55,6 +55,14 @@ def available_ids(capability: str) -> list[str]:
     return sorted(_registry[capability].keys())
 
 
+def registered_snapshot() -> dict[str, dict[str, bool]]:
+    """One-shot view of every registered adapter (used by S0 health checks)."""
+    return {
+        cap: {pid: True for pid in _registry[cap]}
+        for cap in CAPABILITIES
+    }
+
+
 def dispatch(capability: str, provider_id: str, *args: Any, **kwargs: Any) -> Any:
     """Route one generation call to the right adapter (with failure sentinel)."""
     if capability not in CAPABILITIES:

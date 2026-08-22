@@ -112,6 +112,23 @@
   font-size: 13px;
 }
 
+.drama-health-bar {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #f0d9b0;
+  background: #fff8ec;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.drama-health-item {
+  color: #9a6b1f;
+}
+
 .drama-banner--err {
   background: #fef2f2;
   color: var(--color-danger);

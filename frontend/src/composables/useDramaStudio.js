@@ -137,6 +137,10 @@ export function useDramaStudio() {
     return saved.some((n, i) => n !== cur[i])
   })
   const currentPreset = computed(() => config.value?.preset || 'balanced')
+  const providerHealth = computed(() => config.value?.health || null)
+  const degradedProviders = computed(() =>
+    (providerHealth.value?.items || []).filter((it) => it.status === 'alias' || it.status === 'missing'),
+  )
   const mixUnlicensed = computed(() => {
     const mix = episode.value?.mix
     return Boolean(mix?.has_bgm && mix?.license && !mix.license.ok)
@@ -250,7 +254,7 @@ export function useDramaStudio() {
     saving.value = true
     try {
       const data = await dramaApi.applyPreset(slug.value, presetId)
-      config.value = { ...(config.value || {}), preset: data.preset }
+      config.value = { ...(config.value || {}), preset: data.preset, health: data.health }
       presets.value = data.presets || presets.value
       selectConfigNode(selectedConfigNode.value, true)
       notice.value = `已切换预设：${data.title || data.preset}`
@@ -1412,6 +1416,8 @@ export function useDramaStudio() {
     config,
     presets,
     currentPreset,
+    providerHealth,
+    degradedProviders,
     selectedConfigNode,
     configNodeDraft,
     configNodeList,

@@ -2,7 +2,7 @@
   "id": "balanced",
   "title": "均衡量产",
   "tag": "默认",
-  "description": "flux + 参考图 + L1 单帧 I2V + 对话镜开口型 + edge-tts。日常量产默认档。",
+  "description": "均衡量产默认档：flux 免费出图 + 参考图 + L1 模拟 I2V（mock）+ 对话镜 mock 口型 + edge-tts。均非真商用模型。",
   "models": {
     "image": {
       "establishing": { "provider": "flux", "model": "flux", "cost_per_shot": 0.05 },

@@ -94,6 +94,7 @@ const {
   config: dramaConfig,
   presets: dramaPresets,
   currentPreset: dramaCurrentPreset,
+  degradedProviders: dramaDegradedProviders,
   applyProjectPreset,
   selectedConfigNode: dramaSelectedConfigNode,
   configNodeDraft: dramaConfigNodeDraft,
@@ -334,6 +335,7 @@ onMounted(() => {
       :mix-unlicensed="dramaMixUnlicensed"
       :presets="dramaPresets"
       :current-preset="dramaCurrentPreset"
+      :degraded-providers="dramaDegradedProviders"
       :config-node-list="dramaConfigNodeList"
       :selected-config-node="dramaSelectedConfigNode"
       v-model:config-node-draft="dramaConfigNodeDraft"

@@ -801,3 +801,114 @@ def models_with_overrides(
                         models[node] = _deep_merge(models.get(node) or {}, value)
 
     return normalize_models(models)
+
+
+# ---------------------------------------------------------------------------
+# S0 honest layer: provider name <-> registered adapter alignment.
+# ---------------------------------------------------------------------------
+
+# Commercial / high-fidelity names the presets may promise. The value is the
+# actual backend the name currently resolves to:
+#   None        -> no adapter exists at all (the name is purely aspirational)
+#   "edge-tts"  -> wired to the free edge-tts engine (alias degrade)
+#   "http"      -> wired to a generic HTTP stub adapter (not the real service)
+# Anything NOT in this table is a local/free backend that is "名实相符"
+# (pollinations / flux / mock / l0 / edge-tts / http / none / off), so it is
+# reported live regardless of its runtime gate.
+_COMMERCIAL_PROMISES: dict[str, dict[str, str | None]] = {
+    "image": {"jimeng": None},
+    "i2v": {"kling": None, "hailuo": None},
+    "lip": {"musetalk": None, "wav2lip": None},
+    "tts": {"volcano": "edge-tts", "ms": "edge-tts", "azure": "edge-tts"},
+}
+
+
+def provider_health(models: dict[str, Any]) -> dict[str, Any]:
+    """S0: report whether each node's configured provider name matches a real adapter.
+
+    Returns a flat list of per-node/per-kind entries plus an `items` keyed by
+    capability. Each entry has:
+        written   what the node config says
+        real      the actual adapter id it resolves to
+        status    live | alias | missing | idle
+        available whether the research card is available
+        reason    human-readable degrade note (Chinese)
+    """
+    from tools.providers import registry
+
+    snap = registry.registered_snapshot()
+    providers = models.get("providers") if isinstance(models.get("providers"), dict) else {}
+
+    def check(capability: str, written: Any, kind: str = "") -> dict[str, Any]:
+        written = str(written or "").strip()
+        entry = {
+            "capability": capability,
+            "kind": kind,
+            "written": written,
+            "real": "",
+            "status": "",
+            "available": False,
+            "reason": "",
+        }
+
+        if not written:
+            entry.update(status="idle", reason="未配置")
+            return entry
+
+        # S0: 商用名承诺未兑现 —— 这是要诚实暴露的降级。
+        promises = _COMMERCIAL_PROMISES.get(capability, {})
+        if written in promises:
+            mapped = promises[written]
+            if mapped is None:
+                entry.update(
+                    real=written,
+                    status="missing",
+                    reason=f"商用名 {written} 无真适配器，实际回落免费/本地后端",
+                )
+            else:
+                entry.update(
+                    real=mapped,
+                    status="alias",
+                    reason=f"商用名 {written} 实为 {mapped}，非真服务",
+                )
+            return entry
+
+        # 非商用名：名实相符，只看是否有适配器。
+        has_adapter = bool(snap.get(capability, {}).get(written))
+        if not has_adapter:
+            entry.update(
+                real=written,
+                status="missing",
+                reason=f"无 {capability} 适配器（{written}）",
+            )
+            return entry
+
+        c = providers.get(written)
+        available = bool(c.get("available")) if isinstance(c, dict) else True
+        entry.update(real=written, status="live", available=available, reason="已接通")
+        return entry
+
+    items: list[dict[str, Any]] = []
+    # tts / lip / subtitle are scalar nodes.
+    for node, cap in (("tts", "tts"), ("lip", "lip")):
+        cfg = models.get(node) if isinstance(models.get(node), dict) else {}
+        items.append(check(cap, cfg.get("provider"), kind=""))
+
+    # image / motion are per-kind maps.
+    for kind in SHOT_KINDS:
+        img = (models.get("image") if isinstance(models.get("image"), dict) else {}).get(kind) or {}
+        mot = (models.get("motion") if isinstance(models.get("motion"), dict) else {}).get(kind) or {}
+        items.append(check("image", img.get("provider"), kind=kind))
+        items.append(check("i2v", mot.get("provider"), kind=kind))
+
+    by_cap: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        by_cap.setdefault(item["capability"], []).append(item)
+
+    healthy = all(it["status"] in ("live", "idle") for it in items)
+    return {
+        "healthy": healthy,
+        "degraded_count": sum(1 for it in items if it["status"] in ("alias", "missing")),
+        "items": items,
+        "by_capability": by_cap,
+    }
