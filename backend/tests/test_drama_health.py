@@ -33,25 +33,26 @@ def test_jimeng_live_with_env(monkeypatch):
     assert jimeng["status"] == "live"
 
 
-def test_volcano_is_edge_tts_alias():
-    """volcano is registered as an edge-tts pass-through — must be flagged alias."""
+def test_volcano_gated_without_tts_url():
+    """S3: volcano now has a real HTTP TTS gateway — gated until TTS_API_URL is set."""
     models = default_models()
     models["tts"]["provider"] = "volcano"
     health = provider_health(models)
     tts = next(it for it in health["items"] if it["capability"] == "tts")
     assert tts["written"] == "volcano"
-    assert tts["status"] == "alias"
-    assert tts["real"] == "edge-tts"
+    assert tts["status"] == "gated"
+    assert "TTS_API_URL" in tts["reason"]
 
 
-def test_musetalk_is_commercial_promise():
-    """musetalk has no real adapter, only an http stub — must not claim live."""
+def test_musetalk_gated_without_lip_url():
+    """S3: musetalk has a real http lip adapter — gated until LIP_API_URL is set."""
     models = default_models()
     models["lip"]["provider"] = "musetalk"
     health = provider_health(models)
     lip = next(it for it in health["items"] if it["capability"] == "lip")
     assert lip["written"] == "musetalk"
-    assert lip["status"] == "missing"
+    assert lip["status"] == "gated"
+    assert "LIP_API_URL" in lip["reason"]
 
 
 def test_local_backends_are_live():

@@ -807,25 +807,14 @@ def models_with_overrides(
 # S0 honest layer: provider name <-> registered adapter alignment.
 # ---------------------------------------------------------------------------
 
-# Commercial / high-fidelity names the presets may promise. The value is the
-# actual backend the name currently resolves to:
-#   None        -> no adapter exists at all (the name is purely aspirational)
-#   "edge-tts"  -> wired to the free edge-tts engine (alias degrade)
-#   "http"      -> wired to a generic HTTP stub adapter (not the real service)
-# Anything NOT in this table is a local/free backend that is "名实相符"
-# (pollinations / flux / mock / l0 / edge-tts / http / none / off), so it is
-# reported live regardless of its runtime gate.
-_COMMERCIAL_PROMISES: dict[str, dict[str, str | None]] = {
-    "lip": {"musetalk": None, "wav2lip": None},
-    "tts": {"volcano": "edge-tts", "ms": "edge-tts", "azure": "edge-tts"},
-}
-
-# S1/S2: adapters that exist but need an env URL/key before they can produce a
-# true output. Until configured, they honestly degrade (not "missing").
+# S1/S2/S3: adapters that exist but need an env URL/key before they can produce
+# a true output. Until configured, they honestly degrade (not "missing").
 # capability -> provider -> config attribute name that must be non-empty.
 _ENV_GATED: dict[str, dict[str, str]] = {
     "image": {"jimeng": "CONSISTENT_IMAGE_URL"},
     "i2v": {"kling": "I2V_API_URL", "hailuo": "I2V_API_URL"},
+    "tts": {"volcano": "TTS_API_URL", "ms": "TTS_API_URL", "azure": "TTS_API_URL"},
+    "lip": {"musetalk": "LIP_API_URL", "wav2lip": "LIP_API_URL"},
 }
 
 
@@ -861,25 +850,7 @@ def provider_health(models: dict[str, Any]) -> dict[str, Any]:
             entry.update(status="idle", reason="未配置")
             return entry
 
-        # S0: 商用名承诺未兑现 —— 这是要诚实暴露的降级。
-        promises = _COMMERCIAL_PROMISES.get(capability, {})
-        if written in promises:
-            mapped = promises[written]
-            if mapped is None:
-                entry.update(
-                    real=written,
-                    status="missing",
-                    reason=f"商用名 {written} 无真适配器，实际回落免费/本地后端",
-                )
-            else:
-                entry.update(
-                    real=mapped,
-                    status="alias",
-                    reason=f"商用名 {written} 实为 {mapped}，非真服务",
-                )
-            return entry
-
-        # S1: 适配器已装但缺 env 配置 → 诚实 gated（会降级到免费后端）。
+        # S1/S2/S3: 适配器已装但缺 env 配置 → 诚实 gated（会降级到免费后端）。
         env_attr = _ENV_GATED.get(capability, {}).get(written)
         if env_attr:
             from config import config as _cfg
@@ -927,7 +898,7 @@ def provider_health(models: dict[str, Any]) -> dict[str, Any]:
     healthy = all(it["status"] in ("live", "idle") for it in items)
     return {
         "healthy": healthy,
-        "degraded_count": sum(1 for it in items if it["status"] in ("alias", "missing", "gated")),
+        "degraded_count": sum(1 for it in items if it["status"] in ("missing", "gated")),
         "items": items,
         "by_capability": by_cap,
     }

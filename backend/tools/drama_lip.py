@@ -158,6 +158,10 @@ def _http_lip(scene: Path, voice: Path, dest: Path, shot: dict[str, Any], durati
     try:
         import httpx
 
+        headers = {"User-Agent": "my-tiktok-video-agent/1.0"}
+        key = (getattr(config, "LIP_API_KEY", "") or os.getenv("LIP_API_KEY") or "").strip()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         with httpx.Client(timeout=180.0, follow_redirects=True) as client:
             with scene.open("rb") as img, voice.open("rb") as aud:
                 resp = client.post(
@@ -170,7 +174,7 @@ def _http_lip(scene: Path, voice: Path, dest: Path, shot: dict[str, Any], durati
                         "duration": str(duration),
                         "speaker": str(shot.get("speaker") or ""),
                     },
-                    headers={"User-Agent": "my-tiktok-video-agent/0.8"},
+                    headers=headers,
                 )
             resp.raise_for_status()
             dest.parent.mkdir(parents=True, exist_ok=True)

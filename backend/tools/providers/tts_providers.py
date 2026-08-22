@@ -9,6 +9,7 @@ these ids via register() (last wins).
 
 from __future__ import annotations
 
+from config import config
 from tools.providers.registry import register
 
 
@@ -22,10 +23,50 @@ def _none(_text, _dest, **_kwargs) -> bool:
     return False
 
 
+def _http_tts(text, dest, *, voice=None) -> bool:
+    """S3: high-fidelity TTS via a self-hosted HTTP gateway.
+
+    Contract:
+        POST TTS_API_URL  (multipart: text, voice; or JSON: {text, voice, model})
+        Authorization: Bearer TTS_API_KEY (when set)
+        Body = audio bytes (mp3/wav)
+
+    When TTS_API_URL is not configured, honestly degrade to edge-tts (the free
+    local engine) so the high-fidelity name never silently "passes" without a
+    real backend.
+    """
+    url = (getattr(config, "TTS_API_URL", "") or "").strip()
+    if not url:
+        return _edge_tts(text, dest, voice=voice)
+
+    import httpx
+
+    headers = {"User-Agent": "my-tiktok-video-agent/1.0"}
+    key = (getattr(config, "TTS_API_KEY", "") or "").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    try:
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            resp = client.post(
+                url,
+                files={"text": ("", str(text), "text/plain"), "voice": ("", str(voice or ""), "text/plain")},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.content)
+        return dest.is_file() and dest.stat().st_size > 0
+    except Exception:
+        # Gateway failure → degrade to edge-tts rather than silent audio.
+        return _edge_tts(text, dest, voice=voice)
+
+
 register("tts", "edge-tts", _edge_tts)
-# Degraded aliases until a real high-fidelity adapter is added.
-register("tts", "volcano", _edge_tts)
-register("tts", "ms", _edge_tts)
-register("tts", "azure", _edge_tts)
+# High-fidelity names now route through the real HTTP gateway, with honest
+# degrade to edge-tts when the gateway is unavailable (no more alias masquerade).
+register("tts", "volcano", _http_tts)
+register("tts", "ms", _http_tts)
+register("tts", "azure", _http_tts)
 register("tts", "none", _none)
 register("tts", "off", _none)

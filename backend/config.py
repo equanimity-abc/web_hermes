@@ -72,9 +72,16 @@ class Config:
     I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "300.0"))
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
-    # 口型（Q2）：仅 dialogue CU/MCU；none|mock|fail|http
+    # 口型（Q2 + S3）：仅 dialogue CU/MCU；none|mock|fail|http|musetalk|wav2lip
     LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "mock")
     LIP_API_URL: str = os.getenv("LIP_API_URL", "")
+    LIP_API_KEY: str = os.getenv("LIP_API_KEY", "")
+
+    # 高拟真 TTS（S3）：真 TTS 走自建 HTTP 网关；未配置时诚实回退 edge-tts。
+    # 适配器契约：multipart POST { text, voice } 或 JSON { text, voice, model }
+    # 返回 audio 字节流。
+    TTS_API_URL: str = os.getenv("TTS_API_URL", "")
+    TTS_API_KEY: str = os.getenv("TTS_API_KEY", "")
 
 
 config = Config()
