@@ -254,6 +254,16 @@ def _action_get(args: dict) -> str:
         if shots_doc:
             payload["shots_json"] = json_rel(slug, n)
             payload["shots"] = [public_shot(s) for s in shots_doc.get("shots") or []]
+            # S7: episode progress card — enough for the agent to know where this
+            # episode is stuck without pulling all shot assets into context.
+            _shots = [s for s in (shots_doc.get("shots") or []) if isinstance(s, dict)]
+            payload["progress"] = {
+                "total": len(_shots),
+                "dirty": [int(s.get("n") or 0) for s in _shots if (s.get("dirty") or [])],
+                "locked": sorted({int(s.get("n") or 0) for s in _shots if (s.get("locked") or [])}),
+                "scene_ai": sum(1 for s in _shots if s.get("scene_source") == "ai"),
+                "qc_verdict": (shots_doc.get("qc") or {}).get("verdict") or "待修",
+            }
         video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
         video_path = resolve_safe(video_rel)
         if video_path.is_file():
