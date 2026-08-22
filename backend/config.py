@@ -51,6 +51,12 @@ class Config:
     CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))
     CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
 
+    # 后台渲染 worker 池（S4）：同集按 slug:episode 互斥，跨集/跨项目并行出图。
+    # 出图墙与整集重渲的镜头级并发都用此值。
+    DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "2"))
+    # 外部生成 provider 的默认限流（次/分钟），rpm=0 表示不限。
+    DRAMA_RPM_DEFAULT: int = int(os.getenv("DRAMA_RPM_DEFAULT", "0"))
+
     # 分镜画面（pollinations 免费图生；none 则只用运镜底图）
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")

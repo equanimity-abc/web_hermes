@@ -82,12 +82,20 @@ def public_job(job: DramaJob) -> dict[str, Any]:
 
 
 class DramaQueue:
-    def __init__(self) -> None:
+    def __init__(self, *, max_workers: int | None = None) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, DramaJob] = {}
         self._pending: queue.Queue[str] = queue.Queue()
-        self._worker: threading.Thread | None = None
+        self._workers: list[threading.Thread] = []
         self._slug_busy: dict[str, str] = {}
+        # S4: worker 池。同 slug:episode 由 _slug_busy 互斥，跨集/跨项目并行出图。
+        try:
+            from config import config
+
+            default_workers = int(getattr(config, "DRAMA_MAX_WORKERS", 2) or 2)
+        except Exception:
+            default_workers = 2
+        self.max_workers = max(1, int(max_workers or default_workers))
 
     def _persist(self, job: DramaJob) -> None:
         if job.discarded:
@@ -207,10 +215,16 @@ class DramaQueue:
                 self._slug_busy.pop(key, None)
 
     def _ensure_worker(self) -> None:
-        if self._worker and self._worker.is_alive():
-            return
-        self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="drama-queue")
-        self._worker.start()
+        self._workers = [w for w in self._workers if w.is_alive()]
+        need = self.max_workers - len(self._workers)
+        for i in range(need):
+            t = threading.Thread(
+                target=self._worker_loop,
+                daemon=True,
+                name=f"drama-queue-{i}",
+            )
+            self._workers.append(t)
+            t.start()
 
     def _worker_loop(self) -> None:
         while True:

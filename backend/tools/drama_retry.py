@@ -22,6 +22,50 @@ DEFAULT_FAILURE_THRESHOLD = 5
 DEFAULT_COOLDOWN_SEC = 60.0
 
 
+class RateLimiter:
+    """Simple sliding-window rate limiter (S4).
+
+    Enforces ``rpm`` calls/minute per key (provider id). rpm<=0 disables the
+    limit. Thread-safe; ``acquire()`` blocks until a slot is available.
+    """
+
+    def __init__(self, rpm: int = 0) -> None:
+        self.rpm = max(0, int(rpm))
+        self._hits: list[float] = []
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        if self.rpm <= 0:
+            return
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                window = now - 60.0
+                self._hits = [t for t in self._hits if t > window]
+                if len(self._hits) < self.rpm:
+                    self._hits.append(now)
+                    return
+                oldest = self._hits[0]
+            # Sleep until the oldest hit exits the 60s window.
+            time.sleep(max(0.05, oldest + 60.0 - time.monotonic()))
+
+
+_rate_limiters: dict[str, RateLimiter] = {}
+_rate_limiters_lock = threading.Lock()
+
+
+def rate_limiter_for(key: str, rpm: int | None = None) -> RateLimiter:
+    with _rate_limiters_lock:
+        limiter = _rate_limiters.get(key)
+        if limiter is None:
+            limiter = RateLimiter(rpm or 0)
+            _rate_limiters[key] = limiter
+        elif rpm and rpm > 0 and limiter.rpm != rpm:
+            limiter = RateLimiter(rpm)
+            _rate_limiters[key] = limiter
+        return limiter
+
+
 class CircuitBreaker:
     """Open after ``failure_threshold`` consecutive failures; half-open a probe
     after ``cooldown_sec``. Thread-safe and per-provider keyed."""

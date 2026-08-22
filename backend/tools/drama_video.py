@@ -532,13 +532,14 @@ def generate_shot_candidates(
 
     refs = tuple(locked_refs_for_shot(slug, shot))
 
-    for i, cid in enumerate(ids):
+    from tools.drama_retry import retry_call
+
+    def _render_one(i: int, cid: str) -> dict[str, Any]:
+        """Generate one candidate (thread-safe; writes its own dest file)."""
         seed = (base_seed + i * 97) & 0x7FFFFFFF
         rel = candidate_rel(slug, episode, n, cid)
         dest = resolve_safe(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        from tools.drama_retry import retry_call
-
         ai_ok = bool(
             retry_call(
                 _generate_scene_image,
@@ -553,10 +554,17 @@ def generate_shot_candidates(
         )
         if not ai_ok:
             _draw_fallback_scene(shot, dest, cast, seed=seed)
-        source = "ai" if ai_ok else "fallback"
-        used_ai = used_ai or ai_ok
-        rec = {"id": cid, "path": rel, "source": source, "seed": seed}
-        created.append(rec)
+        return {"id": cid, "path": rel, "source": "ai" if ai_ok else "fallback", "seed": seed, "ai": ai_ok}
+
+    # S4: 候选墙并发出图，受 DRAMA_MAX_WORKERS 约束（保留 ids 顺序）。
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = max(1, min(int(getattr(config, "DRAMA_MAX_WORKERS", 2) or 2), count))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        rendered = list(executor.map(_render_one, range(len(ids)), ids))
+    for rec in rendered:
+        created.append({"id": rec["id"], "path": rec["path"], "source": rec["source"], "seed": rec["seed"]})
+        used_ai = used_ai or rec["ai"]
     shot["candidates"] = list(shot.get("candidates") or []) + created
     prune_candidates(shot)
     if "shot" not in locked and "scene" not in locked and created:
@@ -704,6 +712,27 @@ def _run_ffmpeg(args: list[str], *, cwd: Path | None = None, timeout: int = 240)
         raise RuntimeError(err[:800] or f"ffmpeg exit {proc.returncode}")
 
 
+_tts_loop: Any = None
+_tts_loop_lock = threading.Lock()
+
+
+def _get_tts_loop() -> Any:
+    """S4: reuse one background event loop for all edge-tts synthesis.
+
+    Creating asyncio.run() per sentence spawns a new loop + thread each time.
+    A single daemon thread hosting one loop serializes TTS without the churn.
+    """
+    global _tts_loop
+    with _tts_loop_lock:
+        if _tts_loop is not None and not _tts_loop.is_closed():
+            return _tts_loop
+        loop = asyncio.new_event_loop()
+        _tts_loop = loop
+        t = threading.Thread(target=loop.run_forever, daemon=True, name="drama-tts")
+        t.start()
+        return loop
+
+
 def _tts_to_file(text: str, dest: Path, *, voice: str | None = None) -> bool:
     """Synthesize speech. Returns False if skipped / failed."""
     spoken = (text or "").strip()
@@ -720,22 +749,14 @@ def _tts_to_file(text: str, dest: Path, *, voice: str | None = None) -> bool:
     except OSError:
         return False
 
-    error: list[BaseException] = []
-
     async def _go() -> None:
         communicate = edge_tts.Communicate(spoken, voice or _tts_voice())
         await communicate.save(str(dest))
 
-    def _thread() -> None:
-        try:
-            asyncio.run(_go())
-        except BaseException as e:  # noqa: BLE001 — surface TTS failures as silent clip
-            error.append(e)
-
-    worker = threading.Thread(target=_thread, daemon=True)
-    worker.start()
-    worker.join(timeout=90)
-    if worker.is_alive() or error:
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_go(), _get_tts_loop())
+        fut.result(timeout=90)
+    except Exception:
         return False
     return dest.is_file() and dest.stat().st_size > 0
 

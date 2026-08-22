@@ -39,6 +39,12 @@ def _pollinations(
     import httpx
     from PIL import Image
 
+    from tools.drama_retry import rate_limiter_for
+
+    # S4: honor a default rpm for the free image endpoint to avoid being throttled.
+    rpm = int(getattr(config, "DRAMA_RPM_DEFAULT", 0) or 0)
+    rate_limiter_for(f"image:pollinations", rpm).acquire()
+
     from tools.drama_video import _fit_cover  # pure PIL helper, no cycle
 
     target_w = int(width or 1620)
@@ -182,6 +188,8 @@ def _consistent_http(
 
     from tools.drama_video import _fit_cover
 
+    from tools.drama_retry import rate_limiter_for
+
     url = (config.CONSISTENT_IMAGE_URL or "").strip()
     if not url:
         # No consistent-image backend configured → honest degrade to the free
@@ -196,6 +204,10 @@ def _consistent_http(
             height=height,
             refs=refs,
         )
+
+    # S4: rate-limit the consistent-image gateway if a default rpm is set.
+    rpm = int(getattr(config, "DRAMA_RPM_DEFAULT", 0) or 0)
+    rate_limiter_for("image:consistent", rpm).acquire()
 
     target_w = int(width or 1620)
     target_h = int(height or 2880)

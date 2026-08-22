@@ -129,3 +129,26 @@ def test_pollinations_i2v_never_claims_ai():
 
     ok = _provider_pollinations(Path("scene.png"), Path("out.mp4"), {"画面": "x"}, 2.0)
     assert ok is False
+
+
+def test_rate_limiter_disabled_when_rpm_zero():
+    """S4: rpm=0 means unlimited; acquire() returns immediately."""
+    from tools.drama_retry import RateLimiter
+
+    limiter = RateLimiter(rpm=0)
+    import time
+
+    start = time.monotonic()
+    for _ in range(10):
+        limiter.acquire()
+    assert (time.monotonic() - start) < 0.5
+
+
+def test_rate_limiter_enforces_rpm():
+    """S4: rpm=1 allows only one acquire per 60s window."""
+    from tools.drama_retry import RateLimiter
+
+    limiter = RateLimiter(rpm=1)
+    limiter.acquire()  # first is immediate
+    assert limiter._hits  # one hit recorded
+    assert len(limiter._hits) == 1
