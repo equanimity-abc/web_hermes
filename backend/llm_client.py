@@ -15,6 +15,10 @@ import httpx
 from config import config
 
 
+class _Cancelled(Exception):
+    """Raised when a caller-provided cancel_event is set mid-request."""
+
+
 class UsageMeter:
     """Thread-safe, process-local LLM usage counters (P2-14)."""
 
@@ -111,11 +115,22 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         model: str | None = None,
+        cancel_event: Any | None = None,
     ) -> dict[str, Any]:
-        """Non-stream completion. Returns the assistant message dict (OpenAI shape)."""
+        """Non-stream completion. Returns the assistant message dict (OpenAI shape).
+
+        cancel_event (optional): asyncio.Event — when set, an in-flight request is
+        aborted ASAP so the caller can yield a `cancelled` terminal event instead of
+        hanging for the full timeout.
+        """
         chosen = (model or "").strip() or self.model
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
+        timeout = httpx.Timeout(config.LLM_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # If already cancelled, fail fast.
+            if cancel_event is not None and cancel_event.is_set():
+                raise _Cancelled()
+            async with client.stream(
+                "POST",
                 f"{self.base_url}/v1/chat/completions",
                 headers=self._headers(),
                 json=self._payload(
@@ -126,22 +141,27 @@ class LLMClient:
                     tools=tools,
                     model=chosen,
                 ),
-            )
-            await self._raise_http(response)
-            data = response.json()
-            usage = data.get("usage") or {}
-            self.usage.record(
-                model=chosen,
-                prompt_tokens=usage.get("prompt_tokens") or 0,
-                completion_tokens=usage.get("completion_tokens") or 0,
-            )
-            message = data["choices"][0]["message"]
-            # Normalize to plain dict
-            return {
-                "role": message.get("role", "assistant"),
-                "content": message.get("content"),
-                "tool_calls": message.get("tool_calls") or None,
-            }
+            ) as response:
+                await self._raise_http(response)
+                body = b""
+                async for chunk in response.aiter_bytes():
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise _Cancelled()
+                    body += chunk
+                data = json.loads(body.decode("utf-8", errors="replace"))
+                usage = data.get("usage") or {}
+                self.usage.record(
+                    model=chosen,
+                    prompt_tokens=usage.get("prompt_tokens") or 0,
+                    completion_tokens=usage.get("completion_tokens") or 0,
+                )
+                message = data["choices"][0]["message"]
+                # Normalize to plain dict
+                return {
+                    "role": message.get("role", "assistant"),
+                    "content": message.get("content"),
+                    "tool_calls": message.get("tool_calls") or None,
+                }
 
     async def chat_stream(
         self,

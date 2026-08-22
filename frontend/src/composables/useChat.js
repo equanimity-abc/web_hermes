@@ -78,16 +78,20 @@ export function useChat(deps) {
   async function stopGeneration() {
     const sid = activeStreamId.value
     pendingApproval.value = null
-    if (!sid) {
-      abortController?.abort()
-      return
-    }
-    try {
-      await cancelChat(sid)
-    } catch (e) {
-      console.error('cancel failed:', e)
-    }
+    // 1) 立即中断本地 SSE 读取，让界面先「停」下来，不等后端。
     abortController?.abort()
+    // 2) 尽力通知后端停止；加超时保护，避免因后端忙而再次卡住。
+    if (sid) {
+      const cancelAbort = new AbortController()
+      const timer = setTimeout(() => cancelAbort.abort(), 3000)
+      try {
+        await cancelChat(sid, cancelAbort.signal)
+      } catch (e) {
+        console.error('cancel failed:', e)
+      } finally {
+        clearTimeout(timer)
+      }
+    }
   }
 
   async function decideApproval(decision) {

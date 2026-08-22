@@ -43,11 +43,12 @@ export async function startChat({ sessionId, message }) {
   return response.json()
 }
 
-export async function cancelChat(streamId) {
+export async function cancelChat(streamId, signal) {
   const response = await fetch('/api/chat/cancel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stream_id: streamId }),
+    signal,
   })
   if (!response.ok) {
     const errText = await response.text()

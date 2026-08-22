@@ -15,13 +15,14 @@ Contract:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from config import config
-from llm_client import LLMClient, llm_client
+from llm_client import LLMClient, _Cancelled, llm_client
 from tools import dispatch, openai_tools, tool_requires_approval
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
@@ -185,7 +186,13 @@ class Agent:
                     return
 
                 if tools:
-                    msg = await self.client.chat_completion(messages, tools=tools)
+                    try:
+                        msg = await self.client.chat_completion(
+                            messages, tools=tools, cancel_event=cancel_event
+                        )
+                    except _Cancelled:
+                        yield {"type": "cancelled"}
+                        return
                     if cancelled():
                         yield {"type": "cancelled"}
                         return
@@ -271,7 +278,13 @@ class Agent:
                                 "type": "status",
                                 "text": f"正在调用工具：{name}",
                             }
-                            result = dispatch(name, raw_args)
+                            # 同步工具放到线程池执行，避免阻塞事件循环导致
+                            # POST /api/chat/cancel 无响应（点停止无效）。
+                            result = await asyncio.to_thread(dispatch, name, raw_args)
+                            if cancelled():
+                                _pad_missing_tool_results(messages, tool_calls)
+                                yield {"type": "cancelled"}
+                                return
                             messages.append(
                                 {
                                     "role": "tool",
