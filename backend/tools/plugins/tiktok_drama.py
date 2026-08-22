@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
+import zlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from tools.loader import add_plugin_prompt_hint
@@ -582,6 +585,87 @@ def _action_save_character(args: dict) -> str:
     return _ok(action="save_character", slug=slug, character=rec)
 
 
+def _action_generate_character_ref(args: dict) -> str:
+    """根据角色卡 look/colors 免费生成定妆参考图（不自动锁定）。"""
+    from tools.drama_characters import find_character, load_characters, save_character_ref
+    from tools.providers import registry
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("需要合法 slug")
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+
+    cid_arg = str(args.get("character_id") or args.get("id") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not cid_arg and not name:
+        return _err("需要 character_id 或 name")
+
+    cards = load_characters(slug)
+    char = find_character(cards, cid_arg) if cid_arg else None
+    if char is None and name:
+        for c in cards:
+            if name in (str(c.get("name") or ""), str(c.get("id") or "")):
+                char = c
+                break
+    if char is None:
+        return _err("找不到该角色，请先 save_character 建角色卡", slug=slug, character_id=cid_arg or name)
+
+    cid = str(char.get("id") or "")
+    look = str(char.get("look") or "").strip()
+    colors = str(char.get("colors") or "").strip()
+    if not look:
+        return _err(
+            "该角色没有 look 外形描述，无法生成定妆图；请先 save_character 补充 look",
+            slug=slug, character_id=cid,
+        )
+
+    prompt = (
+        f"{look}，角色定妆参考图，正面全身站立，单一人物，"
+        f"{colors + ' 配色，' if colors else ''}"
+        f"干净简洁背景，动漫插画风格，高清，无文字，无水印"
+    )
+    seed = zlib.crc32(f"{slug}:{cid}:{look}".encode()) & 0x7FFFFFFF
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="char-ref-"))
+    tmp_img = tmp_dir / f"{cid}.png"
+    try:
+        ok = registry.dispatch(
+            "image",
+            "pollinations",
+            prompt,
+            tmp_img,
+            seed=seed,
+            slug=slug,
+            width=1024,
+            height=1792,
+        )
+    except Exception:  # pragma: no cover - 出图失败下沉为 _err
+        ok = False
+    if not ok or not tmp_img.is_file() or tmp_img.stat().st_size <= 1000:
+        return _err(
+            "免费出图失败（pollinations 不可用或返回空），可稍后重试或手动上传定妆图",
+            slug=slug, character_id=cid,
+        )
+
+    try:
+        data = tmp_img.read_bytes()
+        rec = save_character_ref(slug, cid, data)
+    except Exception as e:  # CharacterError / OSError
+        return _err(f"保存定妆图失败：{e}", slug=slug, character_id=cid)
+
+    ref_rel = str(rec.get("ref") or f"dramas/{slug}/characters/{cid}.png")
+    return _ok(
+        action="generate_character_ref",
+        slug=slug,
+        character_id=cid,
+        name=rec.get("name") or char.get("name"),
+        ref=ref_rel,
+        play_url=f"/api/workspace/file?path={ref_rel}",
+        ref_locked=bool(rec.get("ref_locked")),
+        hint="已免费生成定妆图（未锁定）。满意后在工作台锁定；不满意可重生成或手动上传覆盖。",
+    )
+
 
 def _action_rerender_dirty(args: dict) -> str:
     from tools.drama_studio import enqueue_job
@@ -955,6 +1039,7 @@ def _tiktok_drama(args: dict) -> str:
         "lock_shot": _action_lock_shot,
         "rerender_dirty": _action_rerender_dirty,
         "save_character": _action_save_character,
+        "generate_character_ref": _action_generate_character_ref,
         "generate_candidates": _action_generate_candidates,
         "choose_candidate": _action_choose_candidate,
         "export_timeline": _action_export_timeline,
@@ -995,7 +1080,7 @@ def register_tiktok_drama() -> None:
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、refine_script（按项目 script 节点精修剧本草稿）、"
             "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
-            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、"
+            "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 免费生成定妆参考图，不自动锁）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
             "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
@@ -1005,7 +1090,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -1021,6 +1106,7 @@ def register_tiktok_drama() -> None:
                         "lock_shot",
                         "rerender_dirty",
                         "save_character",
+                        "generate_character_ref",
                         "generate_candidates",
                         "choose_candidate",
                         "export_timeline",
@@ -1193,6 +1279,7 @@ def register_tiktok_drama() -> None:
         "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕；"
         "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
         "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
+        "定妆图可用 generate_character_ref 按 look 免费生成（不自动锁，人在工作台满意后再锁）。"
         "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
         "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
         "render_episode / rerender_dirty / generate_i2v / generate_lip / generate_keys / export 都是后台任务，"
