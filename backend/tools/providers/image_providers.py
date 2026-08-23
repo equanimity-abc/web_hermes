@@ -259,7 +259,286 @@ def _consistent_http(
         return False
 
 
+def _dashscope_image(
+    prompt: str,
+    dest,
+    *,
+    seed: int = 0,
+    slug: str = "",
+    shot: Any = None,
+    width: int = 0,
+    height: int = 0,
+    refs: tuple[str, ...] = (),
+) -> bool:
+    """阿里云百炼 DashScope 通义万相文生图。
+
+    Provider: wanx / dashscope。契约与 image adapter 一致（返回 bool）。
+
+    注意：wan2.7-image-pro 是纯文生图，不支持传参考图。refs（锁定的定妆图）
+    在这里退化为更强的外形/配色提示词（与 pollinations 一致）。图生图/角色
+    一致性需另接支持 img2img 的模型（如 wanx imageedit）。
+    """
+    import time
+
+    import httpx
+    from PIL import Image
+
+    from tools.drama_video import _fit_cover
+
+    key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
+    if not key:
+        return False
+
+    target_w = int(width or 1620)
+    target_h = int(height or 2880)
+
+    # 提示词：refs 退化为加强一致性描述；竖屏 9:16。
+    final_prompt = str(prompt)
+    if refs:
+        final_prompt = (
+            f"{final_prompt}, keep face identical to the locked character "
+            f"reference sheet, same facial structure and costume"
+        )
+
+    base = (getattr(config, "DASHSCOPE_BASE_URL", "") or "https://dashscope.aliyuncs.com").rstrip("/")
+    model = (getattr(config, "DASHSCOPE_IMAGE_MODEL", "") or "qwen-image-plus").strip()
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+        "User-Agent": "my-tiktok-video-agent/1.0",
+    }
+
+    seed_val = int(seed) & 0x7FFFFFFF
+    body = {
+        "model": model,
+        "input": {"prompt": final_prompt},
+        "parameters": {
+            "size": "720*1280",
+            "n": 1,
+            "seed": seed_val,
+        },
+    }
+
+    try:
+        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+            submit = client.post(
+                f"{base}/api/v1/services/aigc/text2image/image-synthesis",
+                headers=headers,
+                json=body,
+            )
+            submit.raise_for_status()
+            payload = submit.json()
+            task_id = str(
+                ((payload.get("output") or {}).get("task_id"))
+                or ((payload.get("output") or {}).get("task_id"))
+                or ""
+            ).strip()
+            if not task_id:
+                return False
+
+            deadline = time.monotonic() + 180.0
+            while time.monotonic() < deadline:
+                time.sleep(2.0)
+                st = client.get(
+                    f"{base}/api/v1/tasks/{task_id}",
+                    headers=headers,
+                )
+                st.raise_for_status()
+                info = st.json()
+                out = info.get("output") or {}
+                status = str(out.get("task_status") or "").upper()
+                if status in ("SUCCEEDED", "SUCCESS"):
+                    results = out.get("results") or []
+                    url = ""
+                    for r in results:
+                        url = str(r.get("url") or "").strip()
+                        if url:
+                            break
+                    if not url:
+                        return False
+                    img_resp = client.get(url)
+                    img_resp.raise_for_status()
+                    img = Image.open(__import__("io").BytesIO(img_resp.content)).convert("RGB")
+                    img = _fit_cover(img, target_w, target_h)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    img.save(dest, "PNG")
+                    return dest.is_file() and dest.stat().st_size > 1000
+                if status in ("FAILED", "CANCELED", "UNKNOWN"):
+                    return False
+            return False
+    except Exception:
+        return False
+
+
+def _dashscope_upload_public_url(rel: str, client) -> str:
+    """上传本地文件到百炼，返回公网 OSS 签名 URL（用于给可灵当参考图）。
+
+    走通用 dashscope 端点（已验证 purpose=chat-image-understanding 可上传图片）。
+    失败/限流返回空串，调用方据此降级为纯文生图。
+    """
+    import time
+
+    key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
+    dbase = (getattr(config, "DASHSCOPE_BASE_URL", "") or "https://dashscope.aliyuncs.com").rstrip("/")
+    if not key:
+        return ""
+
+    try:
+        path = resolve_safe(str(rel))
+        if not path.is_file():
+            return ""
+        headers = {"Authorization": f"Bearer {key}"}
+        with path.open("rb") as f:
+            data = f.read()
+        upload = client.post(
+            f"{dbase}/api/v1/files",
+            headers=headers,
+            files={"files": (path.name, data, "image/png")},
+            data={"purpose": "chat-image-understanding"},
+        )
+        upload.raise_for_status()
+        uploaded = ((upload.json() or {}).get("data") or {}).get("uploaded_files") or []
+        if not uploaded:
+            return ""
+        fid = str(uploaded[0].get("file_id") or "").strip()
+        if not fid:
+            return ""
+        # 查询 file url，限流时简单重试几次。
+        for _ in range(4):
+            time.sleep(1.0)
+            info = client.get(f"{dbase}/api/v1/files/{fid}", headers=headers)
+            if info.status_code == 200:
+                return str(((info.json() or {}).get("data") or {}).get("url") or "").strip()
+        return ""
+    except Exception:
+        return ""
+
+
+def _kling_image(
+    prompt: str,
+    dest,
+    *,
+    seed: int = 0,
+    slug: str = "",
+    shot: Any = None,
+    width: int = 0,
+    height: int = 0,
+    refs: tuple[str, ...] = (),
+) -> bool:
+    """可灵 Kling 出图（走专属 MaaS 端点）。
+
+    协议（与通用 DashScope 不同）：
+      - 提交：POST /api/v1/services/aigc/image-generation/generation，
+        带头 X-DashScope-Async: enable，input 用 messages（非 prompt）。
+      - 查询：GET /api/v1/tasks/{task_id}，只带 Authorization（不带异步头）。
+      - 结果：output.choices[0].message.content[0].image
+
+    refs（本地的定妆图文件）会逐个上传到百炼换取公网 URL，再作为参考图
+    注入 input.messages（{"image": url}），实现可灵的真·锁脸。
+    """
+    import time
+    from io import BytesIO
+
+    import httpx
+    from PIL import Image
+
+    from tools.drama_video import _fit_cover
+
+    key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
+    maas = (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip()
+    if not key or not maas:
+        return False
+
+    model = (getattr(config, "KLING_IMAGE_MODEL", "") or "kling/kling-v3-omni-image-generation").strip()
+    target_w = int(width or 1024)
+    target_h = int(height or 1792)
+
+    final_prompt = str(prompt)
+
+    base = maas.rstrip("/")
+    submit_headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+    }
+    query_headers = {"Authorization": f"Bearer {key}"}
+
+    # 组装 input.messages 的 content：先放 text，再把参考图逐个上传成公网 URL 注入。
+    content: list[dict[str, Any]] = [{"text": final_prompt}]
+
+    try:
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            if refs:
+                for rel in refs:
+                    url = _dashscope_upload_public_url(str(rel), client)
+                    if url:
+                        content.append({"image": url})
+
+            body = {
+                "model": model,
+                "input": {
+                    "messages": [
+                        {"role": "user", "content": content}
+                    ]
+                },
+                "parameters": {
+                    "n": 1,
+                    "result_type": "single",
+                    "aspect_ratio": "9:16",
+                    "resolution": "1k",
+                },
+            }
+
+            submit = client.post(
+                f"{base}/api/v1/services/aigc/image-generation/generation",
+                headers=submit_headers,
+                json=body,
+            )
+            submit.raise_for_status()
+            task_id = str(((submit.json() or {}).get("output") or {}).get("task_id") or "").strip()
+            if not task_id:
+                return False
+
+            deadline = time.monotonic() + 240.0
+            while time.monotonic() < deadline:
+                time.sleep(3.0)
+                st = client.get(f"{base}/api/v1/tasks/{task_id}", headers=query_headers)
+                st.raise_for_status()
+                out = (st.json() or {}).get("output") or {}
+                status = str(out.get("task_status") or "").upper()
+                if status in ("SUCCEEDED", "SUCCESS"):
+                    choices = out.get("choices") or []
+                    url = ""
+                    for ch in choices:
+                        msg = ch.get("message") or {}
+                        content = msg.get("content") or []
+                        if isinstance(content, list) and content:
+                            url = str((content[0] or {}).get("image") or "").strip()
+                            if url:
+                                break
+                    if not url:
+                        return False
+                    img_resp = client.get(url)
+                    img_resp.raise_for_status()
+                    img = Image.open(BytesIO(img_resp.content)).convert("RGB")
+                    img = _fit_cover(img, target_w, target_h)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    img.save(dest, "PNG")
+                    return dest.is_file() and dest.stat().st_size > 1000
+                if status in ("FAILED", "CANCELED", "UNKNOWN"):
+                    return False
+            return False
+    except Exception:
+        return False
+
+
 register("image", "jimeng", _consistent_http)
+register("image", "wanx", _dashscope_image)
+register("image", "dashscope", _dashscope_image)
+register("image", "kling", _kling_image)
+register("image", "kling-image", _kling_image)
 register("image", "pollinations", _pollinations)
 register("image", "flux", _pollinations)
 register("image", "http", _pollinations)

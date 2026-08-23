@@ -201,6 +201,46 @@ def default_providers() -> dict[str, dict[str, Any]]:
             "fallback": "mock",
             "notes": "开源口型，画质不稳。Q2 候选，Q0 未接。",
         },
+        "wanx": {
+            "available": True,
+            "cost_per_shot": 0.5,
+            "rpm": 10,
+            "timeout_s": 180,
+            "fallback": "pollinations",
+            "notes": "阿里百炼通义万相文生图（DASHSCOPE_API_KEY）。",
+        },
+        "wanx-video": {
+            "available": True,
+            "cost_per_shot": 2.5,
+            "rpm": 10,
+            "timeout_s": 300,
+            "fallback": "mock",
+            "notes": "阿里百炼通义万相图生视频（DASHSCOPE_API_KEY）。",
+        },
+        "cosyvoice": {
+            "available": True,
+            "cost_per_shot": 0.05,
+            "rpm": 60,
+            "timeout_s": 120,
+            "fallback": "edge-tts",
+            "notes": "阿里百炼语音合成/音色复刻（DASHSCOPE_API_KEY）。",
+        },
+        "kling-image": {
+            "available": True,
+            "cost_per_shot": 0.8,
+            "rpm": 10,
+            "timeout_s": 240,
+            "fallback": "pollinations",
+            "notes": "可灵满血图模型（图片生成+编辑融合），走专属 MaaS 端点。",
+        },
+        "kling-video": {
+            "available": True,
+            "cost_per_shot": 3.0,
+            "rpm": 10,
+            "timeout_s": 420,
+            "fallback": "mock",
+            "notes": "可灵视频生成（文生/图生/参考生视频），走专属 MaaS 端点。",
+        },
     }
 
 
@@ -811,9 +851,29 @@ def models_with_overrides(
 # a true output. Until configured, they honestly degrade (not "missing").
 # capability -> provider -> config attribute name that must be non-empty.
 _ENV_GATED: dict[str, dict[str, str]] = {
-    "image": {"jimeng": "CONSISTENT_IMAGE_URL"},
-    "i2v": {"kling": "I2V_API_URL", "hailuo": "I2V_API_URL"},
-    "tts": {"volcano": "TTS_API_URL", "ms": "TTS_API_URL", "azure": "TTS_API_URL"},
+    "image": {
+        "jimeng": "CONSISTENT_IMAGE_URL",
+        "wanx": "DASHSCOPE_API_KEY",
+        "dashscope": "DASHSCOPE_API_KEY",
+        "kling": "DASHSCOPE_MAAS_BASE_URL",
+        "kling-image": "DASHSCOPE_MAAS_BASE_URL",
+    },
+    "i2v": {
+        "kling": "I2V_API_URL",
+        "hailuo": "I2V_API_URL",
+        "wanx-video": "DASHSCOPE_API_KEY",
+        "dashscope-i2v": "DASHSCOPE_API_KEY",
+        "kling-video": "DASHSCOPE_MAAS_BASE_URL",
+        "kling-maas": "DASHSCOPE_MAAS_BASE_URL",
+    },
+    "tts": {
+        "volcano": "TTS_API_URL",
+        "ms": "TTS_API_URL",
+        "azure": "TTS_API_URL",
+        "dashscope-tts": "DASHSCOPE_API_KEY",
+        "cosyvoice": "DASHSCOPE_API_KEY",
+        "qwen-tts": "DASHSCOPE_API_KEY",
+    },
     "lip": {"musetalk": "LIP_API_URL", "wav2lip": "LIP_API_URL"},
 }
 

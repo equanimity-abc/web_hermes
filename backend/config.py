@@ -16,6 +16,25 @@ class Config:
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
+    # 阿里云百炼（DashScope）：出图 / 图生视频 / 高拟真配音
+    # 通用端点（wanx / qwen-image / qwen-tts 走这里）
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+    DASHSCOPE_BASE_URL: str = os.getenv(
+        "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com"
+    )
+    DASHSCOPE_IMAGE_MODEL: str = os.getenv("DASHSCOPE_IMAGE_MODEL", "qwen-image-plus")
+    DASHSCOPE_I2V_MODEL: str = os.getenv("DASHSCOPE_I2V_MODEL", "wanx2.1-i2v-turbo")
+    DASHSCOPE_TTS_MODEL: str = os.getenv("DASHSCOPE_TTS_MODEL", "qwen-audio-3.0-tts-plus")
+    # 可灵(Kling)等第三方模型走专属 MaaS 端点（如 ws-xxx.cn-beijing.maas.aliyuncs.com）。
+    # 提交带 X-DashScope-Async；查询结果 GET /api/v1/tasks/{id} 不带该头。
+    DASHSCOPE_MAAS_BASE_URL: str = os.getenv("DASHSCOPE_MAAS_BASE_URL", "")
+    KLING_IMAGE_MODEL: str = os.getenv(
+        "KLING_IMAGE_MODEL", "kling/kling-v3-omni-image-generation"
+    )
+    KLING_VIDEO_MODEL: str = os.getenv(
+        "KLING_VIDEO_MODEL", "kling/kling-v3-video-generation"
+    )
+
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))

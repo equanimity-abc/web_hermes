@@ -2,14 +2,14 @@
   "id": "pro",
   "title": "专业顶级",
   "tag": "商用",
-  "description": "专业档（条件启用）：需配置即梦人物一致性、可灵/海螺 I2V、MuseTalk 口型、火山/微软高拟真配音的 API 后方为专业级；未配置时自动降级为 flux 静图 + mock 口型 + edge-tts。",
+  "description": "专业档（条件启用）：配置 DASHSCOPE_API_KEY 后，出图走 Qwen-Image(qwen-image-plus)、动作走 wanx 图生视频、配音走 qwen 高拟真 TTS；未配置时自动降级为 flux 静图 + mock 口型 + edge-tts。",
   "models": {
     "image": {
       "establishing": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
       "insert": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
-      "dialogue": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
-      "reaction": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
-      "action": { "provider": "jimeng", "model": "char-consistent", "cost_per_shot": 0.5, "use_ref": true },
+      "dialogue": { "provider": "wanx", "model": "qwen-image-plus", "cost_per_shot": 0.5, "use_ref": true },
+      "reaction": { "provider": "wanx", "model": "qwen-image-plus", "cost_per_shot": 0.5, "use_ref": true },
+      "action": { "provider": "wanx", "model": "qwen-image-plus", "cost_per_shot": 0.5, "use_ref": true },
       "crowd": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.2 },
       "title": { "provider": "flux", "model": "flux-pro", "cost_per_shot": 0.1 }
     },
@@ -17,13 +17,13 @@
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "dialogue": { "ladder": "L2", "provider": "mock", "fallback": "L1" },
-      "reaction": { "ladder": "L1", "provider": "kling", "fallback": "L0" },
-      "action": { "ladder": "L3", "provider": "kling", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "wanx-video", "fallback": "L0" },
+      "action": { "ladder": "L3", "provider": "wanx-video", "fallback": "L1" },
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
     "lip": { "provider": "musetalk", "enabled": true },
-    "tts": { "provider": "volcano", "model": "high-fidelity" },
+    "tts": { "provider": "cosyvoice", "model": "qwen-audio-3.0-tts-plus" },
     "subtitle": { "style": "static", "note": "karaoke 未实现，降级为静态字幕；待 S7 逐字卡点" }
   }
 }
