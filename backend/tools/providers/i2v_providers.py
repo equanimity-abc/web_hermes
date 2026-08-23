@@ -147,17 +147,16 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
 
 
 def _kling_video(scene, dest, shot, seconds) -> str:
-    """可灵 Kling 视频（走专属 MaaS 端点，文生视频）。
+    """可灵 Kling 首帧图生视频（走专属 MaaS 端点）。
 
-    协议（已实测）：
-      - 提交：POST /api/v1/services/aigc/video-generation/video-synthesis，
-        带头 X-DashScope-Async: enable，input 用 prompt。
-      - 查询：GET /api/v1/tasks/{task_id}，只带 Authorization（不带异步头）。
-      - 结果：output.video_url。
+    协议（官方）：
+      - 上传场景关键帧到百炼，取公网 URL；
+      - 提交 POST video-generation/video-synthesis，omni 模型，
+        input: {prompt, media:[{type:first_frame, url}]}；
+      - 查询 GET /api/v1/tasks/{id}，只带 Authorization（不带异步头）；
+      - 结果 output.video_url。
 
-    注意：可灵「图生视频（首帧）」需要 media 数组传公网 URL，本地 scene 暂无法
-    直接上传（缺少官方上传协议），故本适配器先用文生视频（复用镜头的运动提示词）。
-    失败返回 "none"，调用方回退 Ken Burns。
+    首帧图失败时回退到纯文生视频（kling-v3-video-generation），再失败返回 "none"。
     """
     import time
 
@@ -168,12 +167,15 @@ def _kling_video(scene, dest, shot, seconds) -> str:
     if not key or not maas:
         return "none"
 
-    model = (getattr(config, "KLING_VIDEO_MODEL", "") or "kling/kling-v3-video-generation").strip()
     base = maas.rstrip("/")
+    omni_model = (getattr(config, "KLING_OMNI_VIDEO_MODEL", "") or "kling/kling-v3-omni-video-generation").strip()
+    t2v_model = (getattr(config, "KLING_VIDEO_MODEL", "") or "kling/kling-v3-video-generation").strip()
 
     from tools.drama_i2v import _motion_prompt
+    from tools.providers.image_providers import _dashscope_upload_public_url
 
     prompt = _motion_prompt(shot)
+    duration = max(1, min(int(round(float(seconds))), 10))
 
     submit_headers = {
         "Authorization": f"Bearer {key}",
@@ -182,49 +184,72 @@ def _kling_video(scene, dest, shot, seconds) -> str:
     }
     query_headers = {"Authorization": f"Bearer {key}"}
 
-    body = {
-        "model": model,
-        "input": {"prompt": prompt},
-        "parameters": {
-            "mode": "std",
-            "aspect_ratio": "9:16",
-            "duration": int(round(float(seconds))),
-            "audio": False,
-            "watermark": True,
-        },
-    }
+    def _submit_and_fetch(client, body) -> str:
+        submit = client.post(
+            f"{base}/api/v1/services/aigc/video-generation/video-synthesis",
+            headers=submit_headers,
+            json=body,
+        )
+        submit.raise_for_status()
+        task_id = str(((submit.json() or {}).get("output") or {}).get("task_id") or "").strip()
+        if not task_id:
+            return "none"
+
+        deadline = time.monotonic() + 420.0
+        while time.monotonic() < deadline:
+            time.sleep(10.0)
+            st = client.get(f"{base}/api/v1/tasks/{task_id}", headers=query_headers)
+            st.raise_for_status()
+            out = (st.json() or {}).get("output") or {}
+            status = str(out.get("task_status") or "").upper()
+            if status in ("SUCCEEDED", "SUCCESS"):
+                video_url = str(out.get("video_url") or "").strip()
+                if not video_url:
+                    return "none"
+                v = client.get(video_url)
+                v.raise_for_status()
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(v.content)
+                return "ai" if (dest.is_file() and dest.stat().st_size > 1000) else "none"
+            if status in ("FAILED", "CANCELED", "UNKNOWN"):
+                return "none"
+        return "none"
 
     try:
-        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-            submit = client.post(
-                f"{base}/api/v1/services/aigc/video-generation/video-synthesis",
-                headers=submit_headers,
-                json=body,
-            )
-            submit.raise_for_status()
-            task_id = str(((submit.json() or {}).get("output") or {}).get("task_id") or "").strip()
-            if not task_id:
-                return "none"
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            # 1) 尝试首帧图生视频（上传 scene 取 URL）
+            scene_url = _dashscope_upload_public_url(str(scene), client)
+            if scene_url:
+                first_frame_body = {
+                    "model": omni_model,
+                    "input": {
+                        "prompt": prompt,
+                        "media": [{"type": "first_frame", "url": scene_url}],
+                    },
+                    "parameters": {
+                        "mode": "std",
+                        "duration": duration,
+                        "audio": False,
+                        "watermark": True,
+                    },
+                }
+                result = _submit_and_fetch(client, first_frame_body)
+                if result == "ai":
+                    return "ai"
 
-            deadline = time.monotonic() + 420.0
-            while time.monotonic() < deadline:
-                time.sleep(10.0)
-                st = client.get(f"{base}/api/v1/tasks/{task_id}", headers=query_headers)
-                st.raise_for_status()
-                out = (st.json() or {}).get("output") or {}
-                status = str(out.get("task_status") or "").upper()
-                if status in ("SUCCEEDED", "SUCCESS"):
-                    video_url = str(out.get("video_url") or "").strip()
-                    if not video_url:
-                        return "none"
-                    v = client.get(video_url)
-                    v.raise_for_status()
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(v.content)
-                    return "ai" if (dest.is_file() and dest.stat().st_size > 1000) else "none"
-                if status in ("FAILED", "CANCELED", "UNKNOWN"):
-                    return "none"
-            return "none"
+            # 2) 回退纯文生视频
+            t2v_body = {
+                "model": t2v_model,
+                "input": {"prompt": prompt},
+                "parameters": {
+                    "mode": "std",
+                    "aspect_ratio": "9:16",
+                    "duration": duration,
+                    "audio": False,
+                    "watermark": True,
+                },
+            }
+            return _submit_and_fetch(client, t2v_body)
     except Exception:
         return "none"
 

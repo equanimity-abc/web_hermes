@@ -34,6 +34,10 @@ class Config:
     KLING_VIDEO_MODEL: str = os.getenv(
         "KLING_VIDEO_MODEL", "kling/kling-v3-video-generation"
     )
+    # 可灵 omni 视频模型：支持首帧图生视频 / 参考生视频
+    KLING_OMNI_VIDEO_MODEL: str = os.getenv(
+        "KLING_OMNI_VIDEO_MODEL", "kling/kling-v3-omni-video-generation"
+    )
 
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
