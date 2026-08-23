@@ -221,12 +221,12 @@ class NodeBody(BaseModel):
 
 
 @router.get("/projects")
-async def drama_list_projects():
+def drama_list_projects():
     return list_projects()
 
 
 @router.get("/projects/{slug}")
-async def drama_get_project(slug: str):
+def drama_get_project(slug: str):
     try:
         return get_project(slug)
     except (DramaNotFound, DramaBadRequest) as e:
@@ -370,7 +370,7 @@ async def drama_lock_coverage(slug: str, episode: int, sid: str):
 
 
 @router.get("/projects/{slug}/episodes/{episode}")
-async def drama_get_episode(slug: str, episode: int):
+def drama_get_episode(slug: str, episode: int):
     try:
         return get_episode(slug, episode)
     except (DramaNotFound, DramaBadRequest) as e:
@@ -386,7 +386,7 @@ async def drama_patch_episode(slug: str, episode: int, body: EpisodePatch):
 
 
 @router.get("/projects/{slug}/episodes/{episode}/shots")
-async def drama_list_shots(slug: str, episode: int):
+def drama_list_shots(slug: str, episode: int):
     try:
         data = get_episode(slug, episode)
         return {
@@ -591,7 +591,7 @@ async def drama_rerender_dirty(slug: str, episode: int):
 
 
 @router.get("/projects/{slug}/episodes/{episode}/timeline")
-async def drama_get_timeline(slug: str, episode: int):
+def drama_get_timeline(slug: str, episode: int):
     try:
         return get_timeline(slug, episode)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
