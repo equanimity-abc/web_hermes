@@ -187,9 +187,25 @@ class Agent:
 
                 if tools:
                     try:
-                        msg = await self.client.chat_completion(
-                            messages, tools=tools, cancel_event=cancel_event
+                        streaming = self.client.chat_completion_stream(
+                            messages,
+                            tools=tools,
+                            cancel_event=cancel_event,
+                            need_tokens=True,
                         )
+                        final_msg: dict[str, Any] | None = None
+                        async for _text, partial in streaming:
+                            if cancelled():
+                                yield {"type": "cancelled"}
+                                return
+                            content = partial.get("content")
+                            if content:
+                                # 逐 token 真流式转发，前端即时显示
+                                yield {"type": "token", "text": _text}
+                            final_msg = partial
+                        if final_msg is None:
+                            yield {"type": "cancelled"}
+                            return
                     except _Cancelled:
                         yield {"type": "cancelled"}
                         return
@@ -197,6 +213,7 @@ class Agent:
                         yield {"type": "cancelled"}
                         return
 
+                    msg = final_msg
                     tool_calls = msg.get("tool_calls") or []
 
                     if tool_calls:
@@ -303,12 +320,7 @@ class Agent:
 
                     final = msg.get("content") or ""
                     messages.append({"role": "assistant", "content": final})
-                    chunk_size = 24
-                    for i in range(0, len(final), chunk_size):
-                        if cancelled():
-                            yield {"type": "cancelled"}
-                            return
-                        yield {"type": "token", "text": final[i : i + chunk_size]}
+                    # 真流式阶段已逐 token 转发全文，这里不能再切块重发，否则内容重复两遍。
                     return
 
                 full = ""

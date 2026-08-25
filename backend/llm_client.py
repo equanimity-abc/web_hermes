@@ -56,6 +56,26 @@ class UsageMeter:
             }
 
 
+def _merge_tool_calls(target: list[dict[str, Any]] | None, delta_tc: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Merge streaming tool_call deltas into a cumulative list (OpenAI style, index-based)."""
+    if not delta_tc:
+        return target
+    target = target if target is not None else []
+    for dtc in delta_tc:
+        idx = int(dtc.get("index") or 0)
+        while len(target) <= idx:
+            target.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+        cur = target[idx]
+        d_fn = dtc.get("function") or {}
+        if dtc.get("id"):
+            cur["id"] = dtc["id"]
+        if d_fn.get("name"):
+            cur["function"]["name"] = cur["function"].get("name", "") + d_fn["name"]
+        if d_fn.get("arguments"):
+            cur["function"]["arguments"] = cur["function"].get("arguments", "") + d_fn["arguments"]
+    return target
+
+
 class LLMClient:
     def __init__(self):
         self.api_key = config.DEEPSEEK_API_KEY
@@ -117,64 +137,46 @@ class LLMClient:
         model: str | None = None,
         cancel_event: Any | None = None,
     ) -> dict[str, Any]:
-        """Non-stream completion. Returns the assistant message dict (OpenAI shape).
+        """Non-stream completion (retained API). Uses an internal stream to become
+        genuinely cancellable; returns the full assistant message."""
+        async for _token, msg in self.chat_completion_stream(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            cancel_event=cancel_event,
+            need_tokens=False,
+        ):
+            pass
+        return msg
 
-        cancel_event (optional): asyncio.Event — when set, an in-flight request is
-        aborted ASAP so the caller can yield a `cancelled` terminal event instead of
-        hanging for the full timeout.
+    async def chat_completion_stream(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        model: str | None = None,
+        cancel_event: Any | None = None,
+        need_tokens: bool = True,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """True streaming completion. Yields (delta_text, partial_message).
+
+        Accumulates content tokens and tool_call deltas; the final yield carries
+        the complete assistant message. cancel_event aborts mid-stream.
         """
         chosen = (model or "").strip() or self.model
         timeout = httpx.Timeout(config.LLM_TIMEOUT)
+        content_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] | None = None
+        full: dict[str, Any] = {"role": "assistant", "content": None, "tool_calls": None}
+        usage: dict[str, Any] = {}
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # If already cancelled, fail fast.
             if cancel_event is not None and cancel_event.is_set():
                 raise _Cancelled()
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/chat/completions",
-                headers=self._headers(),
-                json=self._payload(
-                    messages,
-                    stream=False,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    tools=tools,
-                    model=chosen,
-                ),
-            ) as response:
-                await self._raise_http(response)
-                body = b""
-                async for chunk in response.aiter_bytes():
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise _Cancelled()
-                    body += chunk
-                data = json.loads(body.decode("utf-8", errors="replace"))
-                usage = data.get("usage") or {}
-                self.usage.record(
-                    model=chosen,
-                    prompt_tokens=usage.get("prompt_tokens") or 0,
-                    completion_tokens=usage.get("completion_tokens") or 0,
-                )
-                message = data["choices"][0]["message"]
-                # Normalize to plain dict
-                return {
-                    "role": message.get("role", "assistant"),
-                    "content": message.get("content"),
-                    "tool_calls": message.get("tool_calls") or None,
-                }
-
-    async def chat_stream(
-        self,
-        messages: list[dict],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        *,
-        model: str | None = None,
-    ) -> AsyncGenerator[str, None]:
-        """Stream plain-text tokens (no tools). Used when the model will not call tools."""
-        chosen = (model or "").strip() or self.model
-        total = 0
-        async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/v1/chat/completions",
@@ -184,7 +186,7 @@ class LLMClient:
                     stream=True,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    tools=None,
+                    tools=tools,
                     model=chosen,
                 ),
             ) as response:
@@ -196,6 +198,8 @@ class LLMClient:
                         response=response,
                     )
                 async for line in response.aiter_lines():
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise _Cancelled()
                     if not line.startswith("data: "):
                         continue
                     data = line[6:].strip()
@@ -203,14 +207,52 @@ class LLMClient:
                         break
                     try:
                         chunk = json.loads(data)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content") or ""
-                        if content:
-                            total += len(content)
-                            yield content
                     except json.JSONDecodeError:
                         continue
-        self.usage.record(model=chosen, estimated_chars=total)
+                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                    tc = delta.get("tool_calls")
+                    if tc:
+                        tool_calls = _merge_tool_calls(tool_calls, tc)
+                        full["tool_calls"] = tool_calls
+                    text = delta.get("content") or ""
+                    if text:
+                        content_parts.append(text)
+                        full["content"] = "".join(content_parts)
+                        if need_tokens:
+                            yield (text, full)
+                    ud = chunk.get("usage")
+                    if ud:
+                        usage = ud
+
+        if full.get("content") is None and not (full.get("tool_calls") or []):
+            full["content"] = ""
+        self.usage.record(
+            model=chosen,
+            prompt_tokens=usage.get("prompt_tokens") or 0,
+            completion_tokens=usage.get("completion_tokens") or 0,
+            estimated_chars=sum(len(p) for p in content_parts) if not tools else 0,
+        )
+        yield ("", full)
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        *,
+        model: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Stream plain-text tokens (no tools). Kept for compat callers."""
+        async for tok, _full in self.chat_completion_stream(
+            messages,
+            tools=None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            need_tokens=True,
+        ):
+            if tok:
+                yield tok
 
     async def chat(
         self,
