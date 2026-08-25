@@ -50,7 +50,8 @@ EXPENSIVE_I2V = frozenset({"kling", "hailuo"})
 MAX_EXPENSIVE_I2V = 2
 CURRENCY = "CNY"
 PRESET_IDS = ("cheap", "balanced", "pro")
-DEFAULT_PRESET = "balanced"
+# 默认走顶级配置（pro）；未配置商用 API 时由 provider_health 诚实降级到免费后端。
+DEFAULT_PRESET = "pro"
 
 # Nodes that can be individually configured (mirrors drama_config.NODE_KEYS).
 NODE_KEYS = (
@@ -555,6 +556,8 @@ def load_models(slug: str) -> dict[str, Any]:
     path = resolve_safe(rel)
     if not path.is_file():
         doc = default_models()
+        _bake_top_preset(doc)
+        doc["preset"] = DEFAULT_PRESET
         save_models(slug, doc)
         return doc
     try:
@@ -563,6 +566,27 @@ def load_models(slug: str) -> dict[str, Any]:
         raw = {}
     doc = normalize_models(raw)
     return doc
+
+
+def _bake_top_preset(doc: dict[str, Any]) -> None:
+    """将默认顶级预设（pro）的节点配置烘焙进全新模型文档。
+
+    手动切换预设的入口已从工作台移除；新建项目一律使用顶级模型，
+    未配置商用 API 时由 provider_health 诚实降级到免费后端。
+    """
+    try:
+        from tools.drama_config import load_preset
+    except Exception:
+        return
+    try:
+        preset = load_preset(DEFAULT_PRESET)
+    except Exception:
+        return
+    for node, value in (preset.get("models") or {}).items():
+        if node == "providers":
+            continue
+        if node in NODE_KEYS and isinstance(value, dict):
+            doc[node] = value
 
 
 def save_models(slug: str, doc: dict[str, Any]) -> dict[str, Any]:

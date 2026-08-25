@@ -872,6 +872,45 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     return payload
 
 
+def generate_episode_script(slug: str, episode: int, premise: str) -> dict[str, Any]:
+    """一句话 → 完整剧本 + 分镜表，然后落盘为分集剧本。
+
+    用 script 节点模型生成 Markdown，再复用 save_script 同步 shots.json。
+    """
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    text = str(premise or "").strip()
+    if not text:
+        raise DramaBadRequest("请先给一句故事梗概")
+    load_project(slug)
+
+    from tools.drama_script import draft_text_sync
+
+    system = (
+        "你是专业竖屏漫剧编剧。根据用户的一句话梗概，直接写出完整的分集剧本 "
+        "Markdown，严格使用以下格式，不要输出任何多余说明：\n\n"
+        "# EP{n:02d} 标题\n"
+        "- 时长: 45s\n"
+        "- 钩子: 一句话吸引人的开头\n"
+        "- 悬念: 结尾留一个反转或悬念\n\n"
+        "## 分镜\n"
+        "### Shot 1 (0-3s)\n"
+        "- 画面: 画面描述（含人物、动作、场景、镜头感）\n"
+        "- 对白: 角色:台词 或 旁白\n"
+        "- 字幕: 屏幕字幕文字\n"
+        "- 角色: 出场角色\n\n"
+        "### Shot 2 (3-6s)\n"
+        "……\n\n"
+        "要求：4–8 个镜头；剧情紧凑、有钩子和反转；画面与对白要具体可拍。"
+    ).format(n=n)
+
+    draft = draft_text_sync(slug, f"故事梗概：{text}", system=system)
+    if not str(draft or "").strip():
+        raise DramaBadRequest("剧本生成失败（模型无返回），请重试")
+
+    return save_script(slug, n, str(draft).strip())
+
+
 def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
     """Enqueue background rerender of dirty shots (D7)."""
     slug = parse_slug(slug)
@@ -960,11 +999,12 @@ def retry_render_job(job_id: str) -> dict[str, Any]:
 
 
 def _assert_budget(slug: str, episode: int) -> None:
-    state = _budget_state(slug, episode=episode)
-    if state.get("blocked"):
-        raise DramaBadRequest(
-            f"{state.get('reason') or '本集预算已超支'}（已估 {state.get('spent')} / {state.get('per_episode')} {state.get('currency')}）"
-        )
+    """预算闸已移除：不再因超支拦截任何生成动作。
+
+    保留空实现以维持调用点不变；预算功能整体下线，默认永远放行，
+    力求极致成片效果、不考虑成本约束。
+    """
+    return None
 
 
 def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
@@ -1559,4 +1599,34 @@ def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
         rec = save_character_ref(slug, cid, data)
     except CharacterError as e:
         raise DramaBadRequest(str(e)) from e
+    return enrich_character(slug, rec)
+
+
+def generate_character_ref(slug: str, cid: str) -> dict[str, Any]:
+    """文生图生成角色定妆图。失败返回明确错误；成功落盘并更新角色 ref。"""
+    load_project(slug)
+    slug = parse_slug(slug)
+    cards = load_characters(slug)
+    from tools.drama_characters import find_character
+
+    rec = find_character(cards, cid)
+    if rec is None:
+        raise DramaNotFound(f"找不到角色：{cid}，请先保存角色卡")
+    if rec.get("ref_locked") and rec.get("ref"):
+        from tools.drama_characters import ref_exists
+
+        if ref_exists(slug, rec):
+            raise DramaBadRequest("参考图已锁定，解锁后才能重新生成")
+    if not (str(rec.get("look") or "").strip() or str(rec.get("colors") or "").strip()):
+        raise DramaBadRequest("请先填写角色外形（look）或配色（colors）再生成定妆图")
+
+    from tools.drama_video import generate_character_portrait
+
+    rel = generate_character_portrait(slug, rec)
+    if not rel:
+        raise DramaBadRequest("定妆图生成失败（后端无可用图像模型或网络异常），可改用手动上传兜底")
+    rec["ref"] = rel
+    from tools.drama_characters import upsert_character
+
+    upsert_character(slug, rec)
     return enrich_character(slug, rec)

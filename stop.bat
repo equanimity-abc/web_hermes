@@ -7,6 +7,7 @@ echo    正在停止 Agent Chat 服务...
 echo ============================================
 echo.
 
+
 :: 停止后端 (FastAPI / uvicorn)
 echo [1/2] 停止后端服务...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000" ^| findstr "LISTENING"') do (

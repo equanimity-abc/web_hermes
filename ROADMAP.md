@@ -774,7 +774,8 @@ Plugin：tiktok_drama 扩 action
 **顺序硬约束：**
 
 ```text
-Q0（调研 + 分类 + speaker + 估费字段）
+Q0
+（调研 + 分类 + speaker + 估费字段）
   → Q1（分轨 + 版权）
   → Q2（口型，可降级）与 Q3（运动档，可降级）可并行
   → Q4 identity 脚本

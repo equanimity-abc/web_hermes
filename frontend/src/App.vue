@@ -50,6 +50,7 @@ const {
   toggleLock,
   previewScriptChanges,
   saveScriptChanges,
+  generateScriptFromPremise,
   rerenderDirtyShots,
   selectCharacter,
   toggleShotRole,
@@ -58,6 +59,11 @@ const {
   lockSelectedRef,
   uploadSelectedRef,
   deleteSelectedCharacter,
+  generateCharacterRef,
+  generateAllCharacterRefs,
+  generateAllScenes,
+  generateAllVideo,
+  generateAllVoice,
   generateShotCandidates,
   chooseShotCandidate,
   uploadShotScene,
@@ -373,6 +379,7 @@ onMounted(() => {
       @toggle-lock="toggleLock"
       @preview-script="previewScriptChanges"
       @save-script="saveScriptChanges"
+      @generate-script="generateScriptFromPremise"
       @rerender-dirty="rerenderDirtyShots"
       @select-character="selectCharacter"
       @add-character="addCharacter"
@@ -380,6 +387,11 @@ onMounted(() => {
       @lock-ref="lockSelectedRef"
       @upload-ref="uploadSelectedRef"
       @delete-character="deleteSelectedCharacter"
+      @generate-character-ref="generateCharacterRef"
+      @generate-all-refs="generateAllCharacterRefs"
+      @generate-all-scenes="generateAllScenes"
+      @generate-all-video="generateAllVideo"
+      @generate-all-voice="generateAllVoice"
       @toggle-role="toggleShotRole"
       @generate-candidates="generateShotCandidates"
       @choose-candidate="chooseShotCandidate"

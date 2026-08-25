@@ -119,6 +119,13 @@ export function saveScript(slug, episode, content, title) {
   })
 }
 
+export function generateScript(slug, episode, premise) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script/generate`,
+    { method: 'POST', body: JSON.stringify({ premise }) },
+  )
+}
+
 export function rerenderDirty(slug, episode) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/rerender-dirty`,
@@ -148,6 +155,13 @@ export function deleteCharacter(slug, cid) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}`, {
     method: 'DELETE',
   })
+}
+
+export function generateCharacterRef(slug, cid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/generate-ref`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
 }
 
 export function lockCharacterRef(slug, cid, locked) {

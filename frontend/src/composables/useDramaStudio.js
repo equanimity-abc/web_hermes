@@ -657,6 +657,43 @@ export function useDramaStudio() {
     }
   }
 
+  async function generateScriptFromPremise(premise) {
+    if (!slug.value) return
+    const text = String(premise || '').trim()
+    if (!text) {
+      error.value = '请先给一句故事梗概'
+      return
+    }
+    // init 立项后可能还没有任何分集（episodeN == null），此时默认落到 EP01。
+    // 后端 save_script 会自动把该集写进 project.json，无需预建分集。
+    const ep = episodeN.value || 1
+    saving.value = true
+    error.value = ''
+    notice.value = '正在根据梗概生成剧本…'
+    try {
+      const data = await dramaApi.generateScript(slug.value, ep, text)
+      episodeN.value = data.episode || ep
+      episode.value = data
+      scriptDraft.value = data.script || ''
+      scriptImpact.value = data.impact || null
+      try {
+        project.value = await dramaApi.getProject(slug.value)
+      } catch {
+        /* keep current project */
+      }
+      const keep = (data.shots || []).some((s) => s.n === selectedN.value)
+      selectShot(keep ? selectedN.value : data.shots?.[0]?.n || null)
+      notice.value = (data.shots || []).length
+        ? `已生成剧本，共 ${data.shots.length} 镜`
+        : '剧本已生成'
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function rerenderDirtyShots() {
     if (!slug.value || !episodeN.value) return
     error.value = ''
@@ -1387,6 +1424,135 @@ export function useDramaStudio() {
     }
   }
 
+  async function generateCharacterRef(cid) {
+    if (!slug.value || !cid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const rec = await dramaApi.generateCharacterRef(slug.value, cid)
+      bust.value = Date.now()
+      await refreshCast()
+      notice.value = `已生成「${rec?.name || rec?.id || cid}」定妆图`
+      return rec
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function generateAllCharacterRefs() {
+    if (!slug.value) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const cards = characters.value.filter((c) => !(c.ref_locked && c.ref_exists))
+      for (const c of cards) {
+        try {
+          await dramaApi.generateCharacterRef(slug.value, c.id)
+        } catch {
+          /* skip individual failures; surface nothing (character may lack look) */
+        }
+      }
+      bust.value = Date.now()
+      await refreshCast()
+      const ok = characters.value.filter((c) => c.ref_exists).length
+      notice.value = ok ? `已生成定妆图：${ok} 个角色` : '没有可生成的定妆图，请先填写角色外形'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function generateAllScenes() {
+    const ep = episodeN.value
+    if (!slug.value || !ep) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    let done = 0
+    try {
+      for (const s of shots.value) {
+        if ((s.locked || []).some((k) => k === 'shot' || k === 'scene')) continue
+        try {
+          await dramaApi.generateCandidates(slug.value, ep, s.n, 4)
+          done += 1
+        } catch {
+          /* skip ineligible shots */
+        }
+      }
+      bust.value = Date.now()
+      await openEpisode(ep)
+      notice.value = done ? `已为 ${done} 镜出图（画面）` : '没有可出图的镜头（已锁画面或整镜）'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function generateAllVideo() {
+    const ep = episodeN.value
+    if (!slug.value || !ep) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    let done = 0
+    try {
+      for (const s of shots.value) {
+        if ((s.locked || []).includes('shot')) continue
+        if (s.i2v_source === 'ai' || s.i2v_source === 'keys') continue
+        if (!s.route?.will_run || s.route?.ladder === 'L0') continue
+        try {
+          await dramaApi.generateI2v(slug.value, ep, s.n)
+          done += 1
+        } catch {
+          /* skip */
+        }
+      }
+      bust.value = Date.now()
+      await openEpisode(ep)
+      notice.value = done ? `已为 ${done} 镜生成视频（图生视频）` : '没有可生成视频的镜头'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
+  async function generateAllVoice() {
+    const ep = episodeN.value
+    if (!slug.value || !ep) return
+    rendering.value = true
+    error.value = ''
+    notice.value = ''
+    let done = 0
+    try {
+      for (const s of shots.value) {
+        if ((s.locked || []).includes('shot')) continue
+        const hasDialogue = Boolean((s.对白 || '').trim() || (s.字幕 || '').trim())
+        if (!hasDialogue) continue
+        try {
+          // 配音 + 口型一起走同一次重建（TTS 生成对白语音，再开口型）
+          await dramaApi.rerenderShot(slug.value, ep, s.n, ['voice', 'lip'])
+          done += 1
+        } catch {
+          /* skip */
+        }
+      }
+      bust.value = Date.now()
+      await openEpisode(ep)
+      notice.value = done ? `已为 ${done} 镜生成配音与口型` : '没有可配音的镜头'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
+    }
+  }
+
   return {
     projects,
     slug,
@@ -1477,6 +1643,7 @@ export function useDramaStudio() {
     saveEpisodeMeta,
     previewScriptChanges,
     saveScriptChanges,
+    generateScriptFromPremise,
     rerenderDirtyShots,
     selectCharacter,
     toggleShotRole,
@@ -1485,6 +1652,11 @@ export function useDramaStudio() {
     lockSelectedRef,
     uploadSelectedRef,
     deleteSelectedCharacter,
+    generateCharacterRef,
+    generateAllCharacterRefs,
+    generateAllScenes,
+    generateAllVideo,
+    generateAllVoice,
     generateShotCandidates,
     chooseShotCandidate,
     uploadShotScene,

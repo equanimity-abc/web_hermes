@@ -21,6 +21,8 @@ from tools.drama_studio import (
     get_timeline,
     list_projects,
     list_render_jobs,
+    generate_character_ref,
+    generate_episode_script,
     lock_character_ref,
     patch_episode,
     patch_project,
@@ -140,6 +142,11 @@ class CandidateCount(BaseModel):
 
 class ScriptBody(BaseModel):
     content: str
+    title: str | None = None
+
+
+class ScriptGenerateBody(BaseModel):
+    premise: str
     title: str | None = None
 
 
@@ -582,6 +589,16 @@ async def drama_save_script(slug: str, episode: int, body: ScriptBody):
         raise _http(e) from e
 
 
+@router.post("/projects/{slug}/episodes/{episode}/script/generate")
+def drama_generate_script(slug: str, episode: int, body: ScriptGenerateBody):
+    # 注意：必须是 def（同步），否则 generate_episode_script → draft_text_sync
+    # 内部的 asyncio.run() 会在事件循环里抛 RuntimeError（500）。
+    try:
+        return generate_episode_script(slug, episode, body.premise)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
 @router.post("/projects/{slug}/episodes/{episode}/rerender-dirty")
 async def drama_rerender_dirty(slug: str, episode: int):
     try:
@@ -756,5 +773,14 @@ async def drama_upload_character_ref(slug: str, cid: str, file: UploadFile = Fil
     try:
         data = await file.read()
         return upload_character_ref(slug, cid, data)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/characters/{cid}/generate-ref")
+def drama_generate_character_ref(slug: str, cid: str):
+    # 同步 def：真出图是长阻塞网络调用，放线程池避免卡死事件循环。
+    try:
+        return generate_character_ref(slug, cid)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e

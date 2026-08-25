@@ -476,6 +476,38 @@ def _generate_scene_image(
     )
 
 
+def generate_character_portrait(slug: str, char: dict[str, Any]) -> str | None:
+    """文生图出定妆图（角色定妆）。返回新的 ref 相对路径，失败返回 None。
+
+    用 name + look + colors 组角色设计三视图 prompt，走 image 路由的对话类
+    （use_ref 一致性模型）；未配置商用后端时由 _generate_scene_image 诚实降级。
+    """
+    import zlib
+
+    from tools.drama_characters import ref_rel
+
+    cid = str(char.get("id") or "")
+    name = str(char.get("name") or cid)
+    look = str(char.get("look") or "").strip() or "original character design"
+    colors = str(char.get("colors") or "").strip()
+    prompt = (
+        "vertical 9:16 character design sheet, full body standing pose, "
+        f"{name}: {look}"
+        + (f", color palette {colors}" if colors else "")
+        + ", classic manhua / anime illustration, clean simple background, "
+        "highly detailed, same face and costume, no text, no letters, no watermark"
+    )
+    dest_rel = ref_rel(slug, cid)
+    dest = resolve_safe(dest_rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    seed = zlib.crc32(f"{slug}:{cid}".encode()) & 0x7FFFFFFF
+    # dialogue 路由 → use_ref 一致性模型优先；无适配器时回落全局默认。
+    ok = _generate_scene_image(prompt, dest, seed=seed, slug=slug, shot={"kind": "dialogue"})
+    if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
+        return None
+    return dest_rel
+
+
 def _write_scene_png(data: bytes, dest: Path) -> None:
     from io import BytesIO
 
