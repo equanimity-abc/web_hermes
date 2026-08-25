@@ -201,6 +201,22 @@ def default_providers() -> dict[str, dict[str, Any]]:
             "fallback": "mock",
             "notes": "开源口型，画质不稳。Q2 候选，Q0 未接。",
         },
+        "pixverse": {
+            "available": True,
+            "cost_per_shot": 0.36,
+            "rpm": 10,
+            "timeout_s": 240,
+            "fallback": "mock",
+            "notes": "PixVerse 对口型 pixverse-lipsync（0.12元/秒，3秒约0.36），走专属 MaaS 端点。",
+        },
+        "pixverse-lipsync": {
+            "available": True,
+            "cost_per_shot": 0.36,
+            "rpm": 10,
+            "timeout_s": 240,
+            "fallback": "mock",
+            "notes": "PixVerse 对口型 pixverse-lipsync（0.12元/秒，3秒约0.36），走专属 MaaS 端点。",
+        },
         "wanx": {
             "available": True,
             "cost_per_shot": 0.5,
@@ -874,7 +890,12 @@ _ENV_GATED: dict[str, dict[str, str]] = {
         "cosyvoice": "DASHSCOPE_API_KEY",
         "qwen-tts": "DASHSCOPE_API_KEY",
     },
-    "lip": {"musetalk": "LIP_API_URL", "wav2lip": "LIP_API_URL"},
+    "lip": {
+        "musetalk": "LIP_API_URL",
+        "wav2lip": "LIP_API_URL",
+        "pixverse": "DASHSCOPE_MAAS_BASE_URL",
+        "pixverse-lipsync": "DASHSCOPE_MAAS_BASE_URL",
+    },
 }
 
 

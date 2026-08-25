@@ -22,7 +22,7 @@
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
-    "lip": { "provider": "musetalk", "enabled": true },
+    "lip": { "provider": "pixverse", "enabled": true },
     "tts": { "provider": "cosyvoice", "model": "qwen-audio-3.0-tts-plus" },
     "subtitle": { "style": "static", "note": "karaoke 未实现，降级为静态字幕；待 S7 逐字卡点" }
   }

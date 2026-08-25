@@ -372,11 +372,11 @@ def _dashscope_image(
         return False
 
 
-def _dashscope_upload_public_url(rel: str, client) -> str:
-    """上传本地文件到百炼，返回公网 OSS 签名 URL（用于给可灵当参考图）。
+def _dashscope_upload_public_url(rel: str, client, *, mime: str | None = None) -> str:
+    """上传本地文件到百炼，返回公网 OSS 签名 URL（用于给可灵/PixVerse 当参考媒体）。
 
     走通用 dashscope 端点（已验证 purpose=chat-image-understanding 可上传图片）。
-    失败/限流返回空串，调用方据此降级为纯文生图。
+    mime 缺省时按扩展名推断（png/jpg/mp4/mp3/wav）。失败/限流返回空串。
     """
     import time
 
@@ -389,13 +389,23 @@ def _dashscope_upload_public_url(rel: str, client) -> str:
         path = resolve_safe(str(rel))
         if not path.is_file():
             return ""
+        if not mime:
+            ext = path.suffix.lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".mp4": "video/mp4",
+                ".mp3": "audio/mpeg",
+                ".wav": "audio/wav",
+            }.get(ext, "application/octet-stream")
         headers = {"Authorization": f"Bearer {key}"}
         with path.open("rb") as f:
             data = f.read()
         upload = client.post(
             f"{dbase}/api/v1/files",
             headers=headers,
-            files={"files": (path.name, data, "image/png")},
+            files={"files": (path.name, data, mime)},
             data={"purpose": "chat-image-understanding"},
         )
         upload.raise_for_status()

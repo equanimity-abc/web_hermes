@@ -38,6 +38,10 @@ class Config:
     KLING_OMNI_VIDEO_MODEL: str = os.getenv(
         "KLING_OMNI_VIDEO_MODEL", "kling/kling-v3-omni-video-generation"
     )
+    # PixVerse 对口型模型（输入视频+音频 → 口型同步视频）
+    PIXVERSE_LIP_MODEL: str = os.getenv(
+        "PIXVERSE_LIP_MODEL", "pixverse/pixverse-lipsync"
+    )
 
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
