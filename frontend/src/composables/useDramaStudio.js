@@ -816,15 +816,17 @@ export function useDramaStudio() {
     }
   }
 
-  async function lockSelectedRef() {
-    if (!slug.value || !selectedCharacterId.value) return
-    const locked = !selectedCharacter.value?.ref_locked
+  async function lockSelectedRef(cid) {
+    const targetId = String(cid || selectedCharacterId.value || '').trim()
+    if (!slug.value || !targetId) return
+    const target = characters.value.find((c) => c.id === targetId) || null
+    const locked = !target?.ref_locked
     saving.value = true
     error.value = ''
     try {
-      await dramaApi.lockCharacterRef(slug.value, selectedCharacterId.value, locked)
+      await dramaApi.lockCharacterRef(slug.value, targetId, locked)
       await refreshCast()
-      notice.value = locked ? '已锁定参考图' : '已解锁参考图'
+      notice.value = locked ? `已锁定「${target?.name || targetId}」参考图` : `已解锁「${target?.name || targetId}」参考图`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -848,13 +850,14 @@ export function useDramaStudio() {
     }
   }
 
-  async function deleteSelectedCharacter() {
-    if (!slug.value || !selectedCharacterId.value) return
+  async function deleteSelectedCharacter(cid) {
+    const targetId = String(cid || selectedCharacterId.value || '').trim()
+    if (!slug.value || !targetId) return
     saving.value = true
     error.value = ''
     try {
-      await dramaApi.deleteCharacter(slug.value, selectedCharacterId.value)
-      selectedCharacterId.value = null
+      await dramaApi.deleteCharacter(slug.value, targetId)
+      if (selectedCharacterId.value === targetId) selectedCharacterId.value = null
       await refreshCast()
       notice.value = '角色已删除'
     } catch (e) {

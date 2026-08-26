@@ -622,7 +622,7 @@ def _action_generate_character_ref(args: dict) -> str:
     prompt = (
         f"{look}，角色定妆参考图，正面全身站立，单一人物，"
         f"{colors + ' 配色，' if colors else ''}"
-        f"干净简洁背景，动漫插画风格，高清，无文字，无水印"
+        f"干净简洁背景，现代都市条漫风格，高清，无文字，无水印"
     )
     seed = zlib.crc32(f"{slug}:{cid}:{look}".encode()) & 0x7FFFFFFF
 

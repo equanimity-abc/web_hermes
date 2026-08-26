@@ -59,7 +59,7 @@ _SHOT_HEAD = re.compile(
     r"^###\s*Shot\s+(\d+)\s*(?:\(([^)]*)\))?\s*$",
     re.IGNORECASE,
 )
-_FIELD = re.compile(r"^-\s*(画面|对白|字幕|角色)\s*[:：]\s*(.*)\s*$")
+_FIELD = re.compile(r"^-\s*\*{0,2}(画面|对白|字幕|角色)\*{0,2}\s*[:：]\s*(.*)\s*$")
 _RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–~]\s*(\d+(?:\.\d+)?)")
 _QUOTE = re.compile(r"[「『“\"]([^」』”\"]+)[」』”\"]")
 
@@ -98,7 +98,7 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
         if line.startswith("# ") and not title:
             title = line[2:].strip()
             continue
-        m_meta = re.match(r"^-\s*(时长|钩子|悬念)\s*[:：]\s*(.*)$", line)
+        m_meta = re.match(r"^-\s*\*{0,2}(时长|钩子|悬念)\*{0,2}\s*[:：]\s*(.*)$", line)
         if m_meta and current is None:
             meta[m_meta.group(1)] = m_meta.group(2).strip()
             continue
@@ -263,7 +263,7 @@ def _scene_prompt(
     *,
     slug: str = "",
 ) -> str:
-    scene = (shot.get("画面") or "").strip() or "cinematic Chinese myth scene"
+    scene = (shot.get("画面") or "").strip() or "cinematic modern urban scene"
     style = _camera_style(shot)
     kinetic = {
         "punch_in": "dynamic action pose, motion implied, wind-blown cloth, sparks",
@@ -283,7 +283,7 @@ def _scene_prompt(
 
         style_clause = style_prompt_clause(slug, shot, episode=episode)
     bits = [
-        "vertical 9:16 cinematic Chinese animation keyframe",
+        "vertical 9:16 cinematic short-drama keyframe",
         title or "short drama",
         scene,
         char_clause,
@@ -292,7 +292,7 @@ def _scene_prompt(
     if style_clause:
         bits.append(style_clause)
     bits.append(
-        "classic manhua / anime illustration, dramatic rim lighting, highly detailed, "
+        "modern urban webtoon illustration, dramatic rim lighting, highly detailed, "
         "no text, no letters, no subtitles, no watermark, no UI"
     )
     return ", ".join(b for b in bits if b)
@@ -494,7 +494,7 @@ def generate_character_portrait(slug: str, char: dict[str, Any]) -> str | None:
         "vertical 9:16 character design sheet, full body standing pose, "
         f"{name}: {look}"
         + (f", color palette {colors}" if colors else "")
-        + ", classic manhua / anime illustration, clean simple background, "
+        + ", modern urban webtoon illustration, clean simple background, "
         "highly detailed, same face and costume, no text, no letters, no watermark"
     )
     dest_rel = ref_rel(slug, cid)

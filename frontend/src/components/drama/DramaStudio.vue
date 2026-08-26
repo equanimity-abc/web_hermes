@@ -387,12 +387,12 @@ function onGenerateScript() {
                 <span v-else class="drama-candidate-empty">无图</span>
               </div>
               <strong>{{ char.name || char.id }}</strong>
-              <em>{{ char.look || '（未写外形，生成前请先填写）' }}</em>
               <div class="drama-cast-actions">
                 <button type="button" class="btn-tiny" :disabled="saving || rendering" @click.stop="emit('generate-character-ref', char.id)">生成</button>
-                <button type="button" class="btn-tiny" :disabled="saving || !char.ref_exists" @click.stop="emit('lock-ref')">
+                <button type="button" class="btn-tiny" :disabled="saving || !char.ref_exists" @click.stop="emit('lock-ref', char.id)">
                   {{ char.ref_locked ? '解锁' : '锁定' }}
                 </button>
+                <button type="button" class="btn-tiny btn-tiny-danger" :disabled="saving" @click.stop="emit('delete-character', char.id)">删除</button>
               </div>
             </article>
             <p v-if="!characters.length" class="drama-empty-hint">还没有角色。先添加角色并填外形，再生成定妆图。</p>
