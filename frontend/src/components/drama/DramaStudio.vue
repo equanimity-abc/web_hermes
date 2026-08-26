@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -75,6 +75,7 @@ const emit = defineEmits([
   'lock-ref',
   'upload-ref',
   'delete-character',
+  'delete-candidate',
   'generate-character-ref',
   'generate-all-refs',
   'toggle-role',
@@ -135,6 +136,8 @@ const sceneInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
 const selectedKeyId = ref(null)
+const candidateWallOpen = ref(false)
+const confirmGenerate = ref(false)
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
@@ -285,6 +288,21 @@ function onKeyFile(ev) {
 function onGenerateScript() {
   emit('generate-script', premise.value)
 }
+
+// 切换镜头时重置候选墙：默认不展示候选图，回到「生成候选图」按钮
+watch(
+  () => props.selectedN,
+  () => {
+    candidateWallOpen.value = false
+    confirmGenerate.value = false
+  },
+)
+
+function doGenerate() {
+  confirmGenerate.value = false
+  candidateWallOpen.value = true
+  emit('generate-candidates')
+}
 </script>
 
 <template>
@@ -419,11 +437,6 @@ function onGenerateScript() {
           <h2>③ 画面 —— 分镜文生图 + 候选墙锁图</h2>
         </div>
         <div class="drama-panel-body">
-          <div class="drama-actions">
-            <button type="button" class="btn-primary" :disabled="rendering" @click="emit('generate-all-scenes')">
-              {{ rendering ? '出图中…' : '一键全部出图' }}
-            </button>
-          </div>
           <div class="drama-shot-grid">
             <button v-for="shot in shots" :key="shot.n" type="button" class="drama-shot-card" :class="{ active: shot.n === selectedN }" @click="emit('select-shot', shot.n)">
               <img v-if="shotThumb(shot)" :src="shotThumb(shot)" :alt="`Shot ${shot.n}`" />
@@ -432,27 +445,51 @@ function onGenerateScript() {
             </button>
           </div>
           <div v-if="selected" class="drama-inspector-panel">
-            <div class="drama-candidates-head"><h3>候选墙 · Shot {{ selected.n }}</h3></div>
-            <div class="drama-actions">
-              <button type="button" class="btn-ghost" :disabled="rendering || shotFrozen || isLocked('scene')" @click="emit('generate-candidates')">重抽 4 张</button>
-              <button type="button" class="btn-ghost" :disabled="rendering || shotFrozen" @click="sceneInput?.click()">手传覆盖</button>
-            </div>
-            <input ref="sceneInput" class="drama-file" type="file" accept="image/*" @change="onSceneFile" />
-            <div class="drama-candidate-grid">
-              <button
-                v-for="cand in selected.candidates || []"
-                :key="cand.id"
-                type="button"
-                class="drama-candidate"
-                :class="{ chosen: cand.chosen || selected.chosen === cand.id }"
-                :disabled="rendering || shotFrozen"
-                @click="emit('choose-candidate', cand.id)"
-              >
-                <img v-if="candUrl(cand)" :src="candUrl(cand)" :alt="cand.id" />
-                <span v-else class="drama-candidate-empty">无图</span>
-              </button>
-            </div>
-            <p v-if="!selected.candidates?.length" class="drama-empty-hint">点「重抽 4 张」生成候选，点缩略图锁定画面。</p>
+            <!-- 默认收起：仅显示「生成候选图」按钮 -->
+            <button
+              v-if="!candidateWallOpen"
+              type="button"
+              class="btn-primary"
+              :disabled="rendering || shotFrozen || isLocked('scene')"
+              @click="confirmGenerate = true"
+            >
+              {{ rendering ? '生成中…' : '生成候选图' }}
+            </button>
+
+            <!-- 候选墙：生成后展开，点击候选图即把该镜画面切换为选中候选 -->
+            <template v-else>
+              <div class="drama-candidates-head">
+                <h3>候选墙 · Shot {{ selected.n }}</h3>
+                <button
+                  type="button"
+                  class="btn-ghost"
+                  :disabled="rendering || shotFrozen || isLocked('scene')"
+                  @click="confirmGenerate = true"
+                >
+                  补抽候选
+                </button>
+              </div>
+              <div class="drama-actions">
+                <button type="button" class="btn-ghost" :disabled="rendering || shotFrozen" @click="sceneInput?.click()">手传覆盖</button>
+              </div>
+              <input ref="sceneInput" class="drama-file" type="file" accept="image/*" @change="onSceneFile" />
+              <div class="drama-candidate-grid">
+                <button
+                  v-for="cand in selected.candidates || []"
+                  :key="cand.id"
+                  type="button"
+                  class="drama-candidate"
+                  :class="{ chosen: cand.chosen || selected.chosen === cand.id }"
+                  :disabled="rendering || shotFrozen"
+                  @click="emit('choose-candidate', cand.id)"
+                >
+                  <img v-if="candUrl(cand)" :src="candUrl(cand)" :alt="cand.id" />
+                  <span v-else class="drama-candidate-empty">无图</span>
+                  <span class="drama-candidate-del" title="删除候选" @click.stop="emit('delete-candidate', cand.id)">×</span>
+                </button>
+              </div>
+              <p v-if="!selected.candidates?.length" class="drama-empty-hint">暂无候选。点「补抽候选」生成，点缩略图切换画面。</p>
+            </template>
           </div>
         </div>
       </section>
@@ -551,6 +588,18 @@ function onGenerateScript() {
         <li><strong>2. 剧本</strong> 一句话生成完整剧本与分镜</li>
         <li><strong>3. 一路生成</strong> 角色 → 画面 → 视频 → 声音 → 成片</li>
       </ol>
+    </div>
+
+    <!-- 生成候选图确认对话框 -->
+    <div v-if="confirmGenerate" class="confirm-overlay" role="dialog" aria-modal="true">
+      <div class="confirm-modal">
+        <div class="confirm-title">确认生成候选图</div>
+        <p class="confirm-body">将为 Shot {{ selected?.n }} 文生图生成候选（最多 4 张），是否继续？</p>
+        <div class="confirm-actions">
+          <button type="button" class="btn-ghost" @click="confirmGenerate = false">取消</button>
+          <button type="button" class="btn-primary" :disabled="rendering" @click="doGenerate">生成</button>
+        </div>
+      </div>
     </div>
   </main>
 </template>

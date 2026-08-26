@@ -66,6 +66,7 @@ const {
   generateAllVoice,
   generateShotCandidates,
   chooseShotCandidate,
+  deleteCandidate,
   uploadShotScene,
   generateShotI2v,
   generateShotLip,
@@ -395,6 +396,7 @@ onMounted(() => {
       @toggle-role="toggleShotRole"
       @generate-candidates="generateShotCandidates"
       @choose-candidate="chooseShotCandidate"
+      @delete-candidate="deleteCandidate"
       @upload-scene="uploadShotScene"
       @generate-i2v="generateShotI2v"
       @generate-lip="generateShotLip"

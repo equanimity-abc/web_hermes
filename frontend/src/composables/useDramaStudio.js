@@ -902,6 +902,23 @@ export function useDramaStudio() {
     }
   }
 
+  async function deleteCandidate(cid) {
+    if (!slug.value || !episodeN.value || !selectedN.value || !cid) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      await dramaApi.deleteCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = `已删除候选 ${cid}`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function uploadShotScene(file) {
     if (!slug.value || !episodeN.value || !selectedN.value || !file) return
     rendering.value = true
@@ -1662,6 +1679,7 @@ export function useDramaStudio() {
     generateAllVoice,
     generateShotCandidates,
     chooseShotCandidate,
+    deleteCandidate,
     uploadShotScene,
     generateShotI2v,
     generateShotLip,

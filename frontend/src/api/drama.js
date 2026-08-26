@@ -206,6 +206,13 @@ export function chooseCandidate(slug, episode, shot, cid) {
   )
 }
 
+export function deleteCandidate(slug, episode, shot, cid) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/candidates/${encodeURIComponent(cid)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function uploadShotScene(slug, episode, shot, file) {
   const form = new FormData()
   form.append('file', file)

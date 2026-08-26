@@ -650,6 +650,47 @@ def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str
     return payload
 
 
+def delete_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str, Any]:
+    """Remove one candidate from the shot's candidate wall."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    cid = str(cid or "").strip()
+    if not cid:
+        raise DramaBadRequest("需要候选 id")
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+    if "shot" in (shot.get("locked") or []):
+        raise DramaBadRequest("整镜已锁定，不能删除候选")
+    _take_snapshot(slug, n, doc, tag="candidate_delete")
+    candidates = [c for c in (shot.get("candidates") or []) if str(c.get("id") or "") != cid]
+    shot["candidates"] = candidates
+    if str(shot.get("chosen") or "") == cid:
+        shot["chosen"] = ""
+    # 删除候选图片文件（保留已选中的 scene.png 不动）
+    from tools.drama_shots import candidate_rel
+
+    rel = candidate_rel(slug, n, shot_n, cid)
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        path = None
+    if path is not None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    save_doc(doc)
+    return {
+        "slug": slug,
+        "episode": n,
+        "shot": enrich_shot(shot, slug=slug),
+        "deleted": cid,
+    }
+
+
 def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)

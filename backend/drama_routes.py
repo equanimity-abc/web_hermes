@@ -40,6 +40,7 @@ from tools.drama_studio import (
     upload_character_ref,
     upload_shot_scene,
     choose_candidate,
+    delete_candidate,
     generate_candidates,
     generate_i2v_shot,
     generate_lip_shot,
@@ -446,6 +447,14 @@ async def drama_generate_candidates(slug: str, episode: int, shot: int, body: Ca
 async def drama_choose_candidate(slug: str, episode: int, shot: int, cid: str):
     try:
         return choose_candidate(slug, episode, shot, cid)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.delete("/projects/{slug}/episodes/{episode}/shots/{shot}/candidates/{cid}")
+async def drama_delete_candidate(slug: str, episode: int, shot: int, cid: str):
+    try:
+        return delete_candidate(slug, episode, shot, cid)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
         raise _http(e) from e
 

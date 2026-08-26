@@ -928,6 +928,7 @@
 }
 
 .drama-candidate {
+  position: relative;
   border: 2px solid transparent;
   border-radius: 8px;
   padding: 0;
@@ -936,6 +937,26 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.drama-candidate-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.drama-candidate-del:hover {
+  background: var(--color-danger, #dc2626);
 }
 
 .drama-candidate img {
@@ -1438,4 +1459,36 @@
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-bg-muted);
+}
+
+/* —— 生成候选图确认对话框 —— */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.5);
+}
+.confirm-modal {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.24);
+}
+.confirm-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.confirm-body {
+  margin: 10px 0 18px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
