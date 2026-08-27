@@ -22,6 +22,21 @@ from tools.providers.registry import register
 from tools.workspace import resolve_safe
 
 
+def _is_character_ref_shot(shot: Any) -> bool:
+    return str((shot or {}).get("kind") or "").strip().lower() == "character_ref"
+
+
+def _save_provider_image(img, dest, *, shot: Any, target_w: int, target_h: int) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if _is_character_ref_shot(shot):
+        img.save(dest, "PNG")
+        return
+    from tools.drama_video import _prepare_frame
+
+    img = _prepare_frame(img, target_w, target_h)
+    img.save(dest, "PNG")
+
+
 def _pollinations(
     prompt: str,
     dest,
@@ -45,23 +60,27 @@ def _pollinations(
     rpm = int(getattr(config, "DRAMA_RPM_DEFAULT", 0) or 0)
     rate_limiter_for(f"image:pollinations", rpm).acquire()
 
-    from tools.drama_video import _fit_cover  # pure PIL helper, no cycle
+    from tools.drama_video import _prepare_frame  # pure PIL helper, no cycle
 
     target_w = int(width or 1620)
     target_h = int(height or 2880)
     model = config.IMAGE_GEN_MODEL or "flux"
     final_prompt = str(prompt)
+    if _is_character_ref_shot(shot):
+        from tools.drama_characters import character_ref_negative_prompt
+
+        final_prompt = f"{final_prompt}。{character_ref_negative_prompt()}"
     if refs:
         # txt2img fallback: emphasize same-face / same-costume since we can't
         # feed the reference image directly. A real img2img adapter should
         # consume `refs` and skip this textual nudge.
         final_prompt = (
-            f"{final_prompt}, keep face identical to the locked character "
-            f"reference sheet, same facial structure and costume"
+            f"{final_prompt}，与锁定角色参考图面部完全一致，"
+            "五官结构与服装保持一致"
         )
     url = (
         "https://image.pollinations.ai/prompt/"
-        f"{quote(final_prompt)}?width=1024&height=1792&model={quote(model)}"
+        f"{quote(final_prompt)}?width={target_w}&height={target_h}&model={quote(model)}"
         f"&nologo=true&enhance=true&seed={int(seed) & 0x7FFFFFFF}"
     )
     try:
@@ -69,9 +88,7 @@ def _pollinations(
             resp = client.get(url, headers={"User-Agent": "my-tiktok-video-agent/0.8"})
             resp.raise_for_status()
             img = Image.open(BytesIO(resp.content)).convert("RGB")
-        img = _fit_cover(img, target_w, target_h)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dest, "PNG")
+        _save_provider_image(img, dest, shot=shot, target_w=target_w, target_h=target_h)
         return dest.is_file() and dest.stat().st_size > 1000
     except Exception:
         return False
@@ -186,7 +203,7 @@ def _consistent_http(
     import httpx
     from PIL import Image
 
-    from tools.drama_video import _fit_cover
+    from tools.drama_video import _prepare_frame
 
     from tools.drama_retry import rate_limiter_for
 
@@ -248,7 +265,7 @@ def _consistent_http(
             resp = client.post(url, headers=headers, data=fields, files=files or None)
             resp.raise_for_status()
             img = Image.open(BytesIO(resp.content)).convert("RGB")
-        img = _fit_cover(img, target_w, target_h)
+        img = _prepare_frame(img, target_w, target_h)
         dest.parent.mkdir(parents=True, exist_ok=True)
         img.save(dest, "PNG")
         if dest.is_file() and dest.stat().st_size > 1000:
@@ -257,6 +274,61 @@ def _consistent_http(
         return False
     except Exception:
         return False
+
+
+def _qwen_image_plus_size(width: int, height: int) -> str:
+    """qwen-image-plus / qwen-image 仅支持 5 种固定分辨率。"""
+    w = max(1, int(width or 1328))
+    h = max(1, int(height or 1328))
+    ratio = w / h
+    presets = (
+        (16 / 9, "1664*928"),
+        (4 / 3, "1472*1104"),
+        (1.0, "1328*1328"),
+        (3 / 4, "1104*1472"),
+        (9 / 16, "928*1664"),
+    )
+    _, size = min(presets, key=lambda item: abs(item[0] - ratio))
+    return size
+
+
+def _kling_aspect_ratio(width: int, height: int) -> str:
+    w = max(1, int(width or 1024))
+    h = max(1, int(height or 1792))
+    ratio = w / h
+    presets = (
+        (16 / 9, "16:9"),
+        (4 / 3, "4:3"),
+        (1.0, "1:1"),
+        (3 / 4, "3:4"),
+        (9 / 16, "9:16"),
+    )
+    _, label = min(presets, key=lambda item: abs(item[0] - ratio))
+    return label
+
+
+def _dashscope_gen_size(width: int, height: int, *, model: str = "") -> str:
+    """Map target canvas to a DashScope-supported size string."""
+    model_l = str(model or "").strip().lower()
+    if "qwen-image" in model_l:
+        return _qwen_image_plus_size(width, height)
+
+    w = max(512, int(width or 720))
+    h = max(512, int(height or 1280))
+    ratio = w / h if h else 1.0
+    presets = (
+        (640, 640),
+        (1024, 1024),
+        (1328, 1328),
+        (1664, 1664),
+        (1980, 1980),
+        (720, 1280),
+        (768, 1344),
+        (960, 1696),
+        (1024, 1792),
+    )
+    pw, ph = min(presets, key=lambda p: abs(p[0] / p[1] - ratio) + abs(p[0] - w) * 1e-4)
+    return f"{pw}*{ph}"
 
 
 def _dashscope_image(
@@ -283,7 +355,7 @@ def _dashscope_image(
     import httpx
     from PIL import Image
 
-    from tools.drama_video import _fit_cover
+    from tools.drama_video import _prepare_frame
 
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
     if not key:
@@ -292,12 +364,17 @@ def _dashscope_image(
     target_w = int(width or 1620)
     target_h = int(height or 2880)
 
-    # 提示词：refs 退化为加强一致性描述；竖屏 9:16。
+    # 提示词：refs 退化为加强一致性描述；定妆图关闭扩写以免被改写成设定表风格。
     final_prompt = str(prompt)
+    is_char_ref = _is_character_ref_shot(shot)
+    if is_char_ref:
+        from tools.drama_characters import character_ref_negative_prompt
+
+        final_prompt = f"{final_prompt}。{character_ref_negative_prompt()}"
     if refs:
         final_prompt = (
-            f"{final_prompt}, keep face identical to the locked character "
-            f"reference sheet, same facial structure and costume"
+            f"{final_prompt}，与锁定角色参考图面部完全一致，"
+            "五官结构与服装保持一致"
         )
 
     base = (getattr(config, "DASHSCOPE_BASE_URL", "") or "https://dashscope.aliyuncs.com").rstrip("/")
@@ -309,20 +386,29 @@ def _dashscope_image(
         "X-DashScope-Async": "enable",
         "User-Agent": "my-tiktok-video-agent/1.0",
     }
+    query_headers = {"Authorization": f"Bearer {key}", "User-Agent": "my-tiktok-video-agent/1.0"}
 
     seed_val = int(seed) & 0x7FFFFFFF
+    params: dict[str, Any] = {
+        "size": _dashscope_gen_size(target_w, target_h, model=model),
+        "n": 1,
+        "seed": seed_val,
+        "prompt_extend": not is_char_ref,
+        "watermark": False,
+    }
+    if is_char_ref:
+        from tools.drama_characters import character_ref_negative_prompt
+
+        params["negative_prompt"] = character_ref_negative_prompt()
     body = {
         "model": model,
         "input": {"prompt": final_prompt},
-        "parameters": {
-            "size": "720*1280",
-            "n": 1,
-            "seed": seed_val,
-        },
+        "parameters": params,
     }
 
     try:
-        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        timeout = httpx.Timeout(30.0, read=200.0)
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             submit = client.post(
                 f"{base}/api/v1/services/aigc/text2image/image-synthesis",
                 headers=headers,
@@ -343,7 +429,7 @@ def _dashscope_image(
                 time.sleep(2.0)
                 st = client.get(
                     f"{base}/api/v1/tasks/{task_id}",
-                    headers=headers,
+                    headers=query_headers,
                 )
                 st.raise_for_status()
                 info = st.json()
@@ -361,9 +447,7 @@ def _dashscope_image(
                     img_resp = client.get(url)
                     img_resp.raise_for_status()
                     img = Image.open(__import__("io").BytesIO(img_resp.content)).convert("RGB")
-                    img = _fit_cover(img, target_w, target_h)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    img.save(dest, "PNG")
+                    _save_provider_image(img, dest, shot=shot, target_w=target_w, target_h=target_h)
                     return dest.is_file() and dest.stat().st_size > 1000
                 if status in ("FAILED", "CANCELED", "UNKNOWN"):
                     return False
@@ -454,7 +538,7 @@ def _kling_image(
     import httpx
     from PIL import Image
 
-    from tools.drama_video import _fit_cover
+    from tools.drama_video import _prepare_frame
 
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
     maas = (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip()
@@ -464,9 +548,13 @@ def _kling_image(
     model = (getattr(config, "KLING_IMAGE_MODEL", "") or "kling/kling-v3-omni-image-generation").strip()
     target_w = int(width or 1024)
     target_h = int(height or 1792)
+    is_char_ref = _is_character_ref_shot(shot)
 
     final_prompt = str(prompt)
+    if _is_character_ref_shot(shot):
+        from tools.drama_characters import character_ref_negative_prompt
 
+        final_prompt = f"{final_prompt}。不要出现：{character_ref_negative_prompt()}"
     base = maas.rstrip("/")
     submit_headers = {
         "Authorization": f"Bearer {key}",
@@ -479,7 +567,8 @@ def _kling_image(
     content: list[dict[str, Any]] = [{"text": final_prompt}]
 
     try:
-        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+        timeout = httpx.Timeout(30.0, read=260.0)
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             if refs:
                 for rel in refs:
                     url = _dashscope_upload_public_url(str(rel), client)
@@ -496,7 +585,7 @@ def _kling_image(
                 "parameters": {
                     "n": 1,
                     "result_type": "single",
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": _kling_aspect_ratio(target_w, target_h),
                     "resolution": "1k",
                 },
             }
@@ -533,9 +622,7 @@ def _kling_image(
                     img_resp = client.get(url)
                     img_resp.raise_for_status()
                     img = Image.open(BytesIO(img_resp.content)).convert("RGB")
-                    img = _fit_cover(img, target_w, target_h)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    img.save(dest, "PNG")
+                    _save_provider_image(img, dest, shot=shot, target_w=target_w, target_h=target_h)
                     return dest.is_file() and dest.stat().st_size > 1000
                 if status in ("FAILED", "CANCELED", "UNKNOWN"):
                     return False

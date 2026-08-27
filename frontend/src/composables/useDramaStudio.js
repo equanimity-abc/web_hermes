@@ -20,6 +20,7 @@ export function useDramaStudio() {
   const boardMode = ref('shots')
   const selectedCharacterId = ref(null)
   const charDraft = ref(emptyCharDraft())
+  const castChatHistory = ref({})
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
   const mixDraft = ref(emptyMixDraft())
@@ -164,7 +165,18 @@ export function useDramaStudio() {
   }
 
   function emptyCharDraft() {
-    return { id: '', name: '', look: '', voice: 'zh-CN-YunxiNeural', aliases: '', colors: '' }
+    return {
+      id: '',
+      name: '',
+      look: '',
+      voice: 'zh-CN-YunxiNeural',
+      aliases: '',
+      colors: '',
+      ref_size: 1024,
+      ref_image_provider: 'kling-image',
+      ref_image_model: 'kling/kling-v3-omni-image-generation',
+      category: 'character',
+    }
   }
 
   function emptyTlDraft() {
@@ -220,6 +232,8 @@ export function useDramaStudio() {
   }
 
   function fillCharDraft(char) {
+    const refProvider = String(char?.ref_image_provider || 'kling-image')
+    const refModel = String(char?.ref_image_model || 'kling/kling-v3-omni-image-generation')
     charDraft.value = {
       id: char?.id || '',
       name: char?.name || '',
@@ -227,6 +241,10 @@ export function useDramaStudio() {
       voice: char?.voice || 'zh-CN-YunxiNeural',
       aliases: (char?.aliases || []).join('、'),
       colors: char?.colors || '',
+      ref_size: [640, 1024, 1980].includes(Number(char?.ref_size)) ? Number(char.ref_size) : 1024,
+      ref_image_provider: refProvider,
+      ref_image_model: refModel,
+      category: char?.category || 'character',
     }
   }
 
@@ -763,16 +781,19 @@ export function useDramaStudio() {
     return (selected.value?.locked || []).includes('shot')
   }
 
-  async function addCharacter() {
+  async function addCharacter(payload = {}) {
     if (!slug.value) return
     saving.value = true
     error.value = ''
-    notice.value = ''
     try {
-      const rec = await dramaApi.createCharacter(slug.value, { name: '新角色' })
+      const category = payload.category || 'character'
+      const names = { character: '新角色', prop: '新物品', scene: '新场景' }
+      const rec = await dramaApi.createCharacter(slug.value, {
+        name: payload.name || names[category] || '新资产',
+        category,
+      })
       await refreshCast()
       selectCharacter(rec.id)
-      notice.value = '已添加角色卡'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -784,31 +805,27 @@ export function useDramaStudio() {
     if (!slug.value) return
     const cid = String(charDraft.value.id || selectedCharacterId.value || '').trim()
     if (!cid && !charDraft.value.name) {
-      error.value = '请填写角色 id 或名字'
+      error.value = '请填写名称'
       return
     }
     saving.value = true
     error.value = ''
-    notice.value = ''
     try {
+      const body = {
+        name: String(charDraft.value.name || '').trim(),
+        look: charDraft.value.look,
+        voice: charDraft.value.voice,
+        aliases: String(charDraft.value.aliases || '').trim(),
+        ref_size: charDraft.value.ref_size || 1024,
+        ref_image_provider: charDraft.value.ref_image_provider,
+        ref_image_model: charDraft.value.ref_image_model,
+        category: charDraft.value.category || 'character',
+      }
       const rec = cid
-        ? await dramaApi.saveCharacter(slug.value, cid, {
-            name: charDraft.value.name,
-            look: charDraft.value.look,
-            voice: charDraft.value.voice,
-            aliases: charDraft.value.aliases,
-            colors: charDraft.value.colors,
-          })
-        : await dramaApi.createCharacter(slug.value, {
-            name: charDraft.value.name,
-            look: charDraft.value.look,
-            voice: charDraft.value.voice,
-            aliases: charDraft.value.aliases,
-            colors: charDraft.value.colors,
-          })
+        ? await dramaApi.saveCharacter(slug.value, cid, body)
+        : await dramaApi.createCharacter(slug.value, body)
       await refreshCast()
       selectCharacter(rec.id)
-      notice.value = '角色卡已保存；外形/音色改动会标记相关镜头为脏'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -826,7 +843,6 @@ export function useDramaStudio() {
     try {
       await dramaApi.lockCharacterRef(slug.value, targetId, locked)
       await refreshCast()
-      notice.value = locked ? `已锁定「${target?.name || targetId}」参考图` : `已解锁「${target?.name || targetId}」参考图`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -842,7 +858,6 @@ export function useDramaStudio() {
       await dramaApi.uploadCharacterRef(slug.value, selectedCharacterId.value, file)
       bust.value = Date.now()
       await refreshCast()
-      notice.value = '参考图已更新，出图 prompt 会带上外形与配色'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -859,7 +874,6 @@ export function useDramaStudio() {
       await dramaApi.deleteCharacter(slug.value, targetId)
       if (selectedCharacterId.value === targetId) selectedCharacterId.value = null
       await refreshCast()
-      notice.value = '角色已删除'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -884,21 +898,51 @@ export function useDramaStudio() {
     }
   }
 
+  const choosingCandidate = ref(null)
+
+  function patchShotChosen(shots, idx, cid) {
+    const shot = shots[idx]
+    if (!shot) return
+    const next = {
+      ...shot,
+      chosen: cid,
+      candidates: (shot.candidates || []).map((c) => ({
+        ...c,
+        chosen: String(c.id) === String(cid),
+      })),
+    }
+    shots.splice(idx, 1, next)
+  }
+
   async function chooseShotCandidate(cid) {
     if (!slug.value || !episodeN.value || !selectedN.value || !cid) return
-    rendering.value = true
+    if (choosingCandidate.value) return
+    choosingCandidate.value = cid
+    const idx = episode.value?.shots?.findIndex((s) => s.n === selectedN.value) ?? -1
+    let snapshot = null
+    if (idx >= 0) {
+      snapshot = JSON.parse(JSON.stringify(episode.value.shots[idx]))
+      patchShotChosen(episode.value.shots, idx, cid)
+    }
     error.value = ''
     notice.value = ''
     try {
       const result = await dramaApi.chooseCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      if (result.shot && idx >= 0) {
+        episode.value.shots.splice(idx, 1, result.shot)
+      } else {
+        await openEpisode(episodeN.value)
+      }
       bust.value = Date.now()
-      await openEpisode(episodeN.value)
       const rebuilt = (result.rebuilt_layers || []).join(' / ') || '无'
       notice.value = `已锁定 ${cid}（只换画面，配音保留；重建：${rebuilt}）`
     } catch (e) {
+      if (snapshot != null && idx >= 0) {
+        episode.value.shots.splice(idx, 1, snapshot)
+      }
       error.value = e.message || String(e)
     } finally {
-      rendering.value = false
+      choosingCandidate.value = null
     }
   }
 
@@ -1448,12 +1492,20 @@ export function useDramaStudio() {
     if (!slug.value || !cid) return
     saving.value = true
     error.value = ''
-    notice.value = ''
     try {
+      await dramaApi.saveCharacter(slug.value, cid, {
+        name: String(charDraft.value.name || '').trim(),
+        look: charDraft.value.look,
+        voice: charDraft.value.voice,
+        aliases: String(charDraft.value.aliases || '').trim(),
+        ref_size: charDraft.value.ref_size || 1024,
+        ref_image_provider: charDraft.value.ref_image_provider,
+        ref_image_model: charDraft.value.ref_image_model,
+        category: charDraft.value.category || 'character',
+      })
       const rec = await dramaApi.generateCharacterRef(slug.value, cid)
       bust.value = Date.now()
       await refreshCast()
-      notice.value = `已生成「${rec?.name || rec?.id || cid}」定妆图`
       return rec
     } catch (e) {
       error.value = e.message || String(e)
@@ -1462,28 +1514,105 @@ export function useDramaStudio() {
     }
   }
 
-  async function generateAllCharacterRefs() {
+  async function refineCharacterRef(cid, instruction) {
+    if (!slug.value || !cid || !String(instruction || '').trim()) return null
+    saving.value = true
+    error.value = ''
+    try {
+      const data = await dramaApi.refineCharacterRef(slug.value, cid, instruction)
+      bust.value = Date.now()
+      if (selectedCharacterId.value === cid && data?.look != null) {
+        charDraft.value.look = data.look
+      }
+      await refreshCast()
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+      return null
+    } finally {
+      saving.value = false
+    }
+  }
+
+  function castChatMessages(cid) {
+    if (!cid) return []
+    return castChatHistory.value[cid] || []
+  }
+
+  function pushCastChatMessage(cid, role, content) {
+    if (!cid || !content) return
+    const prev = castChatHistory.value[cid] || []
+    castChatHistory.value = {
+      ...castChatHistory.value,
+      [cid]: [...prev, { role, content }],
+    }
+  }
+
+  async function sendCastChatRefine(cid, instruction) {
+    const text = String(instruction || '').trim()
+    if (!cid || !text) return null
+    pushCastChatMessage(cid, 'user', text)
+    const data = await refineCharacterRef(cid, text)
+    if (data?.reply) {
+      pushCastChatMessage(cid, 'assistant', data.reply)
+    } else if (error.value) {
+      pushCastChatMessage(cid, 'assistant', error.value)
+    }
+    return data
+  }
+
+  async function generateAllCharacterRefs(category = '') {
     if (!slug.value) return
     rendering.value = true
     error.value = ''
-    notice.value = ''
     try {
-      const cards = characters.value.filter((c) => !(c.ref_locked && c.ref_exists))
+      const cards = characters.value.filter((c) => {
+        if (category && (c.category || 'character') !== category) return false
+        return !(c.ref_locked && c.ref_exists)
+      })
       for (const c of cards) {
         try {
           await dramaApi.generateCharacterRef(slug.value, c.id)
         } catch {
-          /* skip individual failures; surface nothing (character may lack look) */
+          /* skip individual failures */
         }
       }
       bust.value = Date.now()
       await refreshCast()
-      const ok = characters.value.filter((c) => c.ref_exists).length
-      notice.value = ok ? `已生成定妆图：${ok} 个角色` : '没有可生成的定妆图，请先填写角色外形'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
       rendering.value = false
+    }
+  }
+
+  async function chooseCharacterCandidate(cid, candId) {
+    if (!slug.value || !cid || !candId) return
+    saving.value = true
+    error.value = ''
+    try {
+      await dramaApi.chooseCharacterCandidate(slug.value, cid, candId)
+      bust.value = Date.now()
+      await refreshCast()
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function deleteCharacterCandidate(cid, candId) {
+    if (!slug.value || !cid || !candId) return
+    saving.value = true
+    error.value = ''
+    try {
+      await dramaApi.deleteCharacterCandidate(slug.value, cid, candId)
+      bust.value = Date.now()
+      await refreshCast()
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
     }
   }
 
@@ -1673,7 +1802,13 @@ export function useDramaStudio() {
     uploadSelectedRef,
     deleteSelectedCharacter,
     generateCharacterRef,
+    refineCharacterRef,
+    castChatHistory,
+    castChatMessages,
+    sendCastChatRefine,
     generateAllCharacterRefs,
+    chooseCharacterCandidate,
+    deleteCharacterCandidate,
     generateAllScenes,
     generateAllVideo,
     generateAllVoice,

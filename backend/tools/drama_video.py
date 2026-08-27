@@ -60,6 +60,58 @@ _SHOT_HEAD = re.compile(
     re.IGNORECASE,
 )
 _FIELD = re.compile(r"^-\s*\*{0,2}(画面|对白|字幕|角色)\*{0,2}\s*[:：]\s*(.*)\s*$")
+_POSTPRODUCTION_CUES = (
+    "画面切黑",
+    "切黑",
+    "黑屏",
+    "画面淡出",
+    "淡出",
+    "淡入",
+    "转场",
+    "硬切",
+    "叠化",
+    "切至",
+    "切到",
+    "切回",
+)
+_CANDIDATE_VARIATIONS = (
+    "主分镜构图，画面均衡",
+    "备用机位角度，人物站位略有变化",
+    "构图略宽，环境细节更多",
+    "构图略紧，突出面部与手部",
+)
+
+
+def _candidate_index(cid: str, fallback: int = 0) -> int:
+    m = re.match(r"c(\d+)$", str(cid or "").strip())
+    if not m:
+        return max(0, int(fallback))
+    try:
+        return max(0, int(m.group(1)))
+    except ValueError:
+        return max(0, int(fallback))
+
+
+def _candidate_seed(base_seed: int, cid: str, batch_index: int = 0) -> int:
+    cand_idx = _candidate_index(cid, batch_index + 1)
+    return (int(base_seed) + cand_idx * 9973 + int(batch_index) * 97) & 0x7FFFFFFF
+
+
+def _candidate_prompt(prompt: str, cid: str, batch_index: int = 0) -> str:
+    cand_idx = _candidate_index(cid, batch_index + 1)
+    variation = _CANDIDATE_VARIATIONS[(cand_idx - 1) % len(_CANDIDATE_VARIATIONS)]
+    return f"{prompt}，{variation}，候选方案{cand_idx}"
+
+
+def _scene_text_for_prompt(raw: str) -> str:
+    """Strip post-production / editing directions that are not drawable keyframes."""
+    scene = str(raw or "").strip()
+    if not scene:
+        return "现代都市电影感场景"
+    for phrase in _POSTPRODUCTION_CUES:
+        scene = scene.replace(phrase, "")
+    scene = re.sub(r"[，。；;]+$", "", scene.strip())
+    return scene or "现代都市电影感场景"
 _RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–~]\s*(\d+(?:\.\d+)?)")
 _QUOTE = re.compile(r"[「『“\"]([^」』”\"]+)[」』”\"]")
 
@@ -263,17 +315,17 @@ def _scene_prompt(
     *,
     slug: str = "",
 ) -> str:
-    scene = (shot.get("画面") or "").strip() or "cinematic modern urban scene"
+    scene = _scene_text_for_prompt(shot.get("画面") or "")
     style = _camera_style(shot)
     kinetic = {
-        "punch_in": "dynamic action pose, motion implied, wind-blown cloth, sparks",
-        "punch_shake": "explosive action, flying debris, impact freeze, dramatic angle",
-        "pan_right": "wide moving scene, characters mid-stride, trailing motion",
-        "pan_left": "wide chasing scene, dust and speed lines implied",
-        "rise": "low angle looking up, towering architecture, clouds rushing",
-        "fall": "high angle descending, ground rushing closer",
-        "pull_out": "epic establishing shot, vast landscape, tiny figure",
-    }.get(style, "cinematic staging, strong silhouette")
+        "punch_in": "动态姿态，隐含运动感，衣摆飘动",
+        "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
+        "pan_right": "宽幅移动场景，人物行进中，拖影动感",
+        "pan_left": "宽幅追逐场景，尘土与速度线",
+        "rise": "低角度仰拍，高耸建筑，云层涌动",
+        "fall": "高角度俯冲，地面急速靠近",
+        "pull_out": "宏大定场镜头，开阔景致，渺小人影",
+    }.get(style, "电影感调度，鲜明剪影")
     slug = slug or str(shot.get("slug") or "")
     episode = int(shot.get("_episode") or 0) or None
     char_clause = character_prompt_clause(characters or [], slug=slug)
@@ -283,8 +335,8 @@ def _scene_prompt(
 
         style_clause = style_prompt_clause(slug, shot, episode=episode)
     bits = [
-        "vertical 9:16 cinematic short-drama keyframe",
-        title or "short drama",
+        "竖屏9:16竖屏短剧关键帧",
+        title or "短剧",
         scene,
         char_clause,
         kinetic,
@@ -292,8 +344,8 @@ def _scene_prompt(
     if style_clause:
         bits.append(style_clause)
     bits.append(
-        "modern urban webtoon illustration, dramatic rim lighting, highly detailed, "
-        "no text, no letters, no subtitles, no watermark, no UI"
+        "现代都市条漫插画，戏剧性轮廓光，细节丰富，"
+        "画面中人物清晰可见，非空镜非黑屏，无文字、无字幕、无水印、无界面"
     )
     return ", ".join(b for b in bits if b)
 
@@ -302,7 +354,11 @@ def _camera_style(shot: dict[str, Any]) -> str:
     """Pick a visible camera move from shot text — not a tiny Ken Burns."""
     scene = shot.get("画面") or ""
     n = int(shot.get("n") or 1)
-    if any(k in scene for k in ("打", "战", "棒", "怒", "砸", "翻", "炸", "劈")):
+    # Avoid false positives: 打来/打算/打扮/打开 等日常用语不应触发打斗运镜。
+    scene_for_action = scene
+    for phrase in ("打来", "打算", "打扮", "打开", "打电话", "打招呼", "拍打", "打字", "打印"):
+        scene_for_action = scene_for_action.replace(phrase, "")
+    if re.search(r"(打架|打斗|殴打|棒|怒|砸|爆炸|劈|战场|挥拳|一脚|一拳)", scene_for_action):
         return "punch_shake"
     if any(k in scene for k in ("冲", "追", "跑", "逃", "飞", "射")):
         return "pan_right" if n % 2 else "pan_left"
@@ -346,6 +402,53 @@ def _fit_cover(img, width: int, height: int):
         top = max((src_h - new_h) // 2, 0)
         img = img.crop((0, top, src_w, top + new_h))
     return img.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _trim_letterbox(img, *, tolerance: int = 22, min_strip: int = 3):
+    """Crop uniform black/white/gray margins from AI-generated images."""
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    if w < 16 or h < 16:
+        return rgb
+
+    px = rgb.load()
+    corners = (px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1])
+    bg = tuple(sum(c[i] for c in corners) // 4 for i in range(3))
+
+    def is_bg(x: int, y: int) -> bool:
+        p = px[x, y]
+        return all(abs(int(p[i]) - int(bg[i])) <= tolerance for i in range(3))
+
+    def row_is_bg(y: int) -> bool:
+        step = max(1, w // 48)
+        return all(is_bg(x, y) for x in range(0, w, step))
+
+    def col_is_bg(x: int) -> bool:
+        step = max(1, h // 48)
+        return all(is_bg(x, y) for y in range(0, h, step))
+
+    top = 0
+    while top < h - min_strip and row_is_bg(top):
+        top += 1
+    bottom = h
+    while bottom > top + min_strip and row_is_bg(bottom - 1):
+        bottom -= 1
+    left = 0
+    while left < w - min_strip and col_is_bg(left):
+        left += 1
+    right = w
+    while right > left + min_strip and col_is_bg(right - 1):
+        right -= 1
+
+    if right <= left or bottom <= top:
+        return rgb
+    if (right - left) >= int(w * 0.98) and (bottom - top) >= int(h * 0.98):
+        return rgb
+    return rgb.crop((left, top, right, bottom))
+
+
+def _prepare_frame(img, width: int, height: int):
+    return _fit_cover(_trim_letterbox(img), width, height)
 
 
 def _draw_fallback_scene(
@@ -421,6 +524,38 @@ def _paste_character_refs(img, characters: list[dict[str, Any]]) -> None:
         img.paste(portrait, (x0 + i * (slot_w + gap), y0))
 
 
+def _image_provider_chain(primary: str, shot: dict[str, Any] | None) -> list[str]:
+    """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks."""
+    from tools.providers import registry
+
+    skip = frozenset({"", "none", "off", "mock"})
+    chain: list[str] = []
+
+    def add(pid: str) -> None:
+        p = str(pid or "").strip().lower()
+        if not p or p in skip or p in chain:
+            return
+        if registry.has("image", p):
+            chain.append(p)
+
+    add(primary)
+    if str((shot or {}).get("kind") or "") == "character_ref":
+        from tools.drama_styles import default_character_ref_image_route
+
+        for key in ("provider",):
+            add(str(default_character_ref_image_route().get(key) or ""))
+        add("kling-image")
+        add("kling")
+        add("wanx")
+        add("dashscope")
+    else:
+        fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+        add(fb)
+        if fb != "pollinations":
+            add("pollinations")
+    return chain
+
+
 def _generate_scene_image(
     prompt: str,
     dest: Path,
@@ -430,6 +565,8 @@ def _generate_scene_image(
     slug: str = "",
     shot: dict[str, Any] | None = None,
     episode: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> bool:
     """Generate one scene via the image route table (P0-1).
 
@@ -450,62 +587,45 @@ def _generate_scene_image(
 
     from tools.providers import registry
 
-    # Route provider not yet backed by an adapter → fall back to the global
-    # default (same as before P0-1), so adding a new model only needs a
-    # provider module and never a code change.
-    if not registry.has("image", provider):
-        provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-        if provider in ("", "none", "off") or not registry.has("image", provider):
-            return False
-
-    # The route model informs prompt wording via style_prompt_clause; the
-    # adapter itself keeps the historical contract (no model kwarg).
-    return bool(
-        registry.dispatch(
+    gen_w = int(width or ZOOM_W)
+    gen_h = int(height or ZOOM_H)
+    for pid in _image_provider_chain(provider, shot):
+        ok = registry.dispatch(
             "image",
-            provider,
+            pid,
             prompt,
             dest,
             seed=seed,
-            width=ZOOM_W,
-            height=ZOOM_H,
+            width=gen_w,
+            height=gen_h,
             refs=tuple(refs),
             slug=slug,
             shot=shot,
         )
-    )
+        if ok:
+            return True
+    return False
 
 
-def generate_character_portrait(slug: str, char: dict[str, Any]) -> str | None:
-    """文生图出定妆图（角色定妆）。返回新的 ref 相对路径，失败返回 None。
-
-    用 name + look + colors 组角色设计三视图 prompt，走 image 路由的对话类
-    （use_ref 一致性模型）；未配置商用后端时由 _generate_scene_image 诚实降级。
-    """
+def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: str | None = None) -> str | None:
+    """文生图出定妆图（角色三视图 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None."""
     import zlib
 
-    from tools.drama_characters import ref_rel
+    from tools.drama_characters import build_asset_ref_prompt, character_ref_shot, ref_canvas_size, ref_rel
 
     cid = str(char.get("id") or "")
-    name = str(char.get("name") or cid)
-    look = str(char.get("look") or "").strip() or "original character design"
-    colors = str(char.get("colors") or "").strip()
-    prompt = (
-        "vertical 9:16 character design sheet, full body standing pose, "
-        f"{name}: {look}"
-        + (f", color palette {colors}" if colors else "")
-        + ", modern urban webtoon illustration, clean simple background, "
-        "highly detailed, same face and costume, no text, no letters, no watermark"
-    )
-    dest_rel = ref_rel(slug, cid)
-    dest = resolve_safe(dest_rel)
+    prompt = build_asset_ref_prompt(char)
+    out_rel = str(dest_rel or ref_rel(slug, cid)).replace("\\", "/")
+    dest = resolve_safe(out_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    seed = zlib.crc32(f"{slug}:{cid}".encode()) & 0x7FFFFFFF
-    # dialogue 路由 → use_ref 一致性模型优先；无适配器时回落全局默认。
-    ok = _generate_scene_image(prompt, dest, seed=seed, slug=slug, shot={"kind": "dialogue"})
+    seed = zlib.crc32(f"{slug}:{cid}:{out_rel}".encode()) & 0x7FFFFFFF
+    gen_w, gen_h = ref_canvas_size(char)
+    ok = _generate_scene_image(
+        prompt, dest, seed=seed, slug=slug, shot=character_ref_shot(char), width=gen_w, height=gen_h
+    )
     if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
         return None
-    return dest_rel
+    return out_rel
 
 
 def _write_scene_png(data: bytes, dest: Path) -> None:
@@ -514,7 +634,7 @@ def _write_scene_png(data: bytes, dest: Path) -> None:
     from PIL import Image
 
     img = Image.open(BytesIO(data)).convert("RGB")
-    img = _fit_cover(img, ZOOM_W, ZOOM_H)
+    img = _prepare_frame(img, ZOOM_W, ZOOM_H)
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest, "PNG")
 
@@ -544,7 +664,7 @@ def generate_shot_candidates(
     count: int = CANDIDATE_COUNT,
 ) -> list[dict[str, Any]]:
     """Fill the candidate wall. Does not overwrite a locked scene.png."""
-    count = max(2, min(int(count or CANDIDATE_COUNT), 4))
+    count = max(1, min(int(count or CANDIDATE_COUNT), 4))
     locked = set(shot.get("locked") or [])
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
@@ -568,14 +688,15 @@ def generate_shot_candidates(
 
     def _render_one(i: int, cid: str) -> dict[str, Any]:
         """Generate one candidate (thread-safe; writes its own dest file)."""
-        seed = (base_seed + i * 97) & 0x7FFFFFFF
+        seed = _candidate_seed(base_seed, cid, i)
+        varied_prompt = _candidate_prompt(prompt, cid, i)
         rel = candidate_rel(slug, episode, n, cid)
         dest = resolve_safe(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
         ai_ok = bool(
             retry_call(
                 _generate_scene_image,
-                prompt,
+                varied_prompt,
                 dest,
                 seed=seed,
                 refs=refs,

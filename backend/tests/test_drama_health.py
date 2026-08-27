@@ -80,6 +80,65 @@ def test_default_models_reports_pro_promise_degraded():
     assert "kling" in degraded
 
 
+def test_build_asset_ref_prompt_includes_three_view_look():
+    from tools.drama_characters import build_asset_ref_prompt
+
+    prompt = build_asset_ref_prompt({"category": "character", "look": "正面黑长发，侧面高马尾，背面白披风"})
+    assert "三视图：正面黑长发" in prompt
+    assert "只有一个" in prompt
+
+
+def test_character_ref_prompt_single_pose():
+    from tools.drama_characters import build_asset_ref_prompt, character_ref_negative_prompt
+
+    prompt = build_asset_ref_prompt({"category": "character", "look": "测试角色", "ref_size": 1024})
+    assert "只有一个" in prompt
+    assert "禁止多个视角" in prompt
+    neg = character_ref_negative_prompt()
+    assert "多视角" in neg
+
+
+def test_normalize_ref_image_route():
+    from tools.drama_characters import REF_IMAGE_OPTIONS, character_ref_shot, normalize_ref_image_route
+
+    p, m = normalize_ref_image_route("wanx", "qwen-image-plus")
+    assert p == "wanx" and m == "qwen-image-plus"
+    p, m = normalize_ref_image_route("kling-image", "")
+    assert p == "kling-image"
+    assert m == REF_IMAGE_OPTIONS[0]["model"]
+    p, m = normalize_ref_image_route("pollinations", "flux")
+    assert p == "kling-image"
+    assert m == REF_IMAGE_OPTIONS[0]["model"]
+    shot = character_ref_shot({"ref_image_provider": "kling-image", "ref_image_model": REF_IMAGE_OPTIONS[0]["model"]})
+    assert shot["kind"] == "character_ref"
+    assert shot["ref_image_provider"] == "kling-image"
+
+
+def test_trim_letterbox_reads_pixels_with_pillow():
+    from PIL import Image
+
+    from tools.drama_video import _prepare_frame, _trim_letterbox
+
+    img = Image.new("RGB", (64, 64), (255, 255, 255))
+    # center content so uniform border trim does not collapse the canvas
+    for x in range(20, 44):
+        for y in range(20, 44):
+            img.putpixel((x, y), (120, 80, 200))
+    trimmed = _trim_letterbox(img)
+    assert trimmed.size[0] >= 20 and trimmed.size[1] >= 20
+    out = _prepare_frame(img, 32, 32)
+    assert out.size == (32, 32)
+
+
+def test_qwen_image_plus_size_maps_to_fixed_resolutions():
+    from tools.providers.image_providers import _dashscope_gen_size, _kling_aspect_ratio
+
+    assert _dashscope_gen_size(1024, 1024, model="qwen-image-plus") == "1328*1328"
+    assert _dashscope_gen_size(1024, 1792, model="qwen-image-plus") == "928*1664"
+    assert _kling_aspect_ratio(1024, 1024) == "1:1"
+    assert _kling_aspect_ratio(720, 1280) == "9:16"
+
+
 def test_image_cache_key_is_content_addressed():
     """S1: cache key is deterministic and sensitive to prompt/seed/refs."""
     from tools.providers.image_providers import _cache_key

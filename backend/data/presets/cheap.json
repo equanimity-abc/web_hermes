@@ -11,7 +11,8 @@
       "reaction": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0, "use_ref": false },
       "action": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0 },
       "crowd": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0 },
-      "title": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0 }
+      "title": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0 },
+      "character_ref": { "provider": "pollinations", "model": "flux", "cost_per_shot": 0 }
     },
     "motion": {
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },

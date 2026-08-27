@@ -22,6 +22,9 @@ from tools.drama_studio import (
     list_projects,
     list_render_jobs,
     generate_character_ref,
+    refine_character_ref,
+    choose_character_candidate,
+    delete_character_candidate,
     generate_episode_script,
     lock_character_ref,
     patch_episode,
@@ -138,7 +141,7 @@ class ShotsPatch(BaseModel):
 
 
 class CandidateCount(BaseModel):
-    count: int | None = Field(default=4, ge=2, le=4)
+    count: int | None = Field(default=4, ge=1, le=4)
 
 
 class ScriptBody(BaseModel):
@@ -154,9 +157,13 @@ class ScriptGenerateBody(BaseModel):
 class CharacterBody(BaseModel):
     id: str | None = None
     name: str | None = None
+    category: str | None = None
     aliases: list[str] | str | None = None
     look: str | None = None
     colors: str | None = None
+    ref_size: int | None = None
+    ref_image_provider: str | None = None
+    ref_image_model: str | None = None
     catchphrase: str | None = None
     voice: str | None = None
     ref_locked: bool | None = None
@@ -164,6 +171,10 @@ class CharacterBody(BaseModel):
 
 class RefLockBody(BaseModel):
     locked: bool = True
+
+
+class RefineRefBody(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
 
 
 class JobCreate(BaseModel):
@@ -791,5 +802,29 @@ def drama_generate_character_ref(slug: str, cid: str):
     # 同步 def：真出图是长阻塞网络调用，放线程池避免卡死事件循环。
     try:
         return generate_character_ref(slug, cid)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/characters/{cid}/refine-ref")
+def drama_refine_character_ref(slug: str, cid: str, body: RefineRefBody):
+    try:
+        return refine_character_ref(slug, cid, body.instruction)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/characters/{cid}/candidates/{cand_id}/choose")
+def drama_choose_character_candidate(slug: str, cid: str, cand_id: str):
+    try:
+        return choose_character_candidate(slug, cid, cand_id)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.delete("/projects/{slug}/characters/{cid}/candidates/{cand_id}")
+def drama_delete_character_candidate(slug: str, cid: str, cand_id: str):
+    try:
+        return delete_character_candidate(slug, cid, cand_id)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e

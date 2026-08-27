@@ -146,10 +146,48 @@ def effective_models(
 
 def image_route(slug: str, shot: dict[str, Any], *, episode: int | None = None, models: dict[str, Any] | None = None) -> dict[str, Any]:
     models = models or effective_models(slug, episode=episode, shot=shot)
+    explicit_kind = str(shot.get("kind") or "").strip().lower()
+    if explicit_kind == "character_ref":
+        route = dict((models.get("image") or {}).get("character_ref") or {})
+        sp = str(shot.get("ref_image_provider") or "").strip().lower()
+        sm = str(shot.get("ref_image_model") or "").strip()
+        if sp:
+            route["provider"] = sp
+        if sm:
+            route["model"] = sm
+        if not str(route.get("provider") or "").strip():
+            route = {**default_character_ref_image_route(), **route}
+        route["kind"] = "character_ref"
+        return route
     kind = infer_kind(shot)
     route = dict((models.get("image") or {}).get(kind) or {})
     route["kind"] = kind
     return route
+
+
+def default_character_ref_image_route() -> dict[str, Any]:
+    """定妆图出图路由：默认可灵；仅有百炼 Key 且无 MaaS 时回退 qwen-image-plus。"""
+    from config import config
+
+    key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
+    maas = (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip()
+    if maas and key:
+        return {
+            "provider": "kling-image",
+            "model": "kling/kling-v3-omni-image-generation",
+            "cost_per_shot": 0.5,
+        }
+    if key:
+        return {
+            "provider": "wanx",
+            "model": getattr(config, "DASHSCOPE_IMAGE_MODEL", "qwen-image-plus"),
+            "cost_per_shot": 0.5,
+        }
+    return {
+        "provider": "kling-image",
+        "model": "kling/kling-v3-omni-image-generation",
+        "cost_per_shot": 0.5,
+    }
 
 
 def is_character_route(route: dict[str, Any]) -> bool:
@@ -243,9 +281,9 @@ def style_prompt_clause(slug: str, shot: dict[str, Any], *, episode: int | None 
     if lora:
         bits.append(f"lora:{lora}")
     if is_character_route(route):
-        bits.append("character LoRA / reference model")
+        bits.append("角色 LoRA / 参考模型")
     elif str(route.get("model") or ""):
-        bits.append(f"scene model {route.get('model')}")
+        bits.append(f"场景模型 {route.get('model')}")
     return ", ".join(bits)
 
 

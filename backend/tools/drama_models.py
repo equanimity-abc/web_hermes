@@ -273,6 +273,7 @@ def default_models() -> dict[str, Any]:
             "action": {"provider": "http", "model": "char-lora", "cost_per_shot": 0.08},
             "crowd": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.05},
             "title": {"provider": "http", "model": "flux-scene", "cost_per_shot": 0.02},
+            "character_ref": {"provider": "wanx", "model": "qwen-image-plus", "cost_per_shot": 0.5},
         },
         "motion": {
             "establishing": {"ladder": "L0", "provider": "l0"},
@@ -347,6 +348,19 @@ def _coerce_providers(raw: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _sync_character_ref_route(image: dict[str, Any]) -> None:
+    """定妆图路由随 .env 自动对齐，无需在工作台重新应用预设。"""
+    from config import config
+    from tools.drama_styles import default_character_ref_image_route
+
+    cur = dict(image.get("character_ref") or {})
+    env = default_character_ref_image_route()
+    if (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip():
+        image["character_ref"] = {**cur, **env}
+    elif not str(cur.get("provider") or "").strip():
+        image["character_ref"] = {**env, **cur}
+
+
 def normalize_models(raw: Any) -> dict[str, Any]:
     data = raw if isinstance(raw, dict) else {}
     base = default_models()
@@ -363,6 +377,9 @@ def normalize_models(raw: Any) -> dict[str, Any]:
         motion[kind] = md
         im = {**(base["image"].get(kind) or {}), **(image_in.get(kind) if isinstance(image_in.get(kind), dict) else {})}
         image[kind] = im
+    cref = {**(base["image"].get("character_ref") or {}), **(image_in.get("character_ref") if isinstance(image_in.get("character_ref"), dict) else {})}
+    image["character_ref"] = cref
+    _sync_character_ref_route(image)
     currency = str(data.get("currency") or CURRENCY).strip().upper() or CURRENCY
     preset = str(data.get("preset") or DEFAULT_PRESET).strip().lower()
     if preset not in PRESET_IDS:

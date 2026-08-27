@@ -11,7 +11,8 @@
       "reaction": { "provider": "flux", "model": "flux", "cost_per_shot": 0.08, "use_ref": true },
       "action": { "provider": "flux", "model": "flux", "cost_per_shot": 0.08, "use_ref": true },
       "crowd": { "provider": "flux", "model": "flux", "cost_per_shot": 0.05 },
-      "title": { "provider": "flux", "model": "flux", "cost_per_shot": 0.02 }
+      "title": { "provider": "flux", "model": "flux", "cost_per_shot": 0.02 },
+      "character_ref": { "provider": "wanx", "model": "qwen-image-plus", "cost_per_shot": 0.5 }
     },
     "motion": {
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },

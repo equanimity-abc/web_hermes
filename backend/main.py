@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from typing import Any, AsyncGenerator
 
@@ -431,8 +432,41 @@ _PLAYABLE = {
 }
 
 
+def _thumbnail_file(target, size: int):
+    """Downscale a workspace image to a cached PNG thumbnail."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        cache = workspace_root() / ".thumbs"
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    key = hashlib.md5(f"{target.as_posix()}:{size}".encode("utf-8")).hexdigest()
+    out = cache / f"{key}.png"
+    try:
+        src_mtime = target.stat().st_mtime
+    except OSError:
+        src_mtime = 0
+    if out.is_file() and out.stat().st_size > 0:
+        try:
+            if out.stat().st_mtime >= src_mtime:
+                return out
+        except OSError:
+            pass
+    try:
+        with Image.open(target) as img:
+            img = img.convert("RGB")
+            img.thumbnail((size, size), Image.LANCZOS)
+            img.save(out, "PNG")
+    except Exception:
+        return None
+    return out if out.is_file() and out.stat().st_size > 0 else None
+
+
 @app.get("/api/workspace/file")
-async def workspace_file(path: str):
+async def workspace_file(path: str, size: int | None = None):
     """Serve a sandboxed workspace file (videos / images / text)."""
     try:
         target = resolve_safe(path)
@@ -443,6 +477,10 @@ async def workspace_file(path: str):
     media = _PLAYABLE.get(target.suffix.lower())
     if not media:
         raise HTTPException(status_code=403, detail="不允许预览该文件类型")
+    if size and size > 0 and media.startswith("image/"):
+        thumb = _thumbnail_file(target, size)
+        if thumb is not None:
+            return FileResponse(thumb, media_type="image/png", filename=target.name)
     return FileResponse(target, media_type=media, filename=target.name)
 
 

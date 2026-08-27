@@ -82,14 +82,14 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
         cast = resolve_shot_characters(shot, load_characters(slug))
         look = character_prompt_clause(cast, slug=slug)
     bits = [
-        "cinematic subtle motion",
+        "电影感细微运动",
         camera,
-        "vertical 9:16",
-        scene or "character portrait",
+        "竖屏9:16",
+        scene or "人物肖像",
     ]
     if look:
         bits.append(look)
-    bits.extend(["gentle movement", "no text", "same face as locked character reference"])
+    bits.extend(["轻微动态", "无文字", "与锁定的角色参考图五官一致"])
     return ", ".join(bits)
 
 

@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
@@ -60,6 +60,8 @@ const {
   uploadSelectedRef,
   deleteSelectedCharacter,
   generateCharacterRef,
+  sendCastChatRefine,
+  castChatMessages,
   generateAllCharacterRefs,
   generateAllScenes,
   generateAllVideo,
@@ -144,6 +146,8 @@ const {
   cancelRenderJob,
   retryRenderJob,
 } = useDramaStudio()
+
+const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
 
 const {
   currentSessionId,
@@ -327,6 +331,7 @@ onMounted(() => {
       :selected-character-id="dramaSelectedCharacterId"
       :selected-character="dramaSelectedCharacter"
       :char-draft="dramaCharDraft"
+      :cast-chat-messages="dramaCastChatMessages"
       :timeline-order="dramaTimelineOrder"
       :tl-draft="dramaTlDraft"
       :timeline-items="dramaTimelineItems"
@@ -389,7 +394,8 @@ onMounted(() => {
       @upload-ref="uploadSelectedRef"
       @delete-character="deleteSelectedCharacter"
       @generate-character-ref="generateCharacterRef"
-      @generate-all-refs="generateAllCharacterRefs"
+      @refine-character-ref="(cid, instruction) => sendCastChatRefine(cid, instruction)"
+      @generate-all-refs="(cat) => generateAllCharacterRefs(cat)"
       @generate-all-scenes="generateAllScenes"
       @generate-all-video="generateAllVideo"
       @generate-all-voice="generateAllVoice"

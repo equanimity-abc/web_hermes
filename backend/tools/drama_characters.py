@@ -29,6 +29,57 @@ VOICES = (
 )
 VOICE_IDS = tuple(v[0] for v in VOICES)
 DEFAULT_VOICE = "zh-CN-YunxiNeural"
+VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
+CHAR_CANDIDATE_MAX = 4
+REF_SIZE_OPTIONS = (640, 1024, 1980)
+DEFAULT_REF_SIZE = 1024
+REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = (
+    {"provider": "kling-image", "model": "kling/kling-v3-omni-image-generation", "label": "可灵 · Kling V3 Omni"},
+    {"provider": "wanx", "model": "qwen-image-plus", "label": "百炼 · Qwen-Image-Plus"},
+)
+
+
+def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, str]:
+    """Normalize per-asset ref image provider/model to a known option."""
+    from tools.drama_styles import default_character_ref_image_route
+
+    default = default_character_ref_image_route()
+    provider = str(raw_provider or default.get("provider") or "kling-image").strip().lower()
+    model = str(raw_model or default.get("model") or "kling/kling-v3-omni-image-generation").strip()
+    for opt in REF_IMAGE_OPTIONS:
+        if provider == opt["provider"] and model == opt["model"]:
+            return provider, model
+    for opt in REF_IMAGE_OPTIONS:
+        if provider == opt["provider"]:
+            return opt["provider"], opt["model"]
+    return str(default.get("provider") or "kling-image"), str(
+        default.get("model") or "kling/kling-v3-omni-image-generation"
+    )
+
+
+def character_ref_shot(char: dict[str, Any]) -> dict[str, Any]:
+    provider, model = normalize_ref_image_route(char.get("ref_image_provider"), char.get("ref_image_model"))
+    return {
+        "kind": "character_ref",
+        "ref_image_provider": provider,
+        "ref_image_model": model,
+    }
+
+
+def normalize_ref_size(raw: Any) -> int:
+    try:
+        n = int(raw or DEFAULT_REF_SIZE)
+    except (TypeError, ValueError):
+        n = DEFAULT_REF_SIZE
+    return n if n in REF_SIZE_OPTIONS else DEFAULT_REF_SIZE
+
+
+def ref_canvas_size(char: dict[str, Any]) -> tuple[int, int]:
+    """角色三视图：整图为 S×S 正方形；物品/场景为 9:16。"""
+    s = normalize_ref_size(char.get("ref_size"))
+    if normalize_category(char.get("category")) == "character":
+        return s, s
+    return s, int(round(s * 16 / 9))
 
 
 class CharacterError(ValueError):
@@ -41,6 +92,10 @@ def characters_rel(slug: str) -> str:
 
 def ref_rel(slug: str, cid: str) -> str:
     return f"dramas/{slug}/characters/{cid}.png"
+
+
+def candidate_ref_rel(slug: str, cid: str, cand_id: str) -> str:
+    return f"dramas/{slug}/characters/{cid}/candidates/{cand_id}.png"
 
 
 def parse_character_id(raw: str) -> str:
@@ -80,6 +135,105 @@ def _as_str_list(value: Any) -> list[str]:
     return normalize_roles(value)
 
 
+def normalize_category(raw: Any) -> str:
+    cat = str(raw or "character").strip().lower()
+    return cat if cat in VALID_CATEGORIES else "character"
+
+
+def character_ref_negative_prompt() -> str:
+    return (
+        "网格线，黑色边框，分割线，九宫格，分格，表格线，参考线，身高尺，刻度尺，"
+        "标尺，数字，编号，设定表，模型板，三视图，多视角，并排，分栏，侧面，背面，"
+        "横线，竖线，character sheet，model sheet，turnaround，grid，border，ruler，"
+        "measurement，multiple views，side view，back view"
+    )
+
+
+def build_asset_ref_prompt(char: dict[str, Any]) -> str:
+    """角色定妆：单张正面全身立绘；物品/场景仍走各自设定图 prompt。"""
+    look = str(char.get("look") or "").strip() or "原创设计"
+    colors = str(char.get("colors") or "").strip()
+    category = normalize_category(char.get("category"))
+    no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
+    if category == "prop":
+        bits = [
+            "竖屏9:16物品设定图",
+            f"外形：{look}",
+            f"配色：{colors}" if colors else "",
+            "纯白满幅背景占满画面，无黑边白边留白",
+            "产品展示风格，高清细节",
+            no_text,
+        ]
+        return "，".join(b for b in bits if b)
+    if category == "scene":
+        bits = [
+            "竖屏9:16场景概念图",
+            f"场景：{look}",
+            f"色调：{colors}" if colors else "",
+            "电影感光影，无人物",
+            "满幅构图，无黑边白边留白",
+            no_text,
+        ]
+        return "，".join(b for b in bits if b)
+    bits = [
+        "一张正方形插画，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
+        "正面全身站立，居中构图，人物占画面主体",
+        f"三视图：{look}",
+        "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
+        "完整上色插画，高质量二次元立绘",
+        no_text,
+    ]
+    return "，".join(b for b in bits if b)
+
+
+def _prune_char_candidates(rows: list[dict[str, Any]], chosen: str = "") -> list[dict[str, Any]]:
+    keep = list(rows[:CHAR_CANDIDATE_MAX])
+    if chosen and not any(str(c.get("id") or "") == chosen for c in keep):
+        hit = next((c for c in rows if str(c.get("id") or "") == chosen), None)
+        if hit:
+            keep = ([hit] + [c for c in keep if str(c.get("id") or "") != chosen])[:CHAR_CANDIDATE_MAX]
+    return keep
+
+
+def normalize_char_candidates(
+    slug: str,
+    cid: str,
+    raw: Any,
+    chosen: str = "",
+) -> list[dict[str, Any]]:
+    rows = raw if isinstance(raw, list) else []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        cand_id = str(item.get("id") or "").strip()
+        if not cand_id or cand_id in seen:
+            continue
+        seen.add(cand_id)
+        rel = str(item.get("path") or candidate_ref_rel(slug, cid, cand_id)).replace("\\", "/")
+        out.append(
+            {
+                "id": cand_id,
+                "path": rel,
+                "source": str(item.get("source") or "ai"),
+            }
+        )
+    return _prune_char_candidates(out, str(chosen or ""))
+
+
+def next_char_candidate_ids(char: dict[str, Any], count: int = 1) -> list[str]:
+    used = {str(c.get("id") or "") for c in (char.get("candidates") or [])}
+    out: list[str] = []
+    i = 1
+    while len(out) < max(0, int(count)):
+        cid = f"c{i}"
+        i += 1
+        if cid not in used:
+            out.append(cid)
+    return out
+
+
 def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     cid = parse_character_id(str(raw.get("id") or ""))
     name = str(raw.get("name") or cid).strip() or cid
@@ -87,16 +241,27 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     if voice not in VOICE_IDS:
         voice = DEFAULT_VOICE
     ref = str(raw.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    chosen_ref = str(raw.get("chosen_ref") or "").strip()
+    candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)
+    ref_image_provider, ref_image_model = normalize_ref_image_route(
+        raw.get("ref_image_provider"), raw.get("ref_image_model")
+    )
     return {
         "id": cid,
         "name": name,
+        "category": normalize_category(raw.get("category")),
         "aliases": _as_str_list(raw.get("aliases")),
         "look": str(raw.get("look") or "").strip(),
         "colors": str(raw.get("colors") or "").strip(),
+        "ref_size": normalize_ref_size(raw.get("ref_size")),
+        "ref_image_provider": ref_image_provider,
+        "ref_image_model": ref_image_model,
         "catchphrase": str(raw.get("catchphrase") or "").strip(),
         "voice": voice,
         "ref": ref,
         "ref_locked": bool(raw.get("ref_locked")),
+        "chosen_ref": chosen_ref,
+        "candidates": candidates,
     }
 
 
@@ -209,20 +374,28 @@ def save_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     rel = ref_rel(slug, cid)
     dest = resolve_safe(rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _write_ref_png(data, dest)
+    _write_ref_png(data, dest, char=rec)
     rec["ref"] = rel
     save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
     return rec
 
 
-def _write_ref_png(data: bytes, dest: Path) -> None:
+def _write_ref_png(data: bytes, dest: Path, *, char: dict[str, Any] | None = None) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if char and normalize_category(char.get("category")) == "character":
+        dest.write_bytes(data)
+        if dest.stat().st_size < 32:
+            raise CharacterError("无法读取参考图")
+        return
     try:
         from io import BytesIO
 
         from PIL import Image
 
+        from tools.drama_video import ZOOM_H, ZOOM_W, _prepare_frame
+
         img = Image.open(BytesIO(data)).convert("RGB")
-        img.thumbnail((1024, 1024))
+        img = _prepare_frame(img, ZOOM_W, ZOOM_H)
         img.save(dest, "PNG")
     except Exception:
         dest.write_bytes(data)
@@ -284,18 +457,96 @@ def infer_roles_from_dialogue(dialogue: str, characters: list[dict[str, Any]]) -
 
 
 def resolve_shot_characters(shot: dict[str, Any], characters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cast_cards = [c for c in characters if normalize_category(c.get("category")) == "character"]
     tokens = normalize_roles(shot.get("角色"))
     if not tokens:
-        tokens = infer_roles_from_dialogue(str(shot.get("对白") or ""), characters)
+        tokens = infer_roles_from_dialogue(str(shot.get("对白") or ""), cast_cards)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for token in tokens:
-        hit = match_character_token(token, characters) or find_character(characters, token)
+        hit = match_character_token(token, cast_cards) or find_character(cast_cards, token)
         if not hit or hit["id"] in seen:
             continue
         seen.add(hit["id"])
         out.append(hit)
     return out
+
+
+def find_char_candidate(char: dict[str, Any], cand_id: str) -> dict[str, Any] | None:
+    needle = str(cand_id or "").strip()
+    for item in char.get("candidates") or []:
+        if str(item.get("id") or "") == needle:
+            return item
+    return None
+
+
+def append_char_candidate(slug: str, cid: str, data: bytes, *, source: str = "upload") -> dict[str, Any]:
+    cid = parse_character_id(cid)
+    cards = load_characters(slug)
+    rec = find_character(cards, cid)
+    if rec is None:
+        raise CharacterError(f"找不到资产：{cid}，请先保存")
+    if rec.get("ref_locked") and ref_exists(slug, rec):
+        raise CharacterError("参考图已锁定，解锁后才能添加候选")
+    if len(rec.get("candidates") or []) >= CHAR_CANDIDATE_MAX:
+        raise CharacterError(f"候选图最多 {CHAR_CANDIDATE_MAX} 张，请先删除旧候选")
+    cand_ids = next_char_candidate_ids(rec, 1)
+    if not cand_ids:
+        raise CharacterError("无法分配候选 id")
+    cand_id = cand_ids[0]
+    rel = candidate_ref_rel(slug, cid, cand_id)
+    dest = resolve_safe(rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _write_ref_png(data, dest)
+    rec["candidates"] = list(rec.get("candidates") or []) + [{"id": cand_id, "path": rel, "source": source}]
+    rec["candidates"] = _prune_char_candidates(rec["candidates"], str(rec.get("chosen_ref") or ""))
+    if not ref_exists(slug, rec):
+        rec["ref"] = rel
+        rec["chosen_ref"] = cand_id
+    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
+    return rec
+
+
+def choose_char_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
+    cid = parse_character_id(cid)
+    cand_id = str(cand_id or "").strip()
+    cards = load_characters(slug)
+    rec = find_character(cards, cid)
+    if rec is None:
+        raise CharacterError(f"找不到资产：{cid}")
+    cand = find_char_candidate(rec, cand_id)
+    if cand is None:
+        raise CharacterError(f"找不到候选：{cand_id}")
+    rel = str(cand.get("path") or candidate_ref_rel(slug, cid, cand_id))
+    if not resolve_safe(rel).is_file():
+        raise CharacterError("候选图文件不存在")
+    rec["ref"] = rel
+    rec["chosen_ref"] = cand_id
+    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
+    return rec
+
+
+def delete_char_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
+    cid = parse_character_id(cid)
+    cand_id = str(cand_id or "").strip()
+    cards = load_characters(slug)
+    rec = find_character(cards, cid)
+    if rec is None:
+        raise CharacterError(f"找不到资产：{cid}")
+    if rec.get("ref_locked") and str(rec.get("chosen_ref") or "") == cand_id:
+        raise CharacterError("当前参考图已锁定，先解锁再删除候选")
+    rec["candidates"] = [c for c in (rec.get("candidates") or []) if str(c.get("id") or "") != cand_id]
+    if str(rec.get("chosen_ref") or "") == cand_id:
+        rec["chosen_ref"] = ""
+        remaining = rec.get("candidates") or []
+        if remaining:
+            last = remaining[-1]
+            rec["ref"] = str(last.get("path") or ref_rel(slug, cid))
+            rec["chosen_ref"] = str(last.get("id") or "")
+        else:
+            rec["ref"] = ref_rel(slug, cid)
+    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
+    return rec
 
 
 def primary_voice(characters: list[dict[str, Any]]) -> str:
@@ -338,17 +589,17 @@ def character_prompt_clause(characters: list[dict[str, Any]], *, slug: str = "")
     parts: list[str] = []
     for char in characters:
         name = char.get("name") or char.get("id")
-        look = str(char.get("look") or "").strip() or "consistent original character design"
+        look = str(char.get("look") or "").strip() or "保持原作角色设计一致"
         colors = palette_phrase(slug, char) if slug else str(char.get("colors") or "")
-        bit = f"{name}: {look}"
+        bit = f"{name}：{look}"
         if colors:
-            bit += f", color palette {colors}"
+            bit += f"，配色：{colors}"
         if char.get("ref_locked") and look:
-            bit += ", locked character reference sheet, same face and costume every shot"
+            bit += "，已锁定定妆参考图，每张镜头同一张脸同一套服装"
         parts.append(bit)
     if not parts:
-        return "consistent original characters, same faces and costumes across consecutive shots"
-    return "same characters every shot, " + "; ".join(parts)
+        return "连续镜头中角色面孔与服装保持一致"
+    return "每镜同一批角色，" + "；".join(parts)
 
 
 def character_seed(slug: str, characters: list[dict[str, Any]], shot_n: int) -> int:

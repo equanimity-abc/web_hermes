@@ -1542,6 +1542,18 @@ def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
     meta = _asset_meta(str(char.get("ref") or ""))
     pub["ref_exists"] = bool(meta["exists"])
     pub["ref_url"] = meta.get("url")
+    chosen = str(char.get("chosen_ref") or "")
+    pub["candidates"] = []
+    for item in char.get("candidates") or []:
+        cand_meta = _asset_meta(str(item.get("path") or ""))
+        pub["candidates"].append(
+            {
+                **item,
+                "exists": bool(cand_meta["exists"]),
+                "url": cand_meta.get("url"),
+                "chosen": str(item.get("id") or "") == chosen,
+            }
+        )
     return pub
 
 
@@ -1636,6 +1648,11 @@ def lock_character_ref(slug: str, cid: str, locked: bool) -> dict[str, Any]:
 def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     load_project(slug)
     slug = parse_slug(slug)
+    from tools.drama_characters import CharacterError, find_character, load_characters, save_character_ref
+
+    rec = find_character(load_characters(slug), cid)
+    if rec is None:
+        raise DramaNotFound(f"找不到资产：{cid}，请先保存")
     try:
         rec = save_character_ref(slug, cid, data)
     except CharacterError as e:
@@ -1644,30 +1661,114 @@ def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
 
 
 def generate_character_ref(slug: str, cid: str) -> dict[str, Any]:
-    """文生图生成角色定妆图。失败返回明确错误；成功落盘并更新角色 ref。"""
+    """文生图生成定妆参考图，直接写入 ref。"""
     load_project(slug)
     slug = parse_slug(slug)
-    cards = load_characters(slug)
-    from tools.drama_characters import find_character
+    from tools.drama_characters import find_character, load_characters, ref_exists, upsert_character
 
-    rec = find_character(cards, cid)
+    rec = find_character(load_characters(slug), cid)
     if rec is None:
-        raise DramaNotFound(f"找不到角色：{cid}，请先保存角色卡")
-    if rec.get("ref_locked") and rec.get("ref"):
-        from tools.drama_characters import ref_exists
-
-        if ref_exists(slug, rec):
-            raise DramaBadRequest("参考图已锁定，解锁后才能重新生成")
-    if not (str(rec.get("look") or "").strip() or str(rec.get("colors") or "").strip()):
-        raise DramaBadRequest("请先填写角色外形（look）或配色（colors）再生成定妆图")
+        raise DramaNotFound(f"找不到资产：{cid}，请先保存")
+    if rec.get("ref_locked") and ref_exists(slug, rec):
+        raise DramaBadRequest("参考图已锁定，解锁后才能重新生成")
+    if not (str(rec.get("look") or "").strip()):
+        raise DramaBadRequest("请先填写三视图再生成")
 
     from tools.drama_video import generate_character_portrait
 
     rel = generate_character_portrait(slug, rec)
     if not rel:
-        raise DramaBadRequest("定妆图生成失败（后端无可用图像模型或网络异常），可改用手动上传兜底")
-    rec["ref"] = rel
-    from tools.drama_characters import upsert_character
+        raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常），可改用手动上传")
+    upsert_character(slug, {"id": cid, "ref": rel})
+    return enrich_character(slug, find_character(load_characters(slug), cid) or rec)
 
-    upsert_character(slug, rec)
+
+def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any]:
+    """根据聊天指令更新三视图描述并重新生成定妆图。"""
+    import asyncio
+
+    load_project(slug)
+    slug = parse_slug(slug)
+    from llm_client import llm_client
+    from tools.drama_characters import find_character, load_characters, ref_exists, upsert_character
+
+    text = str(instruction or "").strip()
+    if not text:
+        raise DramaBadRequest("请输入调整说明")
+
+    rec = find_character(load_characters(slug), cid)
+    if rec is None:
+        raise DramaNotFound(f"找不到资产：{cid}，请先保存")
+    if rec.get("ref_locked") and ref_exists(slug, rec):
+        raise DramaBadRequest("参考图已锁定，解锁后才能调整")
+
+    current_look = str(rec.get("look") or "").strip()
+    category = str(rec.get("category") or "character")
+    name = str(rec.get("name") or cid)
+
+    system = (
+        "你是漫剧定妆设定助手。根据用户指令更新三视图文字描述。"
+        "只输出一行，格式严格为：三视图：<更新后的描述>"
+    )
+    user = (
+        f"资产类型：{category}\n名称：{name}\n"
+        f"当前三视图：{current_look or '（未填写）'}\n\n"
+        f"用户调整指令：{text}"
+    )
+    raw = asyncio.run(
+        llm_client.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.4,
+            max_tokens=800,
+        )
+    )
+    new_look = current_look
+    for line in str(raw or "").splitlines():
+        line = line.strip()
+        if line.startswith("三视图：") or line.startswith("三视图:"):
+            new_look = line.split("：", 1)[-1].split(":", 1)[-1].strip() or new_look
+        elif line.startswith("外形：") or line.startswith("外形:"):
+            new_look = line.split("：", 1)[-1].split(":", 1)[-1].strip() or new_look
+    if new_look == current_look and raw.strip():
+        new_look = raw.strip()
+
+    upsert_character(slug, {"id": cid, "look": new_look})
+    rec = find_character(load_characters(slug), cid) or rec
+
+    from tools.drama_video import generate_character_portrait
+
+    rel = generate_character_portrait(slug, rec)
+    if not rel:
+        raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常）")
+    upsert_character(slug, {"id": cid, "ref": rel})
+    rec = find_character(load_characters(slug), cid) or rec
+    reply = f"已根据「{text}」更新设定并重新生成定妆图。"
+    return {
+        "character": enrich_character(slug, rec),
+        "reply": reply,
+        "look": new_look,
+    }
+
+
+def choose_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
+    load_project(slug)
+    slug = parse_slug(slug)
+    from tools.drama_characters import CharacterError, choose_char_candidate
+
+    try:
+        rec = choose_char_candidate(slug, cid, cand_id)
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
+    return enrich_character(slug, rec)
+
+
+def delete_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
+    load_project(slug)
+    slug = parse_slug(slug)
+    from tools.drama_characters import CharacterError, delete_char_candidate
+
+    try:
+        rec = delete_char_candidate(slug, cid, cand_id)
+    except CharacterError as e:
+        raise DramaBadRequest(str(e)) from e
     return enrich_character(slug, rec)

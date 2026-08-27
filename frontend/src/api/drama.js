@@ -164,6 +164,27 @@ export function generateCharacterRef(slug, cid) {
   )
 }
 
+export function refineCharacterRef(slug, cid, instruction) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/refine-ref`,
+    { method: 'POST', body: JSON.stringify({ instruction }) },
+  )
+}
+
+export function chooseCharacterCandidate(slug, cid, candId) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/candidates/${encodeURIComponent(candId)}/choose`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function deleteCharacterCandidate(slug, cid, candId) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/candidates/${encodeURIComponent(candId)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export function lockCharacterRef(slug, cid, locked) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/lock-ref`,

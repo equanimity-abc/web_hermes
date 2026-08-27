@@ -587,7 +587,7 @@ def _action_save_character(args: dict) -> str:
 
 def _action_generate_character_ref(args: dict) -> str:
     """根据角色卡 look/colors 生成定妆参考图（走项目 image 路由，默认不锁定）。"""
-    from tools.drama_characters import find_character, load_characters, save_character_ref
+    from tools.drama_characters import build_asset_ref_prompt, find_character, load_characters, save_character_ref
 
     slug = _slug(str(args.get("slug") or ""))
     if not slug:
@@ -619,11 +619,7 @@ def _action_generate_character_ref(args: dict) -> str:
             slug=slug, character_id=cid,
         )
 
-    prompt = (
-        f"{look}，角色定妆参考图，正面全身站立，单一人物，"
-        f"{colors + ' 配色，' if colors else ''}"
-        f"干净简洁背景，现代都市条漫风格，高清，无文字，无水印"
-    )
+    prompt = build_asset_ref_prompt(char)
     seed = zlib.crc32(f"{slug}:{cid}:{look}".encode()) & 0x7FFFFFFF
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="char-ref-"))
