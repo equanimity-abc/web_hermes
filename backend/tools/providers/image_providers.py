@@ -128,7 +128,9 @@ def _cache_key(
         h.update(b"\x00" + ref.encode("utf-8"))
         if path.is_file():
             size = path.stat().st_size
+            mtime_ns = int(getattr(path.stat(), "st_mtime_ns", int(path.stat().st_mtime * 1e9)))
             h.update(b"\x00" + str(size).encode("ascii"))
+            h.update(b"\x00" + str(mtime_ns).encode("ascii"))
             # Digest only the first 64KB to keep hashing fast on 1080p refs.
             with path.open("rb") as f:
                 h.update(f.read(65536))

@@ -12,6 +12,7 @@ export function useDramaStudio() {
   const draft = ref(emptyDraft())
   const saving = ref(false)
   const rendering = ref(false)
+  const generatingCandidateNs = ref([])
   const error = ref('')
   const notice = ref('')
   const bust = ref(0)
@@ -57,10 +58,13 @@ export function useDramaStudio() {
     { id: 'speaker', label: '说话人' },
   ]
 
+  const videoGenProgress = ref(null)
+
   const {
     jobs: renderJobs,
     activeJobs,
     trackJob,
+    waitForJob,
     cancelJob,
     retryJob,
     refreshJobs,
@@ -73,6 +77,8 @@ export function useDramaStudio() {
         } catch {
           /* ignore refresh errors */
         }
+        // 单镜/批量视频生成由自身更新 notice，避免后台回调抢写
+        if (videoGenProgress.value?.status === 'running') return
         if (job.status === 'done') {
           notice.value =
             job.result?.impact?.summary ||
@@ -84,6 +90,36 @@ export function useDramaStudio() {
       }
     },
   })
+
+  function setVideoGenProgress(partial) {
+    if (!partial) {
+      videoGenProgress.value = null
+      return
+    }
+    videoGenProgress.value = { ...(videoGenProgress.value || {}), ...partial }
+  }
+
+  function shotEligibleForI2v(s) {
+    if (!s) return false
+    if ((s.locked || []).includes('shot')) return false
+    if ((s.i2v || 'auto') === 'off') return false
+    if (!s.files?.scene?.exists) return false
+    const mode = s.i2v || 'auto'
+    if (mode === 'on') return true
+    // auto：需锁定画面；L0 也会走静图运镜
+    return (s.locked || []).includes('scene')
+  }
+
+  async function runI2vForShot(shotN, { track = true } = {}) {
+    const result = await dramaApi.generateI2v(slug.value, episodeN.value, shotN)
+    if (result.job_id) {
+      const finished = track
+        ? await waitForJob(result, slug.value)
+        : await trackJob(result, slug.value)
+      return finished
+    }
+    return result
+  }
 
   const shots = computed(() => episode.value?.shots || [])
   const timelineItems = computed(() => episode.value?.timeline?.items || [])
@@ -383,6 +419,22 @@ export function useDramaStudio() {
     fillDraft(shot || null)
   }
 
+  function mergeEpisodeShot(updatedShot) {
+    if (!updatedShot || !episode.value?.shots) return
+    const n = Number(updatedShot.n)
+    const idx = episode.value.shots.findIndex((s) => Number(s.n) === n)
+    if (idx < 0) return
+    episode.value.shots.splice(idx, 1, updatedShot)
+    if (Number(selectedN.value) === n) {
+      fillDraft(updatedShot)
+    }
+  }
+
+  function finishCandidateGeneration(shotN) {
+    generatingCandidateNs.value = generatingCandidateNs.value.filter((n) => n !== shotN)
+    if (!generatingCandidateNs.value.length) rendering.value = false
+  }
+
   function toggleShotSelected(n) {
     const idx = selectedShotIds.value.indexOf(n)
     if (idx >= 0) selectedShotIds.value.splice(idx, 1)
@@ -576,8 +628,18 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     try {
-      await dramaApi.lockShot(slug.value, episodeN.value, selectedN.value, has ? { unlock: [layer] } : { lock: [layer] })
-      await openEpisode(episodeN.value)
+      const result = await dramaApi.lockShot(
+        slug.value,
+        episodeN.value,
+        selectedN.value,
+        has ? { unlock: [layer] } : { lock: [layer] },
+      )
+      if (result.shot) {
+        mergeEpisodeShot(result.shot)
+      } else {
+        await openEpisode(episodeN.value)
+      }
+      bust.value = Date.now()
       notice.value = has
         ? `已解锁 ${layer}`
         : layer === 'shot'
@@ -881,20 +943,23 @@ export function useDramaStudio() {
     }
   }
 
-  async function generateShotCandidates(count = 4) {
-    if (!slug.value || !episodeN.value || !selectedN.value) return
+  async function generateShotCandidates(count = 1) {
+    const shotN = selectedN.value
+    if (!slug.value || !episodeN.value || !shotN) return
+    if (generatingCandidateNs.value.includes(shotN)) return
+    generatingCandidateNs.value = [...generatingCandidateNs.value, shotN]
     rendering.value = true
     error.value = ''
     notice.value = ''
     try {
-      const result = await dramaApi.generateCandidates(slug.value, episodeN.value, selectedN.value, count)
+      const result = await dramaApi.generateCandidates(slug.value, episodeN.value, shotN, count)
+      if (result.shot) mergeEpisodeShot(result.shot)
       bust.value = Date.now()
-      await openEpisode(episodeN.value)
-      notice.value = `已生成 ${(result.created || []).length} 张候选`
+      notice.value = `Shot ${shotN} 已生成 ${(result.created || []).length} 张候选`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      rendering.value = false
+      finishCandidateGeneration(shotN)
     }
   }
 
@@ -910,6 +975,8 @@ export function useDramaStudio() {
         ...c,
         chosen: String(c.id) === String(cid),
       })),
+      locked: [...new Set([...(shot.locked || []), 'scene'])],
+      dirty: (shot.dirty || []).filter((layer) => layer !== 'scene'),
     }
     shots.splice(idx, 1, next)
   }
@@ -928,8 +995,8 @@ export function useDramaStudio() {
     notice.value = ''
     try {
       const result = await dramaApi.chooseCandidate(slug.value, episodeN.value, selectedN.value, cid)
-      if (result.shot && idx >= 0) {
-        episode.value.shots.splice(idx, 1, result.shot)
+      if (result.shot) {
+        mergeEpisodeShot(result.shot)
       } else {
         await openEpisode(episodeN.value)
       }
@@ -952,9 +1019,9 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     try {
-      await dramaApi.deleteCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      const result = await dramaApi.deleteCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      if (result.shot) mergeEpisodeShot(result.shot)
       bust.value = Date.now()
-      await openEpisode(episodeN.value)
       notice.value = `已删除候选 ${cid}`
     } catch (e) {
       error.value = e.message || String(e)
@@ -1084,20 +1151,54 @@ export function useDramaStudio() {
 
   async function generateShotI2v() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
+    const shotN = selectedN.value
+    const shot = shots.value.find((s) => s.n === shotN)
+    if (!shotEligibleForI2v(shot)) {
+      error.value = !shot?.files?.scene?.exists
+        ? '请先在「画面」步骤生成画面'
+        : '请先在「画面」步骤锁定关键帧后再生成视频'
+      return
+    }
+    rendering.value = true
     error.value = ''
     notice.value = ''
+    setVideoGenProgress({
+      mode: 'single',
+      current: 1,
+      total: 1,
+      shotN,
+      status: 'running',
+      message: `Shot ${shotN} 视频生成中…`,
+    })
     try {
-      const result = await dramaApi.generateI2v(slug.value, episodeN.value, selectedN.value)
-      if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = `Shot ${selectedN.value} I2V 已加入后台队列`
-        return
-      }
+      const result = await runI2vForShot(shotN)
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = `I2V 完成（${result.i2v_source || 'none'}）`
+      if (result?.status === 'error') {
+        error.value = result.error || `Shot ${shotN} 视频生成失败`
+        setVideoGenProgress({
+          status: 'error',
+          message: error.value,
+        })
+        return
+      }
+      const src = result?.result?.i2v_source || result?.i2v_source || ''
+      notice.value = `Shot ${shotN} 视频完成${src ? `（${src}）` : ''}`
+      setVideoGenProgress({
+        status: 'done',
+        message: `Shot ${shotN} 已完成`,
+      })
     } catch (e) {
       error.value = e.message || String(e)
+      setVideoGenProgress({
+        status: 'error',
+        message: error.value,
+      })
+    } finally {
+      rendering.value = false
+      window.setTimeout(() => {
+        if (videoGenProgress.value?.status !== 'running') setVideoGenProgress(null)
+      }, 2500)
     }
   }
 
@@ -1626,49 +1727,94 @@ export function useDramaStudio() {
     try {
       for (const s of shots.value) {
         if ((s.locked || []).some((k) => k === 'shot' || k === 'scene')) continue
+        const shotN = s.n
+        if (generatingCandidateNs.value.includes(shotN)) continue
+        generatingCandidateNs.value = [...generatingCandidateNs.value, shotN]
         try {
-          await dramaApi.generateCandidates(slug.value, ep, s.n, 4)
+          const result = await dramaApi.generateCandidates(slug.value, ep, shotN, 4)
+          if (result.shot) mergeEpisodeShot(result.shot)
+          bust.value = Date.now()
           done += 1
         } catch {
           /* skip ineligible shots */
+        } finally {
+          finishCandidateGeneration(shotN)
         }
       }
-      bust.value = Date.now()
-      await openEpisode(ep)
       notice.value = done ? `已为 ${done} 镜出图（画面）` : '没有可出图的镜头（已锁画面或整镜）'
     } catch (e) {
       error.value = e.message || String(e)
-    } finally {
       rendering.value = false
+      generatingCandidateNs.value = []
     }
   }
 
   async function generateAllVideo() {
     const ep = episodeN.value
     if (!slug.value || !ep) return
+    const targets = shots.value.filter((s) => shotEligibleForI2v(s) && s.i2v_source !== 'ai' && s.i2v_source !== 'keys')
+    if (!targets.length) {
+      error.value = ''
+      notice.value = '没有可生成视频的镜头（需已锁定画面，且非 L0 / 未生成过 I2V）'
+      return
+    }
     rendering.value = true
     error.value = ''
     notice.value = ''
     let done = 0
+    let failed = 0
     try {
-      for (const s of shots.value) {
-        if ((s.locked || []).includes('shot')) continue
-        if (s.i2v_source === 'ai' || s.i2v_source === 'keys') continue
-        if (!s.route?.will_run || s.route?.ladder === 'L0') continue
+      for (let i = 0; i < targets.length; i += 1) {
+        const shotN = targets[i].n
+        setVideoGenProgress({
+          mode: 'batch',
+          current: i + 1,
+          total: targets.length,
+          shotN,
+          status: 'running',
+          message: `批量生成 ${i + 1}/${targets.length} · Shot ${shotN}`,
+        })
         try {
-          await dramaApi.generateI2v(slug.value, ep, s.n)
-          done += 1
+          const result = await runI2vForShot(shotN)
+          if (result?.status === 'error') {
+            failed += 1
+          } else {
+            done += 1
+          }
+          bust.value = Date.now()
+          await openEpisode(ep)
         } catch {
-          /* skip */
+          failed += 1
         }
       }
-      bust.value = Date.now()
-      await openEpisode(ep)
-      notice.value = done ? `已为 ${done} 镜生成视频（图生视频）` : '没有可生成视频的镜头'
+      if (done) {
+        notice.value = failed
+          ? `已为 ${done} 镜生成视频，${failed} 镜失败`
+          : `已为 ${done} 镜生成视频`
+        setVideoGenProgress({
+          status: 'done',
+          current: targets.length,
+          total: targets.length,
+          message: notice.value,
+        })
+      } else {
+        error.value = '批量生成视频失败，请检查画面是否已锁定'
+        setVideoGenProgress({
+          status: 'error',
+          message: error.value,
+        })
+      }
     } catch (e) {
       error.value = e.message || String(e)
+      setVideoGenProgress({
+        status: 'error',
+        message: error.value,
+      })
     } finally {
       rendering.value = false
+      window.setTimeout(() => {
+        if (videoGenProgress.value?.status !== 'running') setVideoGenProgress(null)
+      }, 3000)
     }
   }
 
@@ -1716,6 +1862,8 @@ export function useDramaStudio() {
     dirty,
     saving,
     rendering,
+    generatingCandidateNs,
+    videoGenProgress,
     error,
     notice,
     bust,

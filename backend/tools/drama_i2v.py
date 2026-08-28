@@ -417,9 +417,7 @@ _UNKNOWN_I2V_PROVIDERS = (
 def _run_i2v_provider(provider: str, scene: Path, dest: Path, shot: dict[str, Any], sec: float) -> bool:
     """Dispatch one I2V adapter with retry; returns True only on real 'ai' output.
 
-    The registry failure sentinel is the string "none"; a successful adapter
-    returns "ai". retry_call returns the last result verbatim, so compare
-    explicitly rather than trusting string truthiness.
+    失败时不再偷偷用 mock 冒充 ai；由上层决定是否写 Ken Burns fallback。
     """
     from tools.drama_retry import retry_call
     from tools.providers import registry
@@ -434,12 +432,7 @@ def _run_i2v_provider(provider: str, scene: Path, dest: Path, shot: dict[str, An
         sec,
         ok=lambda r: r == "ai",
     )
-    if result == "ai":
-        return True
-    if provider not in _UNKNOWN_I2V_PROVIDERS:
-        # Unknown provider id: try http, then degraded local Ken Burns motion.
-        return bool(_provider_http(scene, dest, shot, sec) or _provider_mock_ai(scene, dest, shot, sec))
-    return False
+    return result == "ai"
 
 
 def try_generate_i2v(
@@ -449,7 +442,7 @@ def try_generate_i2v(
     *,
     seconds: float | None = None,
 ) -> str:
-    """Return i2v_source: ai | keys | none (caller should still-image zoompan when none)."""
+    """Return i2v_source: ai | keys | fallback | none."""
     if not scene.is_file():
         raise FileNotFoundError(f"缺少画面：{scene}")
     if not shutil.which(_ffmpeg_bin()):
@@ -463,7 +456,7 @@ def try_generate_i2v(
     models = models_with_overrides(slug, shot=shot, episode=episode) if slug else None
     planned = effective_motion_ladder(shot, slug=slug, models=models)
     provider = _resolved_i2v_provider(shot)
-    ok = False
+    shot["i2v_provider"] = provider
 
     if planned == "L4":
         from tools.drama_keys import compose_keys_motion
@@ -473,21 +466,33 @@ def try_generate_i2v(
             return "keys"
 
     if planned == "L3":
-        # P0-4: try the resolved (possibly expensive) adapter first; only on
-        # failure degrade to local dual-phase Ken Burns mock L3.
         ok = _run_i2v_provider(provider, scene, dest, shot, max(sec, 3.0))
         if not ok:
             ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
+            if ok:
+                shot["i2v_ladder"] = "L3"
+                return "fallback"
         if ok:
             shot["i2v_ladder"] = "L3"
-    else:
-        ok = _run_i2v_provider(provider, scene, dest, shot, sec)
+            return "ai"
+        return "none"
 
-    if ok:
-        if provider in ("kling", "hailuo") and not shot.get("i2v_deferred"):
-            shot["i2v_expensive"] = True
+    if planned == "L0" or provider in ("l0", "none", "off", ""):
+        try:
+            _provider_mock_ai(scene, dest, shot, max(sec, 2.5))
+            return "fallback"
+        except Exception:
+            return "none"
+
+    if _run_i2v_provider(provider, scene, dest, shot, sec):
         return "ai"
-    return "none"
+
+    # 真 I2V 失败 → 明显 Ken Burns，标记 fallback（不要伪装成 ai）
+    try:
+        _provider_mock_ai(scene, dest, shot, max(sec, 2.5))
+        return "fallback"
+    except Exception:
+        return "none"
 
 
 def generate_shot_i2v(
@@ -509,10 +514,12 @@ def generate_shot_i2v(
     dest = resolve_safe(rel)
     source = try_generate_i2v(scene, dest, shot)
     shot["i2v_source"] = source
+    if source == "ai" and str(shot.get("i2v_provider") or "") in ("kling", "kling-video", "kling-maas", "hailuo"):
+        if not shot.get("i2v_deferred"):
+            shot["i2v_expensive"] = True
     shot.pop("_slug", None)
-    # keep _episode? pop it
     shot.pop("_episode", None)
-    if source in ("ai", "keys"):
+    if source in ("ai", "keys", "fallback") and dest.is_file() and dest.stat().st_size > 500:
         return {
             "tried": True,
             "i2v_source": source,
@@ -520,5 +527,6 @@ def generate_shot_i2v(
             "seconds": i2v_seconds(shot),
             "ladder": shot.get("i2v_ladder") or ("L4" if source == "keys" else "L1"),
             "deferred": bool(shot.get("i2v_deferred")),
+            "provider": shot.get("i2v_provider") or "",
         }
     return {"tried": True, "i2v_source": "none", "motion": None, "fallback": "still_zoompan"}

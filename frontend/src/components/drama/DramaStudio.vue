@@ -15,6 +15,8 @@ const props = defineProps({
   dirty: { type: Boolean, default: false },
   saving: { type: Boolean, default: false },
   rendering: { type: Boolean, default: false },
+  generatingCandidateNs: { type: Array, default: () => [] },
+  videoGenProgress: { type: Object, default: null },
   error: { type: String, default: '' },
   notice: { type: String, default: '' },
   bust: { type: Number, default: 0 },
@@ -82,6 +84,7 @@ const emit = defineEmits([
   'generate-character-ref',
   'refine-character-ref',
   'generate-all-refs',
+  'generate-all-scenes',
   'toggle-role',
   'generate-candidates',
   'choose-candidate',
@@ -136,15 +139,9 @@ const emit = defineEmits([
 const stage = ref('script')
 const premise = ref('')
 const refInput = ref(null)
-const sceneInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
 const selectedKeyId = ref(null)
-const addMenuOpen = ref(false)
-/** 点击候选后立即反映到 shot 缩略图，不等待 API */
-const localChosen = ref({})
-/** 候选图大图预览（仅分镜画面步骤） */
-const candidatePreview = ref(null)
 const castChatRef = ref(null)
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
@@ -204,9 +201,34 @@ function castAssetUrl(url) {
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 }
 
-function fullAssetUrl(url) {
-  return castAssetUrl(url)
+function formatFileSize(bytes) {
+  const n = Number(bytes || 0)
+  if (!n) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`
 }
+
+const castRefModelLabel = computed(() => {
+  const p = props.selectedCharacter?.ref_image_provider || props.charDraft.ref_image_provider
+  const m = props.selectedCharacter?.ref_image_model || props.charDraft.ref_image_model
+  const hit = CAST_REF_MODELS.find((o) => o.provider === p && o.model === m)
+  return hit?.label || m || '—'
+})
+
+const castRefInfo = computed(() => {
+  const c = props.selectedCharacter
+  if (!c?.ref_exists) return null
+  const w = Number(c.ref_width || 0)
+  const h = Number(c.ref_height || 0)
+  const canvas = Number(c.ref_size || props.charDraft.ref_size || 0)
+  return {
+    pixelSize: w > 0 && h > 0 ? `${w} × ${h} px` : canvas ? `${canvas} × ${canvas} px（设定）` : '—',
+    fileSize: formatFileSize(c.ref_bytes),
+    model: castRefModelLabel.value,
+    locked: Boolean(c.ref_locked),
+  }
+})
 
 function onAddCastAsset() {
   const names = { character: '新角色', prop: '新物品', scene: '新场景' }
@@ -300,23 +322,48 @@ function thumbUrl(url) {
 function assetThumb(url) {
   return thumbUrl(url)
 }
-function candUrl(cand) {
-  return assetThumb(cand?.url || '')
+function withBust(url) {
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 }
-function shotChosenId(shot) {
-  if (!shot) return ''
-  const local = localChosen.value[shot.n]
-  if (local) return String(local)
-  return String(shot.chosen || '').trim()
+function candUrl(cand) {
+  return withBust(assetThumb(cand?.url || ''))
+}
+function chosenCandidate(shot) {
+  if (!shot) return null
+  const chosenId = String(shot.chosen || '').trim()
+  if (!chosenId) return null
+  return (shot.candidates || []).find((c) => String(c.id) === chosenId) || null
 }
 function shotThumb(shot) {
   if (!shot) return ''
-  const chosenId = shotChosenId(shot)
-  if (chosenId) {
-    const cand = (shot.candidates || []).find((c) => String(c.id) === chosenId)
-    if (cand?.url) return assetThumb(cand.url)
+  const chosen = chosenCandidate(shot)
+  if (chosen?.url) return withBust(assetThumb(chosen.url))
+  const sceneUrl = shot?.files?.scene?.url
+  if (sceneUrl && shot?.files?.scene?.exists) {
+    return withBust(assetThumb(sceneUrl))
   }
-  return assetThumb(shot?.files?.scene?.url || shot?.preview_url || '')
+  const cands = shot.candidates || []
+  if (cands.length) {
+    const last = cands[cands.length - 1]
+    if (last?.url) return withBust(assetThumb(last.url))
+  }
+  return withBust(assetThumb(shot?.preview_url || ''))
+}
+function shotThumbKey(shot) {
+  if (!shot) return ''
+  return `${shot.n}-${shot.chosen || ''}-${shot.files?.scene?.bytes || 0}`
+}
+function isCandidateChosen(cand, shot) {
+  return String(cand?.id || '') === String(shot?.chosen || '').trim()
+}
+function onChooseCandidate(cid) {
+  if (shotFrozen.value || !cid) return
+  if (isCandidateChosen({ id: cid }, props.selected)) return
+  emit('choose-candidate', cid)
+}
+function isGeneratingCandidates(n) {
+  return (props.generatingCandidateNs || []).includes(n)
 }
 function candidateUrls(shot) {
   return (shot?.candidates || []).map((c) => candUrl(c)).filter(Boolean)
@@ -331,17 +378,27 @@ function preloadImage(url) {
 function preloadShotCandidates(shot) {
   for (const url of candidateUrls(shot)) preloadImage(url)
 }
+function sceneLocked(shot) {
+  return (shot?.locked || []).includes('scene')
+}
+function sceneLayerDirty(shot) {
+  return (shot?.dirty || []).includes('scene')
+}
 function shotStatusLabel(shot) {
+  if (isGeneratingCandidates(shot.n)) return '…'
   const locked = shot.locked || []
   if (locked.includes('shot')) return '锁'
+  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return '锁'
   if ((shot.dirty || []).length) return '脏'
   if (shot.files?.clip?.exists) return '成'
   if (shot.files?.scene?.exists) return '图'
   return '待'
 }
 function shotStatusClass(shot) {
+  if (isGeneratingCandidates(shot.n)) return 'is-busy'
   const locked = shot.locked || []
   if (locked.includes('shot')) return 'is-locked'
+  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return 'is-locked'
   if ((shot.dirty || []).length) return 'is-dirty'
   if (shot.files?.clip?.exists) return 'is-done'
   if (shot.files?.scene?.exists) return 'is-scene'
@@ -352,14 +409,15 @@ function isLocked(layer) {
 }
 const shotFrozen = computed(() => isLocked('shot'))
 const candidatesFull = computed(() => (props.selected?.candidates || []).length >= 4)
-const canAddCandidate = computed(() => !candidatesFull.value)
+const selectedGeneratingCandidates = computed(() => isGeneratingCandidates(props.selectedN))
 const canGenerateI2v = computed(() => {
   const shot = props.selected
   if (!shot) return false
-  if ((shot.route && shot.route.will_run === false) || shot.route?.ladder === 'L0') return false
   const mode = props.draft?.i2v || shot.i2v || 'auto'
   if (mode === 'off') return false
+  if (!shot.files?.scene?.exists) return false
   if (mode === 'on') return true
+  // auto：锁定画面后可生成（L0 走静图运镜，其它走 I2V）
   return (shot.locked || []).includes('scene') || shotFrozen.value
 })
 const canGenerateLip = computed(() => Boolean(props.selected?.lip?.ok || props.selected?.lip?.will_run))
@@ -382,23 +440,93 @@ const identityClass = computed(() => {
   if (id.status === 'ok' && id.pass) return 'drama-qc-pass'
   return 'drama-qc-fail'
 })
-const i2vSourceLabel = computed(() => {
-  const src = props.selected?.i2v_source || ''
-  if (src === 'ai') return '已生成 I2V 运动'
-  if (src === 'keys') return '已用关键帧补间'
-  if (src === 'fallback') return '已回退静图运镜'
-  return '尚未生成视频'
-})
+const i2vSourceLabel = computed(() => i2vSourceLabelFor(props.selected))
+
+function i2vSourceLabelFor(shot) {
+  const src = shot?.i2v_source || ''
+  if (src === 'ai') return 'I2V 运动'
+  if (src === 'keys') return '关键帧补间'
+  if (src === 'fallback') return '静图运镜'
+  return '待生成视频'
+}
+
+function shotHasVideo(shot) {
+  if (!shot) return false
+  const src = shot.i2v_source || ''
+  if (src === 'ai' || src === 'keys' || src === 'fallback') return true
+  return Boolean(shot.files?.motion?.exists || shot.files?.clip?.exists)
+}
+
+function shotVideoPreviewUrl(shot) {
+  if (!shot) return ''
+  const url = shot.files?.motion?.url || shot.files?.clip?.url || shot.files?.scene?.url || ''
+  if (!url) return ''
+  return withBust(url)
+}
+
+function shotVideoPreviewKind(shot) {
+  const url = shotVideoPreviewUrl(shot)
+  if (!url) return 'empty'
+  return url.includes('.mp4') ? 'video' : 'image'
+}
+
+function shotVideoRowDesc(shot) {
+  if (shotHasVideo(shot)) return i2vSourceLabelFor(shot)
+  return shotDescPreview(shot)
+}
+
+function shotVideoStatusLabel(shot) {
+  if (isVideoGeneratingShot(shot.n)) return '…'
+  const locked = shot.locked || []
+  if (locked.includes('shot')) return '锁'
+  const src = shot.i2v_source || ''
+  if (src === 'ai' || src === 'keys') return '动'
+  if (src === 'fallback') return '运'
+  if (shot.files?.clip?.exists) return '成'
+  if (shot.files?.motion?.exists) return '动'
+  const dirty = shot.dirty || []
+  if (dirty.includes('motion') || dirty.includes('clip')) return '脏'
+  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return '图'
+  if (shot.files?.scene?.exists) return '图'
+  return '待'
+}
+
+function shotVideoStatusClass(shot) {
+  if (isVideoGeneratingShot(shot.n)) return 'is-busy'
+  const locked = shot.locked || []
+  if (locked.includes('shot')) return 'is-locked'
+  const src = shot.i2v_source || ''
+  if (src === 'ai' || src === 'keys') return 'is-done'
+  if (shot.files?.clip?.exists) return 'is-done'
+  if (shot.files?.motion?.exists) return 'is-scene'
+  const dirty = shot.dirty || []
+  if (dirty.includes('motion') || dirty.includes('clip')) return 'is-dirty'
+  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return 'is-locked'
+  if (shot.files?.scene?.exists) return 'is-scene'
+  return 'is-todo'
+}
+
+function i2vModeLabel(mode) {
+  if (mode === 'on') return '强制 I2V'
+  if (mode === 'off') return '关闭 I2V'
+  return '自动'
+}
+
+function cameraLabel(shot) {
+  return String(shot?.camera || '—')
+}
+
+function routeLabel(shot) {
+  const route = shot?.route
+  if (!route) return '—'
+  if (route.will_run === false || route.ladder === 'L0') return 'L0 静图运镜'
+  return route.ladder ? `${route.ladder} I2V` : 'I2V'
+}
 
 function onRefFile(ev) {
   const file = ev.target.files?.[0]
   ev.target.value = ''
   if (file) emit('upload-ref', file)
-}
-function onSceneFile(ev) {
-  const file = ev.target.files?.[0]
-  ev.target.value = ''
-  if (file) emit('upload-scene', file)
 }
 function onBgmFile(ev) {
   const file = ev.target.files?.[0]
@@ -411,8 +539,27 @@ function onKeyFile(ev) {
   const kid = selectedKey.value?.id
   if (file && kid) emit('upload-key', kid, file)
 }
-function onGenerateScript() {
-  emit('generate-script', premise.value)
+function onGenerateAllScenes() {
+  emit('generate-all-scenes')
+}
+
+function shotRolesLabel(shot) {
+  const roles = shot?.角色
+  if (Array.isArray(roles) && roles.length) return roles.join('、')
+  return ''
+}
+
+function shotDescPreview(shot) {
+  const raw = String(shot?.画面 || '').trim()
+  if (!raw) return '（无画面描述）'
+  // 去掉景别/机位前缀，取第一句动作要点作为摘要
+  let text = raw
+    .replace(/^(特写|近景|中景|全景|远景|大全景|大特写|快速闪回蒙太奇|画面切到[^—\-–]*)\s*[—\-–]+\s*/u, '')
+    .replace(/^(特写|近景|中景|全景|远景)[：:]\s*/u, '')
+    .trim()
+  const clause = text.split(/[。！？；;\n]/u).map((s) => s.trim()).find(Boolean) || text
+  const max = 22
+  return clause.length > max ? `${clause.slice(0, max)}…` : clause
 }
 
 function onEpisodeChange(event) {
@@ -422,31 +569,17 @@ function onEpisodeChange(event) {
   }
 }
 
-// 切换镜头时收起「＋」菜单，并预加载候选缩略图
+// 预加载候选缩略图
 watch(
   () => props.shots,
   (rows) => {
-    const next = { ...localChosen.value }
-    let changed = false
     for (const shot of rows || []) {
-      const cid = String(shot.chosen || '').trim()
-      if (cid && next[shot.n] !== cid) {
-        next[shot.n] = cid
-        changed = true
-      }
       preloadShotCandidates(shot)
-      const sceneUrl = assetThumb(shot?.files?.scene?.url || shot?.preview_url || '')
-      if (sceneUrl) preloadImage(sceneUrl)
+      const thumb = shotThumb(shot)
+      if (thumb) preloadImage(thumb)
     }
-    if (changed) localChosen.value = next
   },
   { deep: true },
-)
-watch(
-  () => props.selectedN,
-  () => {
-    addMenuOpen.value = false
-  },
 )
 watch(
   () => props.selected,
@@ -456,45 +589,42 @@ watch(
   { immediate: true },
 )
 
-function onUploadCandidate() {
-  addMenuOpen.value = false
-  sceneInput.value?.click()
-}
 function onGenerateCandidate() {
-  addMenuOpen.value = false
-  const left = 4 - (props.selected?.candidates || []).length
-  emit('generate-candidates', Math.max(1, left))
+  emit('generate-candidates', 1)
 }
-function onChooseCandidate(cid) {
-  if (!props.selectedN || !cid) return
-  const cand = (props.selected?.candidates || []).find((c) => String(c.id) === String(cid))
-  if (cand) preloadImage(candUrl(cand))
-  localChosen.value = { ...localChosen.value, [props.selectedN]: cid }
-  emit('choose-candidate', cid)
+
+function onGenerateVideo() {
+  emit('generate-i2v')
 }
-function openShotCandidatePreview(cand) {
-  if (!cand?.url) return
-  candidatePreview.value = {
-    id: cand.id,
-    url: cand.url,
-    label: `Shot ${props.selected?.n} · ${cand.id}`,
-    locked: props.rendering || shotFrozen.value,
+
+function onGenerateAllVideo() {
+  emit('generate-all-video')
+}
+
+function isVideoGeneratingShot(n) {
+  const p = props.videoGenProgress
+  return Boolean(p && p.status === 'running' && Number(p.shotN) === Number(n))
+}
+
+const videoProgressLabel = computed(() => {
+  const p = props.videoGenProgress
+  if (!p) return ''
+  if (p.mode === 'batch' && p.total > 1) {
+    return p.message || `批量生成 ${p.current || 0}/${p.total}`
   }
-}
-function closeCandidatePreview() {
-  candidatePreview.value = null
-}
-function confirmCandidatePreview() {
-  const preview = candidatePreview.value
-  if (!preview || preview.locked) return
-  onChooseCandidate(preview.id)
-  closeCandidatePreview()
-}
-function isCandidateChosen(cand) {
-  if (!props.selected) return false
-  const id = String(cand?.id || '')
-  return Boolean(cand?.chosen || shotChosenId(props.selected) === id)
-}
+  return p.message || (p.status === 'running' ? '视频生成中…' : '')
+})
+
+const videoProgressPct = computed(() => {
+  const p = props.videoGenProgress
+  if (!p?.total) return 0
+  const cur = Math.max(0, Number(p.current) || 0)
+  const total = Math.max(1, Number(p.total) || 1)
+  if (p.status === 'done') return 100
+  // 进行中时按已完成镜数显示：current 是「当前正在做的第几镜」
+  const finished = Math.max(0, cur - (p.status === 'running' ? 1 : 0))
+  return Math.min(100, Math.round((finished / total) * 100))
+})
 </script>
 
 <template>
@@ -718,6 +848,24 @@ function isCandidateChosen(cand) {
                     <span v-else class="drama-candidate-empty">暂无定妆图</span>
                   </div>
                 </div>
+                <dl v-if="castRefInfo" class="drama-cast-ref-meta">
+                  <div class="drama-cast-ref-meta-row">
+                    <dt>像素</dt>
+                    <dd>{{ castRefInfo.pixelSize }}</dd>
+                  </div>
+                  <div class="drama-cast-ref-meta-row">
+                    <dt>文件</dt>
+                    <dd>{{ castRefInfo.fileSize }}</dd>
+                  </div>
+                  <div class="drama-cast-ref-meta-row">
+                    <dt>模型</dt>
+                    <dd>{{ castRefInfo.model }}</dd>
+                  </div>
+                  <div class="drama-cast-ref-meta-row">
+                    <dt>状态</dt>
+                    <dd>{{ castRefInfo.locked ? '已锁定' : '未锁定' }}</dd>
+                  </div>
+                </dl>
                 <button
                   type="button"
                   class="btn-ghost btn-sm drama-cast-ref-upload"
@@ -746,106 +894,261 @@ function isCandidateChosen(cand) {
       </section>
 
       <!-- ============ 阶段 3：画面（可分镜出图） ============ -->
-      <section v-else-if="stage === 'scene'" class="drama-stage-panel">
-        <div class="drama-panel-body">
-          <div class="drama-shot-grid">
-            <button
-              v-for="shot in shots"
-              :key="shot.n"
-              type="button"
-              class="drama-shot-card"
-              :class="{ active: shot.n === selectedN }"
-              @click="emit('select-shot', shot.n)"
-              @mouseenter="preloadShotCandidates(shot)"
-            >
-              <DramaThumbImg
-                v-if="shotThumb(shot)"
-                :src="shotThumb(shot)"
-                :alt="`Shot ${shot.n}`"
-                :fetchpriority="shot.n === selectedN ? 'high' : 'low'"
-              />
-              <span v-else class="drama-candidate-empty">{{ shot.n }}</span>
-              <span class="drama-status-dot" :class="shotStatusClass(shot)">{{ shotStatusLabel(shot) }}</span>
-            </button>
-          </div>
-          <div v-if="selected" class="drama-inspector-panel">
-            <div class="drama-candidates-head">
-              <h3>候选墙 · Shot {{ selected.n }}</h3>
-              <span class="drama-candidate-count">{{ (selected.candidates || []).length }}/4</span>
-            </div>
-            <input ref="sceneInput" class="drama-file" type="file" accept="image/*" @change="onSceneFile" />
-            <div :key="selected.n" class="drama-candidate-grid">
-              <button
-                v-for="cand in selected.candidates || []"
-                :key="cand.id"
-                type="button"
-                class="drama-candidate"
-                :class="{ chosen: isCandidateChosen(cand) }"
-                :disabled="rendering || shotFrozen"
-                @click="openShotCandidatePreview(cand)"
-              >
-                <DramaThumbImg
-                  v-if="candUrl(cand)"
-                  :src="candUrl(cand)"
-                  :alt="cand.id"
-                  loading="eager"
-                  fetchpriority="high"
-                />
-                <span v-else class="drama-candidate-empty">无图</span>
-                <span class="drama-candidate-del" title="删除候选" @click.stop="emit('delete-candidate', cand.id)">×</span>
+      <section v-else-if="stage === 'scene'" class="drama-stage-panel drama-scene-stage">
+        <div class="drama-panel-body drama-scene-layout">
+          <div class="drama-scene-sidebar">
+            <div class="drama-scene-toolbar">
+              <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllScenes">
+                {{ rendering ? '生成中…' : '批量出图' }}
               </button>
-              <div v-if="canAddCandidate" class="drama-candidate-add-wrap">
+            </div>
+            <div class="drama-scene-list">
+              <div class="drama-scene-rows">
+                <button
+                  v-for="shot in shots"
+                  :key="shot.n"
+                  type="button"
+                  class="drama-scene-row"
+                  :class="{ active: shot.n === selectedN, locked: (shot.locked || []).includes('scene') }"
+                  @click="emit('select-shot', shot.n)"
+                  @mouseenter="preloadShotCandidates(shot)"
+                >
+                  <div class="drama-scene-thumb">
+                    <DramaThumbImg
+                      v-if="shotThumb(shot)"
+                      :key="shotThumbKey(shot)"
+                      :src="shotThumb(shot)"
+                      :alt="`Shot ${shot.n}`"
+                      :fetchpriority="shot.n === selectedN ? 'high' : 'low'"
+                    />
+                    <span v-else class="drama-scene-thumb-empty">{{ shot.n }}</span>
+                  </div>
+                  <div class="drama-scene-row-body">
+                    <span class="drama-scene-row-n">Shot {{ shot.n }}</span>
+                    <span class="drama-scene-row-desc">{{ shotDescPreview(shot) }}</span>
+                  </div>
+                  <span class="drama-status-dot" :class="shotStatusClass(shot)">{{ shotStatusLabel(shot) }}</span>
+                </button>
+              </div>
+              <p v-if="!shots.length" class="drama-empty-hint">暂无分镜，请先在「剧本」步骤生成分镜表。</p>
+            </div>
+          </div>
+
+          <div v-if="selected" class="drama-scene-detail">
+            <div class="drama-scene-detail-head">
+              <h3>Shot {{ selected.n }}</h3>
+              <div class="drama-scene-detail-actions">
                 <button
                   type="button"
-                  class="drama-candidate drama-candidate-add"
-                  :class="{ open: addMenuOpen }"
-                  :disabled="rendering || shotFrozen"
-                  :title="addMenuOpen ? '收起' : '添加候选图'"
-                  @click="addMenuOpen = !addMenuOpen"
+                  class="btn-primary btn-sm"
+                  :disabled="rendering || shotFrozen || candidatesFull || selectedGeneratingCandidates"
+                  @click="onGenerateCandidate"
                 >
-                  <span class="drama-candidate-add-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                  </span>
+                  {{ selectedGeneratingCandidates ? '生成中…' : '生成候选图' }}
                 </button>
-                <div v-if="addMenuOpen" class="drama-add-menu">
-                  <button type="button" class="drama-add-menu-item" :disabled="rendering || shotFrozen" @click="onUploadCandidate">
-                    上传图片
-                  </button>
-                  <button type="button" class="drama-add-menu-item" :disabled="rendering || shotFrozen" @click="onGenerateCandidate">
-                    生成候选图
-                  </button>
+                <button
+                  type="button"
+                  class="btn-tiny"
+                  :disabled="rendering || shotFrozen"
+                  @click="emit('toggle-lock', 'scene')"
+                >
+                  {{ isLocked('scene') ? '解锁画面' : '锁定画面' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="drama-scene-script">
+              <label class="drama-field">
+                画面描述
+                <textarea
+                  class="drama-scene-script-text"
+                  :value="selected.画面 || ''"
+                  rows="4"
+                  readonly
+                  placeholder="（剧本中尚未填写画面描述）"
+                />
+              </label>
+              <p class="drama-scene-script-hint">来自剧本分镜；修改请返回「剧本」步骤编辑对应 Shot 的「画面」字段。</p>
+              <div v-if="shotRolesLabel(selected) || selected.对白 || selected.字幕" class="drama-scene-meta">
+                <span v-if="shotRolesLabel(selected)" class="drama-scene-meta-item">
+                  <strong>角色</strong>{{ shotRolesLabel(selected) }}
+                </span>
+                <span v-if="selected.对白" class="drama-scene-meta-item">
+                  <strong>对白</strong>{{ selected.对白 }}
+                </span>
+                <span v-if="selected.字幕" class="drama-scene-meta-item">
+                  <strong>字幕</strong>{{ selected.字幕 }}
+                </span>
+              </div>
+            </div>
+
+            <div class="drama-scene-main">
+              <div class="drama-scene-candidates">
+                <div class="drama-candidates-head">
+                  <h4>候选墙</h4>
+                  <span class="drama-candidate-count">{{ (selected.candidates || []).length }}/4</span>
+                  <span class="drama-candidate-hint">点击候选图锁定画面</span>
+                </div>
+                <div class="drama-candidate-grid drama-scene-candidate-grid">
+                  <div
+                    v-for="cand in selected.candidates || []"
+                    :key="cand.id"
+                    class="drama-candidate drama-scene-candidate"
+                    :class="{ chosen: isCandidateChosen(cand, selected) }"
+                    :title="isCandidateChosen(cand, selected) ? '已锁定此画面' : '点击锁定此画面'"
+                    @click="onChooseCandidate(cand.id)"
+                  >
+                    <DramaThumbImg
+                      v-if="candUrl(cand)"
+                      :src="candUrl(cand)"
+                      :alt="cand.id"
+                      loading="eager"
+                      fetchpriority="high"
+                    />
+                    <span v-else class="drama-candidate-empty">无图</span>
+                    <span class="drama-candidate-del" title="删除候选" @click.stop="emit('delete-candidate', cand.id)">×</span>
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
+
+          <div v-else class="drama-cast-empty">
+            <p>从左侧选择一镜，查看剧本画面描述并生成候选图。</p>
           </div>
         </div>
       </section>
 
       <!-- ============ 阶段 4：视频 ============ -->
-      <section v-else-if="stage === 'video'" class="drama-stage-panel">
-        <div class="drama-panel-body">
-          <div class="drama-actions">
-            <button type="button" class="btn-primary" :disabled="rendering" @click="emit('generate-all-video')">
-              {{ rendering ? '生成中…' : '一键全部生成视频' }}
-            </button>
-          </div>
-          <div class="drama-shot-list">
-            <div v-for="shot in shots" :key="shot.n" class="drama-row" :class="{ active: shot.n === selectedN }" role="button" tabindex="0" @click="emit('select-shot', shot.n)">
-              <span class="drama-row-n">{{ shot.n }}</span>
-              <span class="drama-row-body">{{ shot.画面 || '（无画面描述）' }}</span>
-              <span class="drama-row-flag">{{ i2vSourceLabel }}</span>
-              <button type="button" class="btn-tiny" :disabled="rendering || !canGenerateI2v" @click.stop="emit('generate-i2v')">生成视频</button>
+      <section v-else-if="stage === 'video'" class="drama-stage-panel drama-video-stage">
+        <div class="drama-panel-body drama-scene-layout">
+          <div class="drama-scene-sidebar">
+            <div class="drama-scene-toolbar">
+              <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllVideo">
+                {{ rendering ? '生成中…' : '批量生成视频' }}
+              </button>
+            </div>
+            <div class="drama-scene-list">
+              <div class="drama-scene-rows">
+                <button
+                  v-for="shot in shots"
+                  :key="shot.n"
+                  type="button"
+                  class="drama-scene-row"
+                  :class="{ active: shot.n === selectedN, ready: shotHasVideo(shot) }"
+                  @click="emit('select-shot', shot.n)"
+                >
+                  <div class="drama-scene-thumb">
+                    <DramaThumbImg
+                      v-if="shotThumb(shot)"
+                      :key="shotThumbKey(shot)"
+                      :src="shotThumb(shot)"
+                      :alt="`Shot ${shot.n}`"
+                      :fetchpriority="shot.n === selectedN ? 'high' : 'low'"
+                    />
+                    <span v-else class="drama-scene-thumb-empty">{{ shot.n }}</span>
+                  </div>
+                  <div class="drama-scene-row-body">
+                    <span class="drama-scene-row-n">Shot {{ shot.n }}</span>
+                    <span class="drama-scene-row-desc">{{ shotVideoRowDesc(shot) }}</span>
+                  </div>
+                  <span class="drama-status-dot" :class="shotVideoStatusClass(shot)">{{ shotVideoStatusLabel(shot) }}</span>
+                </button>
+              </div>
+              <p v-if="!shots.length" class="drama-empty-hint">暂无分镜，请先在「剧本」步骤生成分镜表。</p>
             </div>
           </div>
-          <div v-if="selected" class="drama-inspector-panel">
-            <div class="drama-stage">
-              <video v-if="previewKind === 'video'" :key="previewUrl" class="drama-media" :src="previewUrl" controls playsinline />
-              <img v-else-if="previewKind === 'image'" class="drama-media" :src="previewUrl" alt="镜头画面" />
-              <div v-else class="drama-stage-empty">本镜尚未出图或成片</div>
+
+          <div v-if="selected" class="drama-scene-detail">
+            <div class="drama-scene-detail-head">
+              <div class="drama-scene-detail-title">
+                <h3>Shot {{ selected.n }}</h3>
+                <p class="drama-shot-subhint">生成 I2V 前请先在「画面」步骤锁定关键帧；L0 定场镜仅支持静图运镜。</p>
+              </div>
+              <div class="drama-scene-detail-actions">
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="rendering || !canGenerateI2v"
+                  @click="onGenerateVideo"
+                >
+                  {{ rendering ? '生成中…' : '生成视频' }}
+                </button>
+              </div>
             </div>
+
+            <div class="drama-scene-script">
+              <label class="drama-field">
+                画面描述
+                <textarea
+                  class="drama-scene-script-text"
+                  :value="selected.画面 || ''"
+                  rows="3"
+                  readonly
+                  placeholder="（剧本中尚未填写画面描述）"
+                />
+              </label>
+              <div class="drama-scene-meta drama-scene-meta-inline">
+                <span class="drama-scene-meta-item">
+                  <strong>运镜</strong>{{ cameraLabel(selected) }}
+                </span>
+                <span class="drama-scene-meta-item">
+                  <strong>I2V</strong>{{ i2vModeLabel(selected.i2v || 'auto') }}
+                </span>
+                <span class="drama-scene-meta-item">
+                  <strong>路由</strong>{{ routeLabel(selected) }}
+                </span>
+                <span class="drama-scene-meta-item">
+                  <strong>状态</strong>{{ i2vSourceLabel }}
+                </span>
+              </div>
+            </div>
+
+            <div class="drama-scene-main">
+              <div class="drama-video-preview">
+                <video
+                  v-if="shotVideoPreviewKind(selected) === 'video'"
+                  :key="shotVideoPreviewUrl(selected)"
+                  class="drama-media"
+                  :src="shotVideoPreviewUrl(selected)"
+                  controls
+                  autoplay
+                  muted
+                  loop
+                  playsinline
+                />
+                <img
+                  v-else-if="shotVideoPreviewKind(selected) === 'image'"
+                  class="drama-media"
+                  :src="shotVideoPreviewUrl(selected)"
+                  alt="镜头画面"
+                />
+                <div v-else class="drama-stage-empty">本镜尚未出图或视频，请先在「画面」步骤锁定关键帧</div>
+              </div>
+              <div
+                v-if="videoGenProgress"
+                class="drama-video-progress"
+                :class="{
+                  'is-running': videoGenProgress.status === 'running',
+                  'is-done': videoGenProgress.status === 'done',
+                  'is-error': videoGenProgress.status === 'error',
+                }"
+              >
+                <div class="drama-video-progress-head">
+                  <span class="drama-video-progress-label">{{ videoProgressLabel }}</span>
+                  <span v-if="videoGenProgress.mode === 'batch'" class="drama-video-progress-count">
+                    {{ videoGenProgress.current || 0 }}/{{ videoGenProgress.total || 0 }}
+                  </span>
+                </div>
+                <div class="drama-video-progress-bar">
+                  <div class="drama-video-progress-fill" :style="{ width: `${videoProgressPct}%` }" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="drama-cast-empty">
+            <p>从左侧选择一镜，查看画面并生成 I2V 视频。</p>
           </div>
         </div>
       </section>
@@ -907,36 +1210,6 @@ function isCandidateChosen(cand) {
         <li><strong>3. 一路生成</strong> 角色 → 画面 → 视频 → 声音 → 成片</li>
       </ol>
     </div>
-
-    <Teleport to="body">
-      <div
-        v-if="candidatePreview"
-        class="drama-candidate-preview-overlay"
-        @click.self="closeCandidatePreview"
-        @keydown.esc.window="closeCandidatePreview"
-      >
-        <div class="drama-candidate-preview-modal" role="dialog" aria-modal="true">
-          <header class="drama-candidate-preview-head">
-            <h3>{{ candidatePreview.label }}</h3>
-            <button type="button" class="drama-candidate-preview-close" aria-label="关闭" @click="closeCandidatePreview">×</button>
-          </header>
-          <div class="drama-candidate-preview-body">
-            <img :src="fullAssetUrl(candidatePreview.url)" :alt="candidatePreview.label" />
-          </div>
-          <footer class="drama-candidate-preview-foot">
-            <button type="button" class="btn-ghost" @click="closeCandidatePreview">关闭</button>
-            <button
-              type="button"
-              class="btn-primary"
-              :disabled="candidatePreview.locked"
-              @click="confirmCandidatePreview"
-            >
-              选用此图
-            </button>
-          </footer>
-        </div>
-      </div>
-    </Teleport>
 
   </main>
 </template>

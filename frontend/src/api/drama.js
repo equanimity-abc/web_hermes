@@ -213,7 +213,7 @@ export async function uploadCharacterRef(slug, cid, file) {
   return data
 }
 
-export function generateCandidates(slug, episode, shot, count = 4) {
+export function generateCandidates(slug, episode, shot, count = 1) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/candidates`,
     { method: 'POST', body: JSON.stringify({ count }) },

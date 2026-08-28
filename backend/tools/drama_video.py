@@ -524,7 +524,12 @@ def _paste_character_refs(img, characters: list[dict[str, Any]]) -> None:
         img.paste(portrait, (x0 + i * (slot_w + gap), y0))
 
 
-def _image_provider_chain(primary: str, shot: dict[str, Any] | None) -> list[str]:
+def _image_provider_chain(
+    primary: str,
+    shot: dict[str, Any] | None,
+    *,
+    refs: tuple[str, ...] = (),
+) -> list[str]:
     """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks."""
     from tools.providers import registry
 
@@ -538,6 +543,11 @@ def _image_provider_chain(primary: str, shot: dict[str, Any] | None) -> list[str
         if registry.has("image", p):
             chain.append(p)
 
+    if refs:
+        # Locked character refs need img2img-capable providers (Kling uploads ref PNGs).
+        add("kling-image")
+        add("kling")
+        add("jimeng")
     add(primary)
     if str((shot or {}).get("kind") or "") == "character_ref":
         from tools.drama_styles import default_character_ref_image_route
@@ -550,9 +560,10 @@ def _image_provider_chain(primary: str, shot: dict[str, Any] | None) -> list[str
         add("dashscope")
     else:
         fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-        add(fb)
-        if fb != "pollinations":
-            add("pollinations")
+        if not refs:
+            add(fb)
+            if fb != "pollinations":
+                add("pollinations")
     return chain
 
 
@@ -589,7 +600,7 @@ def _generate_scene_image(
 
     gen_w = int(width or ZOOM_W)
     gen_h = int(height or ZOOM_H)
-    for pid in _image_provider_chain(provider, shot):
+    for pid in _image_provider_chain(provider, shot, refs=refs):
         ok = registry.dispatch(
             "image",
             pid,
@@ -798,32 +809,32 @@ def _draw_subtitle_overlay(shot: dict[str, Any], dest: Path) -> None:
 
 
 def _motion_expr(shot: dict[str, Any], frames: int) -> str:
-    """Large travel zoom/pan. Tiny 1.0→1.16 zoom reads as a still."""
+    """Large travel zoom/pan — must be obvious on a phone screen."""
     style = _camera_style(shot)
     n = max(frames - 1, 1)
     # zoompan x/y must stay inside [0, iw-iw/zoom]
-    z_in = f"min(1.10+0.42*on/{n},1.52)"
-    z_out = f"max(1.52-0.42*on/{n},1.10)"
-    z_hold = "1.34"
+    z_in = f"min(1.05+0.75*on/{n},1.80)"
+    z_out = f"max(1.80-0.75*on/{n},1.05)"
+    z_hold = "1.45"
     x_ctr = "iw/2-(iw/zoom/2)"
     y_ctr = "ih/2-(ih/zoom/2)"
-    x_max = f"max(0,min({x_ctr}*2,(iw-iw/zoom)*on/{n}))"
+    x_max = f"max(0,(iw-iw/zoom)*on/{n})"
     x_min = f"max(0,(iw-iw/zoom)*(1-on/{n}))"
     y_up = f"max(0,(ih-ih/zoom)*(1-on/{n}))"
-    y_down = f"max(0,min(ih-ih/zoom,(ih-ih/zoom)*on/{n}))"
+    y_down = f"max(0,(ih-ih/zoom)*on/{n})"
     if style == "pull_out":
         z, x, y = z_out, x_ctr, y_ctr
     elif style == "pan_right":
-        z, x, y = z_hold, x_max, f"(ih-ih/zoom)*0.32"
+        z, x, y = z_hold, x_max, f"(ih-ih/zoom)*0.28"
     elif style == "pan_left":
-        z, x, y = z_hold, x_min, f"(ih-ih/zoom)*0.38"
+        z, x, y = z_hold, x_min, f"(ih-ih/zoom)*0.35"
     elif style == "rise":
         z, x, y = z_hold, x_ctr, y_up
     elif style == "fall":
         z, x, y = z_hold, x_ctr, y_down
     else:
-        # punch_in / punch_shake
-        z, x, y = z_in, x_ctr, f"{y_ctr}-0.12*(ih-ih/zoom)*on/{n}"
+        # punch_in / punch_shake — strong push-in
+        z, x, y = z_in, x_ctr, f"{y_ctr}-0.18*(ih-ih/zoom)*on/{n}"
     return (
         f"zoompan=z='{z}':x='{x}':y='{y}':"
         f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
@@ -967,6 +978,7 @@ def _encode_clip(
     motion_rel = (shot.get("assets") or {}).get("motion") or ""
     motion_path = resolve_safe(motion_rel) if motion_rel else None
     used_motion = False
+    src = str(shot.get("i2v_source") or "")
     if should_try_i2v(shot):
         slug = str(shot.get("_slug") or "")
         episode = int(shot.get("_episode") or 0)
@@ -974,15 +986,18 @@ def _encode_clip(
             info = generate_shot_i2v(slug, episode, shot)
             motion_rel = (shot.get("assets") or {}).get("motion") or ""
             motion_path = resolve_safe(motion_rel) if motion_rel else None
-            if info.get("i2v_source") in ("ai", "keys") and motion_path and motion_path.is_file():
+            src = str(info.get("i2v_source") or shot.get("i2v_source") or "")
+            if src in ("ai", "keys", "fallback") and motion_path and motion_path.is_file():
                 used_motion = True
-        elif motion_path and motion_path.is_file() and shot.get("i2v_source") in ("ai", "keys"):
+        elif motion_path and motion_path.is_file() and src in ("ai", "keys", "fallback"):
             used_motion = True
+    elif motion_path and motion_path.is_file() and src in ("ai", "keys", "fallback"):
+        used_motion = True
 
     if used_motion and motion_path:
         _encode_clip_from_motion(motion_path, overlay, clip, duration, audio, shot)
         return
-    if should_try_i2v(shot):
+    if should_try_i2v(shot) and src not in ("ai", "keys", "fallback"):
         shot["i2v_source"] = "fallback"
     _encode_clip_from_still(scene, overlay, clip, duration, audio, shot)
 

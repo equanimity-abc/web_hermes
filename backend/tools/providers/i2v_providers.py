@@ -37,17 +37,18 @@ register("i2v", "mock_ai", _mock)
 register("i2v", "fail", _fail)
 register("i2v", "http", _http)
 register("i2v", "api", _http)
-register("i2v", "kling", _http)
 register("i2v", "hailuo", _http)
 def _dashscope_i2v(scene, dest, shot, seconds) -> str:
     """阿里云百炼 DashScope 通义万相图生视频（异步提交→轮询→下载）。
 
     Provider: wanx-video / dashscope-i2v。失败返回 "none"（调用方回退 Ken Burns）。
     """
+    import logging
     import time
 
     import httpx
 
+    log = logging.getLogger("drama.i2v.wanx")
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
     if not key:  # 未配置 Key → 诚实回退
         return "none"
@@ -57,6 +58,8 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
 
     # 运动提示词复用 drama_i2v 的能力（含角色一致性描述）。
     from tools.drama_i2v import _motion_prompt
+    from tools.providers.image_providers import _dashscope_upload_public_url
+    from tools.workspace import workspace_root
 
     prompt = _motion_prompt(shot)
     headers = {
@@ -66,33 +69,22 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
     }
 
     try:
-        # 1) 先上传本地关键帧到百炼，换取可访问 URL。
-        upload_headers = {
-            "Authorization": f"Bearer {key}",
-            "X-DashScope-OssResourceResolve": "enable",
-            "User-Agent": "my-tiktok-video-agent/1.0",
-        }
+        # 相对 workspace 的路径，供统一上传助手使用
+        try:
+            rel = str(scene.resolve().relative_to(workspace_root())).replace("\\", "/")
+        except Exception:
+            rel = str(scene)
+
         with httpx.Client(timeout=180.0, follow_redirects=True) as client:
-            up = client.post(
-                f"{base}/api/v1/uploads",
-                headers=upload_headers,
-                files={"file": (scene.name, scene.read_bytes(), "image/png")},
-            )
-            up.raise_for_status()
-            up_data = up.json()
-            img_url = ""
-            url_candidates = [up_data, (up_data.get("data") or {})]
-            for cand in url_candidates:
-                if isinstance(cand, dict):
-                    img_url = str(cand.get("url") or cand.get("uploaded_url") or "").strip()
-                    if not img_url and isinstance(cand.get("file"), dict):
-                        img_url = str(cand["file"].get("url") or "").strip()
-                    if img_url:
-                        break
+            # 1) 上传关键帧（走已验证的 /api/v1/files，而不是已失效的 /uploads）
+            img_url = _dashscope_upload_public_url(rel, client, mime="image/png")
             if not img_url:
+                log.warning("wanx-video upload failed for %s", rel)
                 return "none"
 
             # 2) 提交图生视频任务（异步）。
+            # wanx2.1-i2v-turbo 时长通常为 3/4/5 秒整型
+            duration = max(3, min(int(round(float(seconds) or 3)), 5))
             body = {
                 "model": model,
                 "input": {
@@ -100,7 +92,7 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
                     "prompt": prompt,
                 },
                 "parameters": {
-                    "duration": float(seconds),
+                    "duration": duration,
                     "resolution": "720P",
                 },
             }
@@ -109,7 +101,9 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
                 headers={**headers, "Content-Type": "application/json"},
                 json=body,
             )
-            submit.raise_for_status()
+            if submit.status_code >= 400:
+                log.warning("wanx-video submit %s: %s", submit.status_code, submit.text[:400])
+                return "none"
             payload = submit.json()
             task_id = str(
                 ((payload.get("output") or {}).get("task_id"))
@@ -117,13 +111,14 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
                 or ""
             ).strip()
             if not task_id:
+                log.warning("wanx-video missing task_id: %s", str(payload)[:400])
                 return "none"
 
             # 3) 轮询任务直到完成。
             deadline = time.monotonic() + 300.0
             while time.monotonic() < deadline:
                 time.sleep(3.0)
-                st = client.get(f"{base}/api/v1/tasks/{task_id}", headers=headers)
+                st = client.get(f"{base}/api/v1/tasks/{task_id}", headers={"Authorization": f"Bearer {key}"})
                 st.raise_for_status()
                 info = st.json()
                 out = info.get("output") or {}
@@ -133,6 +128,7 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
                     if not video_url and isinstance(out.get("results"), list) and out.get("results"):
                         video_url = str(out["results"][0].get("url") or "").strip()
                     if not video_url:
+                        log.warning("wanx-video succeeded without video_url: %s", str(out)[:400])
                         return "none"
                     v = client.get(video_url)
                     v.raise_for_status()
@@ -140,9 +136,12 @@ def _dashscope_i2v(scene, dest, shot, seconds) -> str:
                     dest.write_bytes(v.content)
                     return "ai" if (dest.is_file() and dest.stat().st_size > 1000) else "none"
                 if status in ("FAILED", "CANCELED", "UNKNOWN"):
+                    log.warning("wanx-video task %s: %s %s", task_id, status, str(out)[:400])
                     return "none"
+            log.warning("wanx-video task timeout: %s", task_id)
             return "none"
-    except Exception:
+    except Exception as e:
+        log.warning("wanx-video exception: %s", e)
         return "none"
 
 
@@ -257,6 +256,7 @@ def _kling_video(scene, dest, shot, seconds) -> str:
 register("i2v", "pollinations", _pollinations)
 register("i2v", "wanx-video", _dashscope_i2v)
 register("i2v", "dashscope-i2v", _dashscope_i2v)
+register("i2v", "kling", _kling_video)
 register("i2v", "kling-video", _kling_video)
 register("i2v", "kling-maas", _kling_video)
 register("i2v", "none", _fail)

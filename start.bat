@@ -63,23 +63,31 @@ if not exist "node_modules" (
 echo [✓] 前端依赖就绪
 echo.
 
-:: 启动后端
+:: 启动后端 + 前端（Windows Terminal 同窗口 PowerShell 标签页）
 echo [3/4] 启动后端服务 (http://localhost:8000)...
-cd /d "%~dp0backend"
-start "Agent Chat - 后端" cmd /k "title Agent Chat - 后端 && python main.py"
-echo [✓] 后端已在新窗口中启动
+echo [4/4] 启动前端服务 (http://localhost:5173)...
+where wt >nul 2>&1
+if %errorlevel% equ 0 (
+    if defined WT_SESSION (
+        wt -w 0 new-tab --title "Agent Chat - 后端" -d "%~dp0backend" powershell -NoExit -Command "python main.py"
+        wt -w 0 new-tab --title "Agent Chat - 前端" -d "%~dp0frontend" powershell -NoExit -Command "npm run dev"
+    ) else (
+        wt new-tab --title "Agent Chat - 后端" -d "%~dp0backend" powershell -NoExit -Command "python main.py" ; new-tab --title "Agent Chat - 前端" -d "%~dp0frontend" powershell -NoExit -Command "npm run dev"
+    )
+    echo [✓] 后端与前端已在 Windows Terminal 标签页中启动
+) else (
+    echo [i] 未检测到 Windows Terminal ^(wt^)，回退为独立窗口启动...
+    cd /d "%~dp0backend"
+    start "Agent Chat - 后端" powershell -NoExit -Command "python main.py"
+    cd /d "%~dp0frontend"
+    start "Agent Chat - 前端" powershell -NoExit -Command "npm run dev"
+    echo [✓] 后端与前端已在独立 PowerShell 窗口中启动
+)
 echo.
 
-:: 等待后端启动
+:: 等待后端就绪
 echo 等待后端就绪...
 timeout /t 3 /nobreak >nul
-
-:: 启动前端
-echo [4/4] 启动前端服务 (http://localhost:5173)...
-cd /d "%~dp0frontend"
-start "Agent Chat - 前端" cmd /k "title Agent Chat - 前端 && npm run dev"
-echo [✓] 前端已在新窗口中启动
-echo.
 
 :: 打开浏览器
 timeout /t 2 /nobreak >nul
@@ -91,7 +99,7 @@ echo    后端: http://localhost:8000
 echo    前端: http://localhost:5173
 echo ============================================
 echo.
-echo 关闭此窗口不会影响服务运行。
+echo 关闭此窗口不会影响服务运行（服务在 Terminal 标签页中）。
 echo 如需停止所有服务，请运行 stop.bat
 echo.
 pause

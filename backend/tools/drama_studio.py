@@ -128,7 +128,7 @@ def save_project(slug: str, data: dict[str, Any]) -> None:
 
 
 def _asset_meta(rel: str) -> dict[str, Any]:
-    info = {"path": rel, "exists": False, "bytes": 0, "url": None}
+    info = {"path": rel, "exists": False, "bytes": 0, "url": None, "width": 0, "height": 0}
     if not rel:
         return info
     try:
@@ -139,6 +139,16 @@ def _asset_meta(rel: str) -> dict[str, Any]:
         info["exists"] = True
         info["bytes"] = path.stat().st_size
         info["url"] = play_url(rel)
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+            try:
+                from PIL import Image
+
+                with Image.open(path) as img:
+                    w, h = img.size
+                    info["width"] = int(w)
+                    info["height"] = int(h)
+            except Exception:
+                pass
     return info
 
 
@@ -604,20 +614,34 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
     }
 
 
-def _rebuild_clip_keep_voice(slug: str, episode: int, shot_n: int, doc: dict[str, Any], shot: dict[str, Any]) -> dict[str, Any]:
+def _rebuild_clip_keep_voice(
+    slug: str,
+    episode: int,
+    shot_n: int,
+    doc: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    sync: bool = True,
+) -> dict[str, Any]:
     from tools.drama_video import ffmpeg_available, rerender_shot
 
     save_doc(doc)
-    if "clip" in (shot.get("locked") or []):
+    locked = set(shot.get("locked") or [])
+    if "clip" in locked:
         return {"rebuilt_layers": [], "skipped_layers": ["clip"], "assemble": "unchanged"}
-    if not ffmpeg_available():
+
+    def _mark_clip_dirty() -> dict[str, Any]:
         dirty = list(shot.get("dirty") or [])
         if "clip" not in dirty:
             dirty.append("clip")
         shot["dirty"] = dirty
         shot["status"] = "dirty"
         save_doc(doc)
-        return {"rebuilt_layers": [], "skipped_layers": ["clip"], "assemble": "unchanged", "hint": "未找到 ffmpeg，已换图，成片待重渲"}
+        hint = "未找到 ffmpeg，已换图，成片待重渲" if not ffmpeg_available() else "画面已换，成片待重渲"
+        return {"rebuilt_layers": [], "skipped_layers": ["clip"], "assemble": "unchanged", "hint": hint}
+
+    if not sync or not ffmpeg_available():
+        return _mark_clip_dirty()
     return rerender_shot(slug, episode, shot_n, layers=["clip"])
 
 
@@ -637,7 +661,7 @@ def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str
     except ValueError as e:
         raise DramaBadRequest(str(e)) from e
     set_shot_locks(shot, lock=["scene"])
-    result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot)
+    result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot, sync=False)
     payload = {
         "slug": slug,
         "episode": n,
@@ -1062,7 +1086,21 @@ def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     if not should_try_i2v(shot, slug=slug):
         est = estimate_i2v(slug, shot)
         if est.get("ladder") == "L0":
-            raise DramaBadRequest("该镜为 L0（定场类），强制静图运镜，不能生成 I2V")
+            # L0：不走 I2V，改为静图运镜（Ken Burns）并重建 clip
+            assets = shot.get("assets") or {}
+            scene_rel = str(assets.get("scene") or "")
+            try:
+                scene_ok = bool(scene_rel) and resolve_safe(scene_rel).is_file()
+            except ValueError:
+                scene_ok = False
+            if not scene_ok:
+                raise DramaBadRequest("请先在「画面」步骤生成并锁定关键帧")
+            shot["i2v_source"] = "fallback"
+            save_doc(doc)
+            job = enqueue_job(slug, n, "rerender_shot", params={"shot": shot_n, "layers": ["clip"]})
+            job["estimate"] = est
+            job["i2v_source"] = "fallback"
+            return job
         raise DramaBadRequest("请先将 I2V 设为 on，或在 auto 模式下锁定画面（scene）")
     job = enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
     job["estimate"] = estimate_i2v(slug, shot)
@@ -1542,6 +1580,9 @@ def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
     meta = _asset_meta(str(char.get("ref") or ""))
     pub["ref_exists"] = bool(meta["exists"])
     pub["ref_url"] = meta.get("url")
+    pub["ref_bytes"] = int(meta.get("bytes") or 0)
+    pub["ref_width"] = int(meta.get("width") or 0)
+    pub["ref_height"] = int(meta.get("height") or 0)
     chosen = str(char.get("chosen_ref") or "")
     pub["candidates"] = []
     for item in char.get("candidates") or []:

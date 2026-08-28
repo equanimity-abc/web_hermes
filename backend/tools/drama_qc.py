@@ -218,12 +218,12 @@ def locked_ref_path(slug: str, shot: dict[str, Any]) -> Path | None:
 def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
     if not char or not char.get("ref_locked") or not ref_exists(slug, char):
         return None
-    rel = str(char.get("ref") or ref_rel(slug, str(char.get("id") or "")))
+    rel = str(char.get("ref") or ref_rel(slug, str(char.get("id") or ""))).replace("\\", "/")
     try:
         path = resolve_safe(rel)
     except ValueError:
         return None
-    return str(path) if path.is_file() else None
+    return rel if path.is_file() else None
 
 
 def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:

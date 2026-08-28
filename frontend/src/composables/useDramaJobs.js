@@ -62,6 +62,30 @@ export function useDramaJobs({ onTerminal } = {}) {
     return job
   }
 
+  async function waitForJob(job, slug, { timeoutMs = 15 * 60 * 1000 } = {}) {
+    if (!job?.job_id) return job
+    await trackJob(job, slug)
+    if (TERMINAL.has(job.status)) return job
+    const started = Date.now()
+    while (Date.now() - started < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 1200))
+      let latest = (jobs.value || []).find((j) => j.job_id === job.job_id)
+      if (!latest || !TERMINAL.has(latest.status)) {
+        try {
+          latest = await dramaApi.getJob(job.job_id)
+          upsertJob(latest)
+        } catch {
+          /* keep polling */
+        }
+      }
+      if (latest && TERMINAL.has(latest.status)) {
+        if (slug) startPolling(slug)
+        return latest
+      }
+    }
+    throw new Error(`任务超时：${job.job_id}`)
+  }
+
   async function cancelJob(jobId) {
     const job = await dramaApi.cancelJob(jobId)
     upsertJob(job)
@@ -81,6 +105,7 @@ export function useDramaJobs({ onTerminal } = {}) {
     polling,
     refreshJobs,
     trackJob,
+    waitForJob,
     cancelJob,
     retryJob,
     stopPolling,

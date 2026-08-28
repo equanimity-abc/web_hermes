@@ -4,7 +4,6 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
-import DramaJobBar from '@/components/drama/DramaJobBar.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
 import { useDramaStudio } from '@/composables/useDramaStudio'
@@ -28,6 +27,8 @@ const {
   dirty: dramaDirty,
   saving: dramaSaving,
   rendering: dramaRendering,
+  generatingCandidateNs: dramaGeneratingCandidateNs,
+  videoGenProgress: dramaVideoGenProgress,
   error: dramaError,
   notice: dramaNotice,
   bust: dramaBust,
@@ -142,9 +143,6 @@ const {
   uploadBgm,
   applyMix,
   clearBgm,
-  renderJobs: dramaRenderJobs,
-  cancelRenderJob,
-  retryRenderJob,
 } = useDramaStudio()
 
 const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
@@ -320,6 +318,8 @@ onMounted(() => {
       :dirty="dramaDirty"
       :saving="dramaSaving"
       :rendering="dramaRendering"
+      :generating-candidate-ns="dramaGeneratingCandidateNs"
+      :video-gen-progress="dramaVideoGenProgress"
       :error="dramaError"
       :notice="dramaNotice"
       :bust="dramaBust"
@@ -440,11 +440,5 @@ onMounted(() => {
     />
 
     <AppToast :message="toast" />
-
-    <DramaJobBar
-      :jobs="dramaRenderJobs"
-      @cancel="cancelRenderJob"
-      @retry="retryRenderJob"
-    />
   </div>
 </template>

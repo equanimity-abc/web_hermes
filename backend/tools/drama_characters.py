@@ -603,7 +603,20 @@ def character_prompt_clause(characters: list[dict[str, Any]], *, slug: str = "")
 
 
 def character_seed(slug: str, characters: list[dict[str, Any]], shot_n: int) -> int:
-    ids = ",".join(str(c.get("id") or "") for c in characters) or "none"
-    looks = "|".join(str(c.get("look") or "") for c in characters)
-    base = zlib.crc32(f"{slug}:{ids}:{looks}".encode()) & 0x7FFFFFFF
+    from tools.workspace import resolve_safe
+
+    parts: list[str] = []
+    for char in characters:
+        cid = str(char.get("id") or "")
+        if char.get("ref_locked") and ref_exists(slug, char):
+            rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+            try:
+                path = resolve_safe(rel)
+                parts.append(f"{cid}:{rel}:{path.stat().st_size}:{int(path.stat().st_mtime_ns)}")
+            except (ValueError, OSError):
+                parts.append(f"{cid}:{rel}")
+        else:
+            parts.append(f"{cid}:{str(char.get('look') or '')}")
+    blob = "|".join(parts) or "none"
+    base = zlib.crc32(f"{slug}:{blob}".encode()) & 0x7FFFFFFF
     return (base + int(shot_n or 1) * 17) & 0x7FFFFFFF

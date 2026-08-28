@@ -139,6 +139,35 @@ def test_qwen_image_plus_size_maps_to_fixed_resolutions():
     assert _kling_aspect_ratio(720, 1280) == "9:16"
 
 
+def test_locked_refs_for_shot_returns_workspace_relative_paths(tmp_path, monkeypatch):
+    from tools.drama_characters import ref_rel, save_characters
+    from tools.drama_qc import locked_refs_for_shot
+    from tools.workspace import resolve_safe, workspace_root
+
+    slug = "ref_path_test"
+    root = workspace_root()
+    monkeypatch.setattr("config.config.WORKSPACE_DIR", str(root))
+    cid = "hero"
+    rel = ref_rel(slug, cid)
+    dest = resolve_safe(rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    save_characters(slug, [{"id": cid, "name": "Hero", "ref": rel, "ref_locked": True, "category": "character"}])
+    shot = {"n": 1, "角色": ["Hero"]}
+    refs = locked_refs_for_shot(slug, shot)
+    assert refs == [rel]
+    assert not refs[0].startswith(str(root))
+
+
+def test_image_provider_chain_prefers_kling_when_refs_present():
+    from tools.drama_video import _image_provider_chain
+
+    chain = _image_provider_chain("flux", {"kind": "dialogue"}, refs=("dramas/s/c.png",))
+    assert chain[0] in ("kling-image", "kling")
+    assert "flux" in chain
+    assert "pollinations" not in chain
+
+
 def test_image_cache_key_is_content_addressed():
     """S1: cache key is deterministic and sensitive to prompt/seed/refs."""
     from tools.providers.image_providers import _cache_key

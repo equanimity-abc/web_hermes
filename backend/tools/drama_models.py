@@ -278,9 +278,9 @@ def default_models() -> dict[str, Any]:
         "motion": {
             "establishing": {"ladder": "L0", "provider": "l0"},
             "insert": {"ladder": "L0", "provider": "l0"},
-            "dialogue": {"ladder": "L2", "provider": "mock", "fallback": "L1"},
-            "reaction": {"ladder": "L1", "provider": "mock", "fallback": "L0"},
-            "action": {"ladder": "L3", "provider": "kling", "fallback": "L1"},
+            "dialogue": {"ladder": "L2", "provider": "kling-video", "fallback": "L1"},
+            "reaction": {"ladder": "L1", "provider": "wanx-video", "fallback": "L0"},
+            "action": {"ladder": "L3", "provider": "kling-video", "fallback": "L1"},
             "crowd": {"ladder": "L0", "provider": "l0"},
             "title": {"ladder": "L0", "provider": "l0"},
         },
