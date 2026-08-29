@@ -31,7 +31,7 @@ function statusClass(job) {
 </script>
 
 <template>
-  <aside v-if="visible" class="drama-job-bar">
+  <div v-if="visible" class="drama-job-bar-body">
     <header class="drama-job-bar-head">
       <strong>渲染任务</strong>
       <span>{{ jobs.length }} 条</span>
@@ -63,5 +63,5 @@ function statusClass(job) {
         </div>
       </li>
     </ul>
-  </aside>
+  </div>
 </template>

@@ -4,6 +4,7 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
+import DramaJobBar from '@/components/drama/DramaJobBar.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
 import { useDramaStudio } from '@/composables/useDramaStudio'
@@ -29,6 +30,7 @@ const {
   rendering: dramaRendering,
   generatingCandidateNs: dramaGeneratingCandidateNs,
   videoGenProgress: dramaVideoGenProgress,
+  batchProgress: dramaBatchProgress,
   error: dramaError,
   notice: dramaNotice,
   bust: dramaBust,
@@ -145,6 +147,10 @@ const {
   uploadBgm,
   applyMix,
   clearBgm,
+  renderJobs: dramaRenderJobs,
+  activeJobs: dramaActiveJobs,
+  cancelRenderJob,
+  retryRenderJob,
 } = useDramaStudio()
 
 const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
@@ -438,6 +444,50 @@ onMounted(() => {
       @apply-mix="applyMix"
       @clear-bgm="clearBgm"
     />
+
+    <aside
+      v-if="view === 'drama' && (dramaBatchProgress || (dramaActiveJobs && dramaActiveJobs.length))"
+      class="drama-job-bar"
+    >
+      <div
+        v-if="dramaBatchProgress"
+        class="drama-batch-progress"
+        :class="{
+          'is-running': dramaBatchProgress.status === 'running',
+          'is-done': dramaBatchProgress.status === 'done',
+          'is-error': dramaBatchProgress.status === 'error',
+        }"
+      >
+        <div class="drama-batch-progress-head">
+          <strong>{{ dramaBatchProgress.label || '批量任务' }}</strong>
+          <span>
+            {{ dramaBatchProgress.current || 0 }}/{{ dramaBatchProgress.total || 0 }}
+            <template v-if="dramaBatchProgress.failed"> · 失败 {{ dramaBatchProgress.failed }}</template>
+          </span>
+        </div>
+        <p class="drama-batch-progress-msg">{{ dramaBatchProgress.message || '' }}</p>
+        <div class="drama-batch-progress-track">
+          <div
+            class="drama-batch-progress-fill"
+            :style="{
+              width: `${
+                dramaBatchProgress.total
+                  ? Math.min(100, Math.round(((dramaBatchProgress.current || 0) / dramaBatchProgress.total) * 100))
+                  : dramaBatchProgress.status === 'running'
+                    ? 35
+                    : 0
+              }%`,
+            }"
+          />
+        </div>
+      </div>
+      <DramaJobBar
+        v-if="dramaActiveJobs?.length"
+        :jobs="dramaActiveJobs"
+        @cancel="cancelRenderJob"
+        @retry="retryRenderJob"
+      />
+    </aside>
 
     <ApprovalModal
       :approval="pendingApproval"

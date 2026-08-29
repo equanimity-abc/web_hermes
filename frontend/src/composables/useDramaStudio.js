@@ -60,6 +60,8 @@ export function useDramaStudio() {
   ]
 
   const videoGenProgress = ref(null)
+  const batchProgress = ref(null)
+  const BATCH_CONCURRENCY = 3
 
   const {
     jobs: renderJobs,
@@ -78,8 +80,20 @@ export function useDramaStudio() {
         } catch {
           /* ignore refresh errors */
         }
+        if (batchProgress.value?.jobId && batchProgress.value.jobId === job.job_id) {
+          const ok = job.status === 'done'
+          setBatchProgress({
+            status: ok ? 'done' : 'error',
+            current: 1,
+            total: 1,
+            message: ok
+              ? job.result?.impact?.summary || job.result?.assemble || '后台任务已完成'
+              : job.error || '后台任务失败',
+          })
+          clearBatchProgressSoon()
+        }
         // 单镜/批量视频生成由自身更新 notice，避免后台回调抢写
-        if (videoGenProgress.value?.status === 'running') return
+        if (videoGenProgress.value?.status === 'running' || batchProgress.value?.status === 'running') return
         if (job.status === 'done') {
           notice.value =
             job.result?.impact?.summary ||
@@ -98,6 +112,60 @@ export function useDramaStudio() {
       return
     }
     videoGenProgress.value = { ...(videoGenProgress.value || {}), ...partial }
+  }
+
+  function setBatchProgress(partial) {
+    if (!partial) {
+      batchProgress.value = null
+      return
+    }
+    batchProgress.value = { ...(batchProgress.value || {}), ...partial }
+    // 视频页内嵌进度条与底部条同步
+    const kind = batchProgress.value.kind
+    if (kind === 'video') {
+      setVideoGenProgress({
+        mode: 'batch',
+        current: batchProgress.value.current,
+        total: batchProgress.value.total,
+        shotN: batchProgress.value.shotN,
+        status: batchProgress.value.status,
+        message: batchProgress.value.message,
+      })
+    }
+  }
+
+  function clearBatchProgressSoon(ms = 3000) {
+    window.setTimeout(() => {
+      if (batchProgress.value?.status !== 'running') {
+        setBatchProgress(null)
+        if (videoGenProgress.value?.status !== 'running') setVideoGenProgress(null)
+      }
+    }, ms)
+  }
+
+  async function runPool(items, worker, { concurrency = BATCH_CONCURRENCY, onProgress } = {}) {
+    const list = [...(items || [])]
+    if (!list.length) return []
+    let cursor = 0
+    let completed = 0
+    const results = new Array(list.length)
+    async function pump() {
+      while (cursor < list.length) {
+        const i = cursor
+        cursor += 1
+        const item = list[i]
+        try {
+          results[i] = await worker(item, i)
+        } catch (e) {
+          results[i] = { __error: e }
+        }
+        completed += 1
+        onProgress?.(completed, list.length, item, results[i])
+      }
+    }
+    const n = Math.min(Math.max(1, concurrency), list.length)
+    await Promise.all(Array.from({ length: n }, () => pump()))
+    return results
   }
 
   function shotEligibleForI2v(s) {
@@ -886,18 +954,40 @@ export function useDramaStudio() {
     if (!slug.value || !episodeN.value) return
     error.value = ''
     notice.value = ''
+    rendering.value = true
+    setBatchProgress({
+      kind: 'dirty',
+      label: '重渲脏镜',
+      current: 0,
+      total: 1,
+      status: 'running',
+      message: '脏镜渲染排队中…',
+    })
     try {
       const result = await dramaApi.rerenderDirty(slug.value, episodeN.value)
       if (result.job_id) {
         await trackJob(result, slug.value)
-        notice.value = '脏镜渲染已加入后台队列，可切回聊天或看底部任务条'
+        notice.value = '脏镜渲染已加入后台队列'
+        setBatchProgress({
+          status: 'running',
+          message: '脏镜渲染进行中（后台）…',
+          jobId: result.job_id,
+        })
+        rendering.value = false
         return
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = result.impact?.summary || '脏镜已重渲'
+      setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
     } catch (e) {
       error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
+    } finally {
+      if (!batchProgress.value?.jobId) {
+        rendering.value = false
+        clearBatchProgressSoon()
+      }
     }
   }
 
@@ -1611,18 +1701,40 @@ export function useDramaStudio() {
     if (mixDirty.value) await saveMix()
     error.value = ''
     notice.value = ''
+    rendering.value = true
+    setBatchProgress({
+      kind: 'export',
+      label: '导出整集',
+      current: 0,
+      total: 1,
+      status: 'running',
+      message: '整集导出排队中…',
+    })
     try {
       const result = await dramaApi.exportEpisode(slug.value, episodeN.value, true)
       if (result.job_id) {
         await trackJob(result, slug.value)
         notice.value = '整集导出已加入后台队列'
+        setBatchProgress({
+          status: 'running',
+          message: '整集导出进行中（后台）…',
+          jobId: result.job_id,
+        })
+        rendering.value = false
         return
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = `整集已导出（${result.assemble || 'assemble'} / ${result.mix_mode || 'mix'}，约 ${result.timeline?.total_duration || '?'}s）`
+      setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
     } catch (e) {
       error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
+    } finally {
+      if (!batchProgress.value?.jobId) {
+        rendering.value = false
+        clearBatchProgressSoon()
+      }
     }
   }
 
@@ -1677,21 +1789,40 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     rendering.value = true
+    setBatchProgress({
+      kind: 'mix',
+      label: '应用混音',
+      current: 0,
+      total: 1,
+      status: 'running',
+      message: '混音处理中…',
+    })
     try {
       const result = await dramaApi.mixEpisode(slug.value, episodeN.value, false)
       if (result.job_id) {
         await trackJob(result, slug.value)
         notice.value = '混音已加入后台队列'
+        setBatchProgress({
+          status: 'running',
+          message: '混音进行中（后台）…',
+          jobId: result.job_id,
+        })
+        rendering.value = false
         return
       }
       bust.value = Date.now()
       episode.value = result
       fillMixDraft(result)
       notice.value = `已混音（${result.mix_mode || 'mix'}），各镜 clip 未改`
+      setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
     } catch (e) {
       error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
     } finally {
-      rendering.value = false
+      if (!batchProgress.value?.jobId) {
+        rendering.value = false
+        clearBatchProgressSoon()
+      }
     }
   }
 
@@ -1834,24 +1965,67 @@ export function useDramaStudio() {
     if (!slug.value) return
     rendering.value = true
     error.value = ''
+    notice.value = ''
     try {
       const cards = characters.value.filter((c) => {
         if (category && (c.category || 'character') !== category) return false
         return !(c.ref_locked && c.ref_exists)
       })
-      for (const c of cards) {
-        try {
-          await dramaApi.generateCharacterRef(slug.value, c.id)
-        } catch {
-          /* skip individual failures */
-        }
+      if (!cards.length) {
+        notice.value = '没有可生成的定妆照'
+        return
       }
+      setBatchProgress({
+        kind: 'refs',
+        label: '批量生成定妆',
+        current: 0,
+        total: cards.length,
+        status: 'running',
+        message: `批量定妆 0/${cards.length}`,
+        failed: 0,
+      })
+      let done = 0
+      let failed = 0
+      await runPool(
+        cards,
+        async (c) => {
+          await dramaApi.generateCharacterRef(slug.value, c.id)
+          return c
+        },
+        {
+          onProgress: (completed, total, item, result) => {
+            if (result?.__error) failed += 1
+            else done += 1
+            setBatchProgress({
+              kind: 'refs',
+              label: '批量生成定妆',
+              current: completed,
+              total,
+              status: 'running',
+              message: `批量定妆 ${completed}/${total}${item?.name ? ` · ${item.name}` : ''}`,
+              failed,
+            })
+          },
+        },
+      )
       bust.value = Date.now()
       await refreshCast()
+      notice.value = failed
+        ? `已生成 ${done} 张定妆，${failed} 张失败`
+        : `已生成 ${done} 张定妆`
+      setBatchProgress({
+        status: done ? 'done' : 'error',
+        current: cards.length,
+        total: cards.length,
+        message: notice.value,
+        failed,
+      })
     } catch (e) {
       error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
     } finally {
       rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -1888,32 +2062,76 @@ export function useDramaStudio() {
   async function generateAllScenes() {
     const ep = episodeN.value
     if (!slug.value || !ep) return
+    const targets = shots.value.filter((s) => {
+      if ((s.locked || []).some((k) => k === 'shot' || k === 'scene')) return false
+      if (generatingCandidateNs.value.includes(s.n)) return false
+      return true
+    })
+    if (!targets.length) {
+      notice.value = '没有可出图的镜头（已锁画面或整镜）'
+      return
+    }
     rendering.value = true
     error.value = ''
     notice.value = ''
+    generatingCandidateNs.value = [...generatingCandidateNs.value, ...targets.map((s) => s.n)]
+    setBatchProgress({
+      kind: 'scenes',
+      label: '批量出图',
+      current: 0,
+      total: targets.length,
+      status: 'running',
+      message: `批量出图 0/${targets.length}`,
+      failed: 0,
+    })
     let done = 0
+    let failed = 0
     try {
-      for (const s of shots.value) {
-        if ((s.locked || []).some((k) => k === 'shot' || k === 'scene')) continue
-        const shotN = s.n
-        if (generatingCandidateNs.value.includes(shotN)) continue
-        generatingCandidateNs.value = [...generatingCandidateNs.value, shotN]
-        try {
-          const result = await dramaApi.generateCandidates(slug.value, ep, shotN, 4)
+      await runPool(
+        targets,
+        async (s) => {
+          const result = await dramaApi.generateCandidates(slug.value, ep, s.n, 4)
           if (result.shot) mergeEpisodeShot(result.shot)
           bust.value = Date.now()
-          done += 1
-        } catch {
-          /* skip ineligible shots */
-        } finally {
-          finishCandidateGeneration(shotN)
-        }
-      }
-      notice.value = done ? `已为 ${done} 镜出图（画面）` : '没有可出图的镜头（已锁画面或整镜）'
+          return result
+        },
+        {
+          onProgress: (completed, total, item, result) => {
+            if (result?.__error) failed += 1
+            else done += 1
+            setBatchProgress({
+              kind: 'scenes',
+              label: '批量出图',
+              current: completed,
+              total,
+              shotN: item?.n,
+              status: 'running',
+              message: `批量出图 ${completed}/${total} · Shot ${item?.n ?? '?'}`,
+              failed,
+            })
+            finishCandidateGeneration(item.n)
+          },
+        },
+      )
+      notice.value = done
+        ? failed
+          ? `已为 ${done} 镜出图，${failed} 镜失败`
+          : `已为 ${done} 镜出图（画面）`
+        : '没有可出图的镜头（已锁画面或整镜）'
+      setBatchProgress({
+        status: done ? 'done' : 'error',
+        current: targets.length,
+        total: targets.length,
+        message: notice.value,
+        failed,
+      })
     } catch (e) {
       error.value = e.message || String(e)
-      rendering.value = false
+      setBatchProgress({ status: 'error', message: error.value })
       generatingCandidateNs.value = []
+    } finally {
+      rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -1931,89 +2149,144 @@ export function useDramaStudio() {
     notice.value = ''
     let done = 0
     let failed = 0
+    setBatchProgress({
+      kind: 'video',
+      label: '批量生成视频',
+      mode: 'batch',
+      current: 0,
+      total: targets.length,
+      status: 'running',
+      message: `批量生成 0/${targets.length}`,
+      failed: 0,
+    })
     try {
-      for (let i = 0; i < targets.length; i += 1) {
-        const shotN = targets[i].n
-        setVideoGenProgress({
-          mode: 'batch',
-          current: i + 1,
-          total: targets.length,
-          shotN,
-          status: 'running',
-          message: `批量生成 ${i + 1}/${targets.length} · Shot ${shotN}`,
-        })
-        try {
-          const result = await runI2vForShot(shotN)
-          if (result?.status === 'error') {
-            failed += 1
-          } else {
-            done += 1
-          }
-          bust.value = Date.now()
-          await openEpisode(ep)
-        } catch {
-          failed += 1
-        }
-      }
+      await runPool(
+        targets,
+        async (s) => {
+          const result = await runI2vForShot(s.n)
+          return result
+        },
+        {
+          onProgress: (completed, total, item, result) => {
+            const bad = result?.__error || result?.status === 'error'
+            if (bad) failed += 1
+            else done += 1
+            setBatchProgress({
+              kind: 'video',
+              label: '批量生成视频',
+              mode: 'batch',
+              current: completed,
+              total,
+              shotN: item?.n,
+              status: 'running',
+              message: `批量生成 ${completed}/${total} · Shot ${item?.n ?? '?'}`,
+              failed,
+            })
+          },
+        },
+      )
+      bust.value = Date.now()
+      await openEpisode(ep)
       if (done) {
         notice.value = failed
           ? `已为 ${done} 镜生成视频，${failed} 镜失败`
           : `已为 ${done} 镜生成视频`
-        setVideoGenProgress({
+        setBatchProgress({
           status: 'done',
           current: targets.length,
           total: targets.length,
           message: notice.value,
+          failed,
         })
       } else {
         error.value = '批量生成视频失败，请检查画面是否已锁定'
-        setVideoGenProgress({
+        setBatchProgress({
           status: 'error',
           message: error.value,
+          failed,
         })
       }
     } catch (e) {
       error.value = e.message || String(e)
-      setVideoGenProgress({
+      setBatchProgress({
         status: 'error',
         message: error.value,
       })
     } finally {
       rendering.value = false
-      window.setTimeout(() => {
-        if (videoGenProgress.value?.status !== 'running') setVideoGenProgress(null)
-      }, 3000)
+      clearBatchProgressSoon()
     }
   }
 
   async function generateAllVoice() {
     const ep = episodeN.value
     if (!slug.value || !ep) return
+    const targets = shots.value.filter((s) => {
+      if ((s.locked || []).includes('shot')) return false
+      return Boolean(String(s.字幕 || '').trim())
+    })
+    if (!targets.length) {
+      notice.value = '没有可配音的镜头'
+      return
+    }
     rendering.value = true
     error.value = ''
     notice.value = ''
     let done = 0
+    let failed = 0
+    setBatchProgress({
+      kind: 'voice',
+      label: '批量生成配音',
+      current: 0,
+      total: targets.length,
+      status: 'running',
+      message: `批量配音 0/${targets.length}`,
+      failed: 0,
+    })
     try {
-      for (const s of shots.value) {
-        if ((s.locked || []).includes('shot')) continue
-        // 配音只看字幕台词（旁白是画外说明，不进 TTS）
-        const hasDialogue = Boolean(String(s.字幕 || '').trim())
-        if (!hasDialogue) continue
-        try {
-          // 配音 + 旁白叠层 + 口型一起重建
+      await runPool(
+        targets,
+        async (s) => {
           await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice', 'lip'])
-          done += 1
-        } catch {
-          /* skip */
-        }
-      }
+          return s
+        },
+        {
+          onProgress: (completed, total, item, result) => {
+            if (result?.__error) failed += 1
+            else done += 1
+            setBatchProgress({
+              kind: 'voice',
+              label: '批量生成配音',
+              current: completed,
+              total,
+              shotN: item?.n,
+              status: 'running',
+              message: `批量配音 ${completed}/${total} · Shot ${item?.n ?? '?'}`,
+              failed,
+            })
+          },
+        },
+      )
       bust.value = Date.now()
       await openEpisode(ep)
-      notice.value = done ? `已为 ${done} 镜生成配音与口型` : '没有可配音的镜头'
+      notice.value = done
+        ? failed
+          ? `已为 ${done} 镜生成配音，${failed} 镜失败`
+          : `已为 ${done} 镜生成配音与口型`
+        : '没有可配音的镜头'
+      setBatchProgress({
+        status: done ? 'done' : 'error',
+        current: targets.length,
+        total: targets.length,
+        message: notice.value,
+        failed,
+      })
     } catch (e) {
       error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
     } finally {
       rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -2033,6 +2306,7 @@ export function useDramaStudio() {
     rendering,
     generatingCandidateNs,
     videoGenProgress,
+    batchProgress,
     error,
     notice,
     bust,

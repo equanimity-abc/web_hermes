@@ -767,7 +767,9 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
 
     ep_title = str(doc.get("title") or f"第{n}集")
     created = generate_shot_candidates(slug, n, shot, title=ep_title, count=count or 4)
-    save_doc(doc)
+    from tools.drama_shots import merge_save_shot
+
+    merge_save_shot(slug, n, shot)
     return {
         "slug": slug,
         "episode": n,

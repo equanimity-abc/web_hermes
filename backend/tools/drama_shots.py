@@ -8,6 +8,7 @@ shot can be rebuilt without touching the others.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,20 @@ from tools.drama_characters import (
 )
 from tools.drama_models import apply_shot_class, infer_kind, infer_size, infer_speaker, normalize_kind, normalize_size
 from tools.workspace import resolve_safe
+
+_DOC_LOCKS: dict[str, threading.RLock] = {}
+_DOC_LOCKS_GUARD = threading.Lock()
+
+
+def episode_lock(slug: str, episode: int) -> threading.RLock:
+    """Per-episode RLock so parallel shot jobs can safely merge into shots.json."""
+    key = f"{slug}:ep{int(episode):02d}"
+    with _DOC_LOCKS_GUARD:
+        lock = _DOC_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _DOC_LOCKS[key] = lock
+        return lock
 
 DEFAULT_FADE_SEC = 0.32
 MIN_PLAY_SEC = 0.25
@@ -301,7 +316,8 @@ def load_doc(slug: str, episode: int) -> dict[str, Any] | None:
     return normalize_doc(data, slug, episode)
 
 
-def save_doc(doc: dict[str, Any]) -> str:
+def save_doc_unlocked(doc: dict[str, Any]) -> str:
+    """Write shots.json. Caller must already hold episode_lock when racing."""
     slug = str(doc.get("slug") or "")
     episode = int(doc.get("episode") or 0)
     if not slug or episode < 1:
@@ -313,6 +329,69 @@ def save_doc(doc: dict[str, Any]) -> str:
     doc["updated_at"] = utc_now()
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return rel
+
+
+def save_doc(doc: dict[str, Any]) -> str:
+    slug = str(doc.get("slug") or "")
+    episode = int(doc.get("episode") or 0)
+    if not slug or episode < 1:
+        raise ValueError("shots.json 缺少 slug/episode，无法保存")
+    with episode_lock(slug, episode):
+        return save_doc_unlocked(doc)
+
+
+def merge_save_shot(
+    slug: str,
+    episode: int,
+    shot: dict[str, Any],
+    *,
+    costs: list[dict[str, Any]] | None = None,
+    cascade_from: int | None = None,
+    doc_patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically merge one shot (and optional costs) into on-disk shots.json.
+
+    Heavy render work should run outside this lock; only the JSON merge is serialized.
+    """
+    slug = str(slug or "").strip()
+    episode = int(episode)
+    shot_n = int(shot.get("n") or 0)
+    if not slug or episode < 1 or shot_n < 1:
+        raise ValueError("merge_save_shot 需要有效的 slug/episode/shot.n")
+    with episode_lock(slug, episode):
+        doc = load_doc(slug, episode)
+        if doc is None:
+            raise FileNotFoundError(f"没有 shots.json：{slug} ep{episode:02d}")
+        rows = list(doc.get("shots") or [])
+        replaced = False
+        for i, row in enumerate(rows):
+            if int(row.get("n") or 0) == shot_n:
+                rows[i] = shot
+                replaced = True
+                break
+        if not replaced:
+            rows.append(shot)
+        doc["shots"] = rows
+        if costs:
+            from tools.drama_models import append_cost
+
+            for cost in costs:
+                if not isinstance(cost, dict):
+                    continue
+                append_cost(
+                    doc,
+                    provider=str(cost.get("provider") or "") or "unknown",
+                    layer=str(cost.get("layer") or ""),
+                    cost=float(cost.get("cost") or 0),
+                    shot=cost.get("shot"),
+                )
+        if doc_patch:
+            for key, value in doc_patch.items():
+                doc[key] = value
+        if cascade_from is not None:
+            cascade_shot_timings(doc, from_n=int(cascade_from))
+        save_doc_unlocked(doc)
+        return doc
 
 
 def _as_str_list(value: Any) -> list[str]:

@@ -2026,24 +2026,17 @@ def rerender_shot(
     # P1-10: single-shot rerender must keep the degrade list visible (and the
     # cost recorded), matching the bulk render_episode result.
     shot["degrades"] = info.get("degrades") or []
-    from tools.drama_models import actual_episode_cost, append_cost
+    from tools.drama_models import actual_episode_cost
+    from tools.drama_shots import merge_save_shot
 
-    for cost in info.get("costs") or []:
-        if not isinstance(cost, dict):
-            continue
-        append_cost(
-            doc,
-            provider=str(cost.get("provider") or "") or "unknown",
-            layer=str(cost.get("layer") or ""),
-            cost=float(cost.get("cost") or 0),
-            shot=cost.get("shot"),
-        )
-    save_doc(doc)
-
-    from tools.drama_shots import cascade_shot_timings
-
-    cascade_shot_timings(doc, from_n=shot_n)
-    save_doc(doc)
+    # Merge this shot + costs under episode lock so parallel batch jobs don't clobber.
+    doc = merge_save_shot(
+        slug,
+        episode,
+        shot,
+        costs=list(info.get("costs") or []),
+        cascade_from=shot_n,
+    )
 
     # 需要整集时请显式传 layers 含 assemble，或走 export_episode
     do_assemble = "assemble" in requested

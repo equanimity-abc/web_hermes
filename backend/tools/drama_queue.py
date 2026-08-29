@@ -20,6 +20,9 @@ from tools.workspace import resolve_safe, workspace_root
 
 TERMINAL = frozenset({"done", "error", "cancelled"})
 KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "i2v_shot", "lip_shot", "keys_shot"})
+# 镜头级任务可同集并行；整集级任务独占。
+SHOT_KINDS = frozenset({"i2v_shot", "lip_shot", "keys_shot", "rerender_shot"})
+EXCLUSIVE_KINDS = frozenset({"rerender_dirty", "export", "render_episode"})
 
 
 class JobCancelled(Exception):
@@ -88,15 +91,19 @@ class DramaQueue:
         self._jobs: dict[str, DramaJob] = {}
         self._pending: queue.Queue[str] = queue.Queue()
         self._workers: list[threading.Thread] = []
-        self._slug_busy: dict[str, str] = {}
-        # S4: worker 池。同 slug:episode 由 _slug_busy 互斥，跨集/跨项目并行出图。
+        # slug:ep -> set of active job_ids (pending/running)
+        self._slug_busy: dict[str, set[str]] = {}
+        # S4: worker 池。整集任务互斥；镜头级任务按 DRAMA_SHOT_CONCURRENCY 并行。
         try:
             from config import config
 
-            default_workers = int(getattr(config, "DRAMA_MAX_WORKERS", 2) or 2)
+            default_workers = int(getattr(config, "DRAMA_MAX_WORKERS", 4) or 4)
+            shot_conc = int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 3) or 3)
         except Exception:
-            default_workers = 2
+            default_workers = 4
+            shot_conc = 3
         self.max_workers = max(1, int(max_workers or default_workers))
+        self.shot_concurrency = max(1, shot_conc)
 
     def _persist(self, job: DramaJob) -> None:
         if job.discarded:
@@ -151,35 +158,65 @@ class DramaQueue:
         idem = self._idem_key(kind, slug, int(episode), params)
         key = f"{slug}:ep{int(episode):02d}"
         with self._lock:
-            busy = self._slug_busy.get(key)
-            if busy:
-                cur = self._jobs.get(busy)
-                if cur and cur.status in ("pending", "running"):
-                    # S5: same idempotent request reuses the in-flight job.
-                    if cur.idem_key == idem:
-                        return public_job(cur)
-                    raise RuntimeError(f"该项目集已有进行中的任务：{busy}")
-                self._slug_busy.pop(key, None)
+            active = self._active_jobs(key)
+            for cur in active:
+                if cur.idem_key == idem:
+                    return public_job(cur)
+
+            has_exclusive = any(j.kind in EXCLUSIVE_KINDS for j in active)
+            shot_count = sum(1 for j in active if j.kind in SHOT_KINDS)
+
+            if kind in EXCLUSIVE_KINDS:
+                if active:
+                    raise RuntimeError(f"该项目集已有进行中的任务：{active[0].job_id}")
+            else:
+                if has_exclusive:
+                    excl = next(j for j in active if j.kind in EXCLUSIVE_KINDS)
+                    raise RuntimeError(f"该项目集已有进行中的任务：{excl.job_id}")
+                if shot_count >= self.shot_concurrency:
+                    raise RuntimeError(
+                        f"该集镜头任务并发已满（{self.shot_concurrency}），请稍后再试"
+                    )
+
             # S5: dedupe against a recent identical terminal job too.
             for job in self._jobs.values():
                 if job.idem_key == idem and job.status == "done":
                     return public_job(job)
 
-        job = DramaJob(
-            job_id=uuid.uuid4().hex[:12],
-            kind=kind,
-            slug=slug,
-            episode=int(episode),
-            params=dict(params or {}),
-            idem_key=idem,
-        )
-        with self._lock:
+            job = DramaJob(
+                job_id=uuid.uuid4().hex[:12],
+                kind=kind,
+                slug=slug,
+                episode=int(episode),
+                params=dict(params or {}),
+                idem_key=idem,
+            )
             self._jobs[job.job_id] = job
-            self._slug_busy[key] = job.job_id
+            self._slug_busy.setdefault(key, set()).add(job.job_id)
+
         self._persist(job)
         self._pending.put(job.job_id)
         self._ensure_worker()
         return public_job(job)
+
+    def _active_jobs(self, key: str) -> list[DramaJob]:
+        ids = list(self._slug_busy.get(key) or ())
+        out: list[DramaJob] = []
+        stale: list[str] = []
+        for jid in ids:
+            cur = self._jobs.get(jid)
+            if cur and cur.status in ("pending", "running"):
+                out.append(cur)
+            else:
+                stale.append(jid)
+        if stale:
+            bucket = self._slug_busy.get(key)
+            if bucket is not None:
+                for jid in stale:
+                    bucket.discard(jid)
+                if not bucket:
+                    self._slug_busy.pop(key, None)
+        return out
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         job = self.get(job_id)
@@ -232,7 +269,11 @@ class DramaQueue:
     def _release_busy(self, job: DramaJob) -> None:
         key = f"{job.slug}:ep{int(job.episode):02d}"
         with self._lock:
-            if self._slug_busy.get(key) == job.job_id:
+            bucket = self._slug_busy.get(key)
+            if not bucket:
+                return
+            bucket.discard(job.job_id)
+            if not bucket:
                 self._slug_busy.pop(key, None)
 
     def _ensure_worker(self) -> None:
@@ -395,7 +436,7 @@ class DramaQueue:
 
     def _run_i2v_shot(self, job: DramaJob) -> dict[str, Any]:
         from tools.drama_i2v import generate_shot_i2v
-        from tools.drama_shots import find_shot, load_doc, save_doc
+        from tools.drama_shots import find_shot, load_doc, merge_save_shot
         from tools.drama_video import rerender_shot
 
         shot_n = int((job.params or {}).get("shot") or 0)
@@ -410,7 +451,7 @@ class DramaQueue:
         self._progress(job, message=f"I2V Shot {shot_n}", current=0, total=2, shot=shot_n)
         job.check_cancel()
         info = generate_shot_i2v(job.slug, job.episode, shot, force=True)
-        save_doc(doc)
+        merge_save_shot(job.slug, job.episode, shot)
         job.check_cancel()
         self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)
         result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
@@ -419,7 +460,7 @@ class DramaQueue:
 
     def _run_lip_shot(self, job: DramaJob) -> dict[str, Any]:
         from tools.drama_lip import generate_shot_lip
-        from tools.drama_shots import find_shot, load_doc, save_doc
+        from tools.drama_shots import find_shot, load_doc, merge_save_shot
         from tools.drama_video import rerender_shot
 
         shot_n = int((job.params or {}).get("shot") or 0)
@@ -434,7 +475,7 @@ class DramaQueue:
         self._progress(job, message=f"口型 Shot {shot_n}", current=0, total=2, shot=shot_n)
         job.check_cancel()
         info = generate_shot_lip(job.slug, job.episode, shot)
-        save_doc(doc)
+        merge_save_shot(job.slug, job.episode, shot)
         job.check_cancel()
         self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)
         result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
@@ -444,7 +485,7 @@ class DramaQueue:
     def _run_keys_shot(self, job: DramaJob) -> dict[str, Any]:
         from tools.drama_i2v import generate_shot_i2v
         from tools.drama_keys import generate_shot_keys
-        from tools.drama_shots import find_shot, load_doc, save_doc
+        from tools.drama_shots import find_shot, load_doc, merge_save_shot
         from tools.drama_video import rerender_shot
 
         shot_n = int((job.params or {}).get("shot") or 0)
@@ -460,11 +501,11 @@ class DramaQueue:
         self._progress(job, message=f"关键帧 Shot {shot_n}", current=0, total=3, shot=shot_n)
         job.check_cancel()
         info = generate_shot_keys(job.slug, job.episode, shot, count=count)
-        save_doc(doc)
+        merge_save_shot(job.slug, job.episode, shot)
         job.check_cancel()
         self._progress(job, message=f"补间 Shot {shot_n}", current=1, total=3, shot=shot_n)
         motion = generate_shot_i2v(job.slug, job.episode, shot, force=True)
-        save_doc(doc)
+        merge_save_shot(job.slug, job.episode, shot)
         job.check_cancel()
         self._progress(job, message=f"合成 Shot {shot_n}", current=2, total=3, shot=shot_n)
         result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
