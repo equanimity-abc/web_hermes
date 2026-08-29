@@ -1246,7 +1246,7 @@ def _encode_clip_from_still(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Ken Burns on PNG still. Length follows script duration."""
+    """Ken Burns on PNG still. Length follows script/voice target; audio is padded to match."""
     target = max(float(duration or 0), 0.5)
     frames = max(int(round(target * FPS)), FPS)
     motion = _motion_expr(shot, frames)
@@ -1274,6 +1274,10 @@ def _encode_clip_from_still(
     ]
     if audio is not None:
         args += ["-i", str(audio)]
+        af = (
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"apad=whole_dur={target:.3f},atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+        )
     else:
         args += [
             "-f",
@@ -1281,13 +1285,19 @@ def _encode_clip_from_still(
             "-i",
             "anullsrc=channel_layout=stereo:sample_rate=44100",
         ]
+        af = (
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+        )
     args += [
         "-filter_complex",
-        vf,
+        f"{vf};{af}",
         "-map",
         "[vout]",
         "-map",
-        "2:a",
+        "[aout]",
+        "-frames:v",
+        str(frames),
         "-t",
         f"{target:.2f}",
         "-r",
@@ -1321,13 +1331,14 @@ def _encode_clip_from_motion(
 ) -> None:
     """Composite pre-rendered I2V motion with subtitles and voice.
 
-    Clip length follows script duration. Short motion is looped to fill that length;
-    longer audio is cut to match.
+    Clip length follows max(script, voice) duration. Short motion is looped to fill
+    that length; short audio is padded with silence so A/V stay the same length.
     """
     look = _look_filters(shot)
     target = max(float(duration or 0), 0.5)
+    frames = max(int(round(target * FPS)), 1)
     motion_dur = _probe_duration(motion) if motion.is_file() else 0.0
-    # Loop short motion so output can reach script duration.
+    # Loop short motion so output can reach target duration.
     loop_motion = motion_dur > 0.05 and motion_dur + 0.05 < target
     vf = (
         f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
@@ -1340,15 +1351,25 @@ def _encode_clip_from_motion(
     args += ["-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
     if audio is not None:
         args += ["-i", str(audio)]
+        af = (
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"apad=whole_dur={target:.3f},atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+        )
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+        af = (
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+        )
     args += [
         "-filter_complex",
-        vf,
+        f"{vf};{af}",
         "-map",
         "[vout]",
         "-map",
-        "2:a",
+        "[aout]",
+        "-frames:v",
+        str(frames),
         "-t",
         f"{target:.2f}",
         "-r",
@@ -1378,9 +1399,11 @@ def _assemble_clips(
     *,
     fade_sec: float = XFADE_SEC,
 ) -> str:
-    """Crossfade trimmed clips. Timeline edits never rewrite per-shot source files."""
-    from tools.drama_timeline import junction_fade_sec, resolve_transition_name
+    """Hard-concat trimmed clips. Timeline edits never rewrite per-shot source files.
 
+    Soft xfade was removed as the default because overlaps shorten the episode by
+    ~(N-1)*fade_sec and desync from the script total duration.
+    """
     if not specs:
         raise ValueError("没有可拼接的镜头")
     if len(specs) == 1:
@@ -1427,40 +1450,39 @@ def _assemble_clips(
 
     inputs: list[str] = []
     parts: list[str] = []
-    durations: list[float] = []
+    n_clips = len(specs)
     for i, spec in enumerate(specs):
         path = spec["path"]
         trim_in = float(spec.get("trim_in") or 0)
         trim_out = float(spec.get("trim_out") or 0)
         vol = float(spec.get("volume") or 1.0)
-        probe = _probe_duration(path)
-        end = max(trim_in + 0.25, probe - trim_out)
-        play = max(0.25, end - trim_in)
-        durations.append(play)
+        target_play = max(0.25, float(spec.get("play_duration") or 0.25))
+        probe = float(spec.get("file_duration") or 0) or _probe_duration(path)
+        # 先尽量取文件可用区间，再按剧本目标时长补齐（短则 pad，长则裁到目标）
+        avail_end = max(trim_in + 0.05, probe - trim_out) if probe > trim_in + 0.05 else trim_in + min(0.25, target_play)
+        avail_play = max(0.05, avail_end - trim_in)
+        use_end = avail_end
+        if avail_play > target_play + 0.04:
+            use_end = trim_in + target_play
+            avail_play = target_play
+        pad = max(0.0, target_play - avail_play)
         inputs += ["-i", str(path)]
-        parts.append(
-            f"[{i}:v]trim=start={trim_in:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}p]"
+        v_chain = (
+            f"[{i}:v]trim=start={trim_in:.3f}:end={use_end:.3f},setpts=PTS-STARTPTS,"
+            f"fps={FPS},format=yuv420p"
         )
+        if pad > 0.04:
+            v_chain += f",tpad=stop_mode=clone:stop_duration={pad:.3f}"
+        parts.append(f"{v_chain}[v{i}]")
         parts.append(
-            f"[{i}:a]atrim=start={trim_in:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,volume={vol:.2f}[a{i}p]"
+            f"[{i}:a]atrim=start={trim_in:.3f}:end={use_end:.3f},asetpts=PTS-STARTPTS,"
+            f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"volume={vol:.2f},"
+            f"apad=whole_dur={target_play:.3f},atrim=0:{target_play:.3f},asetpts=PTS-STARTPTS[a{i}]"
         )
 
-    last_v = "[v0p]"
-    last_a = "[a0p]"
-    fade0 = junction_fade_sec(specs[0], fade_sec)
-    offset = durations[0] - fade0
-    for i in range(1, len(specs)):
-        prev = specs[i - 1]
-        fade_i = junction_fade_sec(prev, fade_sec)
-        trans = resolve_transition_name(prev, i, auto_fn=_transition_name)
-        v_out = f"[v{i}x]"
-        a_out = f"[a{i}x]"
-        parts.append(
-            f"{last_v}[v{i}p]xfade=transition={trans}:duration={fade_i:.2f}:offset={offset:.3f}{v_out}"
-        )
-        parts.append(f"{last_a}[a{i}p]acrossfade=d={fade_i:.2f}{a_out}")
-        last_v, last_a = v_out, a_out
-        offset += durations[i] - fade_i
+    concat_in = "".join(f"[v{i}][a{i}]" for i in range(n_clips))
+    parts.append(f"{concat_in}concat=n={n_clips}:v=1:a=1[vout][aout]")
 
     args = [
         "-y",
@@ -1468,9 +1490,9 @@ def _assemble_clips(
         "-filter_complex",
         ";".join(parts),
         "-map",
-        last_v,
+        "[vout]",
         "-map",
-        last_a,
+        "[aout]",
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -1489,7 +1511,7 @@ def _assemble_clips(
     ]
     try:
         _run_ffmpeg(args, timeout=400)
-        return "xfade"
+        return "concat"
     except RuntimeError:
         list_file = out_path.parent / "concat.txt"
         list_file.write_text(
@@ -1644,7 +1666,6 @@ def render_shot_layers(
             has_audio = False
         if has_audio:
             used_tts = True
-            # 时长以剧本分镜为准，不因配音改写 shot.duration
             if not str(shot.get("voice") or "").strip():
                 shot["voice"] = voice_sel
         elif voice.exists():
@@ -1670,12 +1691,18 @@ def render_shot_layers(
     if "clip" in wanted:
         if not scene.is_file():
             raise RuntimeError(f"镜头 {shot.get('n')} 没有画面，请先生成 scene")
-        if not overlay.is_file():
-            _draw_subtitle_overlay(shot, overlay)
-            if "overlay" not in rebuilt:
-                rebuilt.append("overlay")
+        # 成片前按当前旁白/字幕重画叠层，避免声音页 CSS 预览正确、clip 仍是旧烧录
+        _draw_subtitle_overlay(shot, overlay)
+        if "overlay" not in rebuilt:
+            rebuilt.append("overlay")
         shot["camera"] = shot.get("camera") or _camera_style(shot)
         audio = voice if voice.is_file() and voice.stat().st_size > 0 else None
+        if audio is not None:
+            voice_dur = _probe_duration(audio)
+            # 配音更长时拉长本镜，保证成片听得完、总时长与修改后一致
+            if voice_dur > duration + 0.05:
+                duration = voice_dur
+                shot["duration"] = round(float(duration), 1)
         shot["_slug"] = slug
         shot["_episode"] = episode
         _encode_clip(scene, overlay, clip, duration, audio, shot)
@@ -1750,10 +1777,12 @@ def render_shot_layers(
 
 def assemble_episode(doc: dict[str, Any]) -> str:
     from tools.drama_audio import mix_assembled, vo_stem_rel
+    from tools.drama_shots import cascade_shot_timings, script_rel
     from tools.drama_timeline import build_assemble_specs
 
     slug = str(doc["slug"])
     episode = int(doc["episode"])
+    cascade_shot_timings(doc)
     out_rel = doc.get("output") or output_rel(slug, episode)
     out_path = resolve_safe(out_rel)
     stem_path = resolve_safe(vo_stem_rel(slug, episode))
@@ -1765,6 +1794,17 @@ def assemble_episode(doc: dict[str, Any]) -> str:
     mix_mode = mix_assembled(slug, episode, stem=stem_path, dest=out_path)
     doc["assemble"] = assemble
     doc["mix"] = mix_mode
+    # 用分镜时长之和回写剧本「时长」，与成片对齐
+    total = sum(float(s.get("play_duration") or 0) for s in ready)
+    try:
+        sp = resolve_safe(script_rel(slug, episode))
+        if sp.is_file():
+            text = sp.read_text(encoding="utf-8")
+            updated = patch_episode_meta_duration(text, total)
+            if updated != text:
+                sp.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
     save_doc(doc)
     return assemble
 
@@ -1813,7 +1853,10 @@ def render_episode_video(
     cancel_check: Callable[[], None] | None = None,
     on_progress: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
-    """Render dirty (or all) shots independently, then assemble epNN.mp4."""
+    """Render dirty (or all) shots independently. Does not assemble epNN.mp4.
+
+    Call export_episode (or layers including assemble) to build the full episode.
+    """
     doc = sync_shots_doc(slug, episode, markdown, title=title)
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     rebuilt: list[int] = []
@@ -1891,15 +1934,12 @@ def render_episode_video(
             cancel_check()
 
     if on_progress:
-        on_progress(current=total, total=total, message="拼接整集…")
+        on_progress(current=total, total=total, message="单镜渲染完成")
     if cancel_check:
         cancel_check()
-    out_path = resolve_safe(str(doc.get("output") or output_rel(slug, episode)))
-    if rebuilt or not out_path.is_file():
-        assemble = assemble_episode(doc)
-    else:
-        assemble = str(doc.get("assemble") or "unchanged")
-        save_doc(doc)
+    # 整集拼接仅由「导出整集」触发，单镜/批量重渲不再自动 assemble
+    assemble = str(doc.get("assemble") or "pending_export")
+    save_doc(doc)
     from tools.drama_models import actual_episode_cost
 
     return _episode_result(
@@ -1924,7 +1964,10 @@ def rerender_shot(
     patch: dict[str, Any] | None = None,
     layers: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Patch one shot, rebuild only requested layers, then reassemble the episode."""
+    """Patch one shot, rebuild only requested layers. Does not assemble the episode.
+
+    Full-episode mp4 is produced only by export_episode / layers=['assemble'].
+    """
     doc = load_doc(slug, episode)
     if doc is None:
         if not markdown:
@@ -1997,7 +2040,14 @@ def rerender_shot(
         )
     save_doc(doc)
 
-    assemble = assemble_episode(doc)
+    from tools.drama_shots import cascade_shot_timings
+
+    cascade_shot_timings(doc, from_n=shot_n)
+    save_doc(doc)
+
+    # 需要整集时请显式传 layers 含 assemble，或走 export_episode
+    do_assemble = "assemble" in requested
+    assemble = assemble_episode(doc) if do_assemble else str(doc.get("assemble") or "pending_export")
     return _episode_result(
         doc,
         {

@@ -1324,8 +1324,12 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     try {
-      // 声音页：配音 + 口型一起重建（与批量一致）
-      const result = await dramaApi.rerenderShot(slug.value, episodeN.value, selectedN.value, ['voice', 'lip'])
+      // 声音页：配音 + 旁白叠层 + 口型一起重建（与批量一致）
+      const result = await dramaApi.rerenderShot(slug.value, episodeN.value, selectedN.value, [
+        'overlay',
+        'voice',
+        'lip',
+      ])
       if (result.job_id) {
         await waitForJob(result, slug.value)
       }
@@ -1996,8 +2000,8 @@ export function useDramaStudio() {
         const hasDialogue = Boolean(String(s.字幕 || '').trim())
         if (!hasDialogue) continue
         try {
-          // 配音 + 口型一起走同一次重建（TTS 生成台词语音，再开口型）
-          await dramaApi.rerenderShot(slug.value, ep, s.n, ['voice', 'lip'])
+          // 配音 + 旁白叠层 + 口型一起重建
+          await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice', 'lip'])
           done += 1
         } catch {
           /* skip */

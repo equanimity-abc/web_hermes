@@ -943,14 +943,50 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
         return enqueue_job(slug, n, "export")
     doc = _ensure_shots_doc(slug, n)
     from tools.drama_audio import assert_export_licensed, load_mix
-    from tools.drama_video import assemble_episode, ffmpeg_available
+    from tools.drama_shots import LAYERS, cascade_shot_timings
+    from tools.drama_video import assemble_episode, ffmpeg_available, render_shot_layers
+    from tools.workspace import resolve_safe
 
     if not ffmpeg_available():
         raise DramaBadRequest("未找到 ffmpeg，无法导出整集")
     try:
         assert_export_licensed(slug, load_mix(slug, n))
+        # 导出前重渲：脏层全量处理；未锁镜头至少刷新 overlay+clip，
+        # 避免声音页 CSS 预览正确、成片仍是旧旁白/旧时长。
+        ep_title = str(doc.get("title") or f"第{n}集")
+        for shot in doc.get("shots") or []:
+            locked = set(shot.get("locked") or [])
+            if "shot" in locked:
+                continue
+            dirty = [layer for layer in (shot.get("dirty") or []) if layer]
+            layers = list(dict.fromkeys(dirty))
+            if "clip" not in locked:
+                for layer in ("overlay", "clip"):
+                    if layer not in layers:
+                        layers.append(layer)
+            clip_rel = str((shot.get("assets") or {}).get("clip") or "").strip()
+            clip_ok = False
+            if clip_rel:
+                try:
+                    clip_ok = resolve_safe(clip_rel).is_file()
+                except ValueError:
+                    clip_ok = False
+            if not layers and not clip_ok:
+                layers = [layer for layer in LAYERS if layer != "scene"]
+            if not layers:
+                continue
+            if "clip" not in layers and any(
+                layer in layers for layer in ("scene", "overlay", "voice", "lip", "motion")
+            ):
+                layers = [*layers, "clip"]
+            render_shot_layers(slug, n, shot, layers, title=ep_title)
+            save_doc(doc)
+        cascade_shot_timings(doc)
+        save_doc(doc)
         mode = assemble_episode(doc)
     except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    except RuntimeError as e:
         raise DramaBadRequest(str(e)) from e
     ep = get_episode(slug, n)
     ep["assemble"] = mode

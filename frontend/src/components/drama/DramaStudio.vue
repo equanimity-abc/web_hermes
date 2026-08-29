@@ -334,6 +334,37 @@ const bgmPreviewUrl = computed(() => {
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
 const catalogTracks = computed(() => mix.value?.catalog || [])
+const assembleMeta = computed(() => {
+  const shotList = props.shots || []
+  const items = props.timelineItems || []
+  const total = Number(props.episode?.timeline?.total_duration || 0)
+  const sumDur = shotList.reduce((acc, s) => acc + Number(s.duration || 0), 0)
+  // 优先用分镜修改后的时长之和；导出后 timeline 探针会与之对齐
+  const durationSec = sumDur > 0 ? sumDur : total
+  return {
+    exported: Boolean(props.episode?.play_url),
+    shotCount: shotList.length || items.length,
+    durationLabel: durationSec > 0 ? `${Number(durationSec).toFixed(1)}s` : '—',
+    bgmTitle: mix.value?.bgm?.title || '',
+    hasBgm: Boolean(mix.value?.has_bgm),
+    licenseOk: Boolean(mix.value?.license?.ok || props.mixDraft?.license_ok),
+  }
+})
+const assembleStatusLabel = computed(() => {
+  if (props.rendering) return '导出 / 混音处理中…'
+  if (assembleMeta.value.exported) return '已导出整集，可预览；改镜后需再点「导出整集」'
+  return '尚未导出，配置配乐后点「导出整集」'
+})
+const assembleStatusClass = computed(() => {
+  if (props.rendering) return 'is-running'
+  if (assembleMeta.value.exported) return 'is-done'
+  return 'is-idle'
+})
+
+function onCatalogChange() {
+  const id = String(props.mixDraft.catalog_id || '').trim()
+  if (id) props.mixDraft.license_ok = true
+}
 
 const THUMB = 240
 const preloaded = new Set()
@@ -993,7 +1024,6 @@ const voiceStatusLabel = computed(() => {
       </div>
       <div class="drama-stepper-actions">
         <button v-if="nextStage" type="button" class="btn-primary" @click="goNext">下一步：{{ nextStage.label }}</button>
-        <button v-else type="button" class="btn-ghost" @click="emit('export-timeline')">重新导出</button>
       </div>
     </div>
 
@@ -1021,6 +1051,16 @@ const voiceStatusLabel = computed(() => {
         <template v-else-if="stage === 'voice'">
           <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllVoice">
             {{ rendering ? '生成中…' : '批量生成配音' }}
+          </button>
+        </template>
+        <template v-else-if="stage === 'assemble'">
+          <button
+            type="button"
+            class="btn-primary btn-sm"
+            :disabled="rendering || saving || mixUnlicensed"
+            @click="emit('export-timeline')"
+          >
+            {{ rendering ? '导出中…' : assembleMeta.exported ? '重新导出' : '导出整集' }}
           </button>
         </template>
       </div>
@@ -1753,25 +1793,133 @@ const voiceStatusLabel = computed(() => {
       </section>
 
       <!-- ============ 阶段 6：成片 ============ -->
-      <section v-else-if="stage === 'assemble'" class="drama-stage-panel">
-        <div class="drama-panel-body">
-          <div class="drama-actions">
-            <button type="button" class="btn-primary" :disabled="rendering || saving || mixUnlicensed" @click="emit('export-timeline')">
-              {{ rendering ? '导出中…' : '导出整集' }}
-            </button>
+      <section v-else-if="stage === 'assemble'" class="drama-stage-panel drama-assemble-stage">
+        <div class="drama-panel-body drama-assemble-body">
+          <div class="drama-assemble-main">
+            <div class="drama-assemble-preview-panel">
+              <div class="drama-assemble-preview-area">
+                <div class="drama-assemble-frame">
+                  <video
+                    v-if="episode?.play_url"
+                    :key="episodePreviewUrl"
+                    class="drama-media"
+                    :src="episodePreviewUrl"
+                    controls
+                    playsinline
+                  />
+                  <div v-else class="drama-stage-empty">
+                    导出后在此预览整集
+                    <span>右侧配好 BGM 后点「导出整集」</span>
+                  </div>
+                </div>
+              </div>
+              <div class="drama-assemble-status" :class="assembleStatusClass">
+                <div class="drama-assemble-status-top">
+                  <span class="drama-assemble-pill" :class="assembleMeta.exported ? 'is-ok' : 'is-wait'">
+                    {{ assembleMeta.exported ? '已导出' : '待导出' }}
+                  </span>
+                  <span class="drama-assemble-status-msg">{{ assembleStatusLabel }}</span>
+                </div>
+                <dl class="drama-assemble-status-kv">
+                  <div>
+                    <dt>镜头</dt>
+                    <dd>{{ assembleMeta.shotCount }}</dd>
+                  </div>
+                  <div>
+                    <dt>时长</dt>
+                    <dd>{{ assembleMeta.durationLabel }}</dd>
+                  </div>
+                  <div>
+                    <dt>配乐</dt>
+                    <dd>{{ assembleMeta.hasBgm ? assembleMeta.bgmTitle || '已挂载' : '未挂' }}</dd>
+                  </div>
+                  <div>
+                    <dt>版权</dt>
+                    <dd :class="{ 'drama-warn': mixUnlicensed }">
+                      {{ mixUnlicensed ? '未授权' : assembleMeta.hasBgm ? '可用' : '—' }}
+                    </dd>
+                  </div>
+                </dl>
+                <div class="drama-video-progress-bar">
+                  <div
+                    class="drama-video-progress-fill"
+                    :style="{ width: rendering ? '55%' : assembleMeta.exported ? '100%' : '0%' }"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <aside class="drama-assemble-side">
+              <div class="drama-assemble-toolbar">
+                <label class="drama-assemble-inline">
+                  <span>曲库</span>
+                  <select v-model="mixDraft.catalog_id" @change="onCatalogChange">
+                    <option value="">上传曲</option>
+                    <option v-for="t in catalogTracks" :key="t.id" :value="t.id">
+                      {{ t.title || t.id }}
+                    </option>
+                  </select>
+                </label>
+                <button type="button" class="btn-ghost btn-sm" :disabled="saving || rendering" @click="bgmInput?.click()">
+                  上传
+                </button>
+                <button
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="saving || rendering || !mix?.has_bgm"
+                  @click="emit('clear-bgm')"
+                >
+                  清除
+                </button>
+                <span class="drama-assemble-file-name" :title="mix?.bgm?.title || ''">
+                  {{ mix?.bgm?.title || '未挂配乐' }}
+                </span>
+                <label class="drama-check drama-assemble-check">
+                  <input v-model="mixDraft.license_ok" type="checkbox" />
+                  商用权
+                </label>
+                <label class="drama-assemble-inline drama-assemble-inline--slider">
+                  <span>音量</span>
+                  <input v-model.number="mixDraft.volume" type="range" min="0" max="1" step="0.01" />
+                  <em>{{ Number(mixDraft.volume ?? 0.22).toFixed(2) }}</em>
+                </label>
+                <label class="drama-assemble-inline drama-assemble-inline--slider">
+                  <span>闪避</span>
+                  <input v-model.number="mixDraft.duck_db" type="range" min="-24" max="0" step="0.5" />
+                  <em>{{ Number(mixDraft.duck_db ?? -12).toFixed(1) }}</em>
+                </label>
+                <button
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="saving || !mixDirty"
+                  @click="emit('save-mix')"
+                >
+                  {{ saving ? '保存中…' : mixDirty ? '保存' : '已保存' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="rendering || saving || mixUnlicensed || !mix?.has_bgm"
+                  @click="emit('apply-mix')"
+                >
+                  {{ rendering ? '混音中…' : '应用混音' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="rendering || saving || mixUnlicensed"
+                  @click="emit('export-timeline')"
+                >
+                  {{ rendering ? '导出中…' : assembleMeta.exported ? '重新导出' : '导出整集' }}
+                </button>
+                <input ref="bgmInput" class="drama-file" type="file" accept="audio/*" @change="onBgmFile" />
+              </div>
+              <audio v-if="bgmPreviewUrl" class="drama-audio drama-assemble-audio" :src="bgmPreviewUrl" controls />
+              <p v-if="mixUnlicensed" class="drama-empty-hint drama-warn">
+                {{ mix?.license?.reason || '无版权曲子禁止导出' }}
+              </p>
+            </aside>
           </div>
-          <div class="drama-stage">
-            <video v-if="episode?.play_url" :key="episodePreviewUrl" class="drama-media" :src="episodePreviewUrl" controls playsinline />
-            <div v-else class="drama-stage-empty">导出后在此预览整集 mp4</div>
-          </div>
-          <div class="drama-freeze">
-            <button type="button" class="btn-tiny" :disabled="saving || rendering" @click="bgmInput?.click()">上传 BGM</button>
-            <button type="button" class="btn-tiny" :disabled="saving || !mix?.has_bgm" @click="emit('clear-bgm')">清除</button>
-            <span>{{ mix?.bgm?.title || '未挂配乐' }}</span>
-          </div>
-          <input ref="bgmInput" class="drama-file" type="file" accept="audio/*" @change="onBgmFile" />
-          <audio v-if="bgmPreviewUrl" class="drama-audio" :src="bgmPreviewUrl" controls />
-          <p v-if="mixUnlicensed" class="drama-empty-hint drama-warn">{{ mix?.license?.reason || '无版权曲子禁止导出' }}</p>
         </div>
       </section>
 

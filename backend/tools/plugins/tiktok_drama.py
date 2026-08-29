@@ -46,7 +46,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 13. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 14. 锁参考图后无法覆盖已锁定的定妆 png
 15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
-16. export_timeline 按时间线设置拼接整集（改镜序/切点/转场/音量不重渲源 clip）
+16. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
 17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
 18. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
 19. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
@@ -1082,7 +1082,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
 "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
-            "export_timeline（按时间线导出整集，不覆盖各镜 clip）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
+            "export_timeline（导出整集：脏镜先重渲再拼接混音）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
