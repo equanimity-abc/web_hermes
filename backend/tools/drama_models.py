@@ -8,6 +8,7 @@ dual-keyframe. Expensive I2V providers stay unavailable until a complete card.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from tools.workspace import resolve_safe
@@ -94,7 +95,7 @@ def infer_kind(shot: dict[str, Any]) -> str:
     existing = normalize_kind(shot.get("kind"))
     if existing:
         return existing
-    dialogue = str(shot.get("对白") or "").strip()
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
     return "dialogue" if dialogue else "establishing"
 
 
@@ -109,6 +110,20 @@ def infer_speaker(shot: dict[str, Any]) -> str:
     existing = str(shot.get("speaker") or "").strip()
     if existing:
         return existing
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
+    if dialogue:
+        m = re.search(
+            r"([^:：\s「『“\"（(【\[]{1,16})(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*[「『“\"]",
+            dialogue,
+        )
+        if m:
+            return m.group(1).strip()
+        m2 = re.match(
+            r"([^:：\s「『“\"（(【\[]{1,16})(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]",
+            dialogue,
+        )
+        if m2:
+            return m2.group(1).strip()
     roles = shot.get("角色") or []
     if isinstance(roles, list) and roles:
         return str(roles[0] or "").strip()
@@ -300,7 +315,19 @@ def default_models() -> dict[str, Any]:
         "preset": DEFAULT_PRESET,
         "nodes": {},
         "script": {"provider": "deepseek", "model": "deepseek-v4-flash", "refine_model": "deepseek-reasoner"},
-        "tts": {"provider": "edge-tts"},
+        "tts": {
+            "provider": "edge-tts",
+            "voices": [
+                {"id": "zh-CN-YunxiNeural", "label": "云希 · 男"},
+                {"id": "zh-CN-YunyangNeural", "label": "云扬 · 男旁白"},
+                {"id": "zh-CN-YunjianNeural", "label": "云健 · 男"},
+                {"id": "zh-CN-YunxiaNeural", "label": "云夏 · 男少年"},
+                {"id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女"},
+                {"id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 女"},
+                {"id": "zh-CN-XiaohanNeural", "label": "晓涵 · 女"},
+                {"id": "zh-CN-XiaozhenNeural", "label": "晓甄 · 女"},
+            ],
+        },
         "subtitle": {"style": "static"},
         "budget": {
             "enabled": False,
@@ -651,7 +678,13 @@ def planned_ladder(shot: dict[str, Any], models: dict[str, Any] | None = None) -
 
 
 def effective_motion_ladder(shot: dict[str, Any], *, slug: str | None = None, models: dict[str, Any] | None = None) -> str:
-    """Planned kind ladder. L4 only when a solo action shot has 3+ key poses."""
+    """Planned kind ladder. L4 only when a solo action shot has 3+ key poses.
+
+    Shot-level i2v_ladder overrides kind routing when set.
+    """
+    override = normalize_ladder(shot.get("i2v_ladder"))
+    if override:
+        return cap_ladder(override)
     kind = infer_kind(shot)
     if kind in L0_KINDS:
         return "L0"
@@ -720,11 +753,12 @@ def provider_cost(models: dict[str, Any], provider_id: str) -> float:
 def estimate_i2v(slug: str, shot: dict[str, Any], *, models: dict[str, Any] | None = None) -> dict[str, Any]:
     models = models or load_models(slug)
     kind = infer_kind(shot)
-    planned = planned_ladder(shot, models)
-    run = i2v_run_ladder(shot, models=models)
+    override = normalize_ladder(shot.get("i2v_ladder"))
+    planned = effective_motion_ladder(shot, slug=slug, models=models) if override else planned_ladder(shot, models)
+    run = i2v_run_ladder(shot, slug=slug, models=models)
     currency = str(models.get("currency") or CURRENCY)
     route = (models.get("motion") or {}).get(kind) or {}
-    if run == "L0" or planned == "L0":
+    if run == "L0":
         return {
             "kind": kind,
             "ladder": "L0",
@@ -734,7 +768,7 @@ def estimate_i2v(slug: str, shot: dict[str, Any], *, models: dict[str, Any] | No
             "currency": currency,
             "will_run": False,
             "expensive": False,
-            "reason": "定场类镜头强制 L0 静图运镜",
+            "reason": "定场类镜头强制 L0 静图运镜" if not override else "手动路由 L0 静图运镜",
         }
     if run == "L4" or planned == "L4":
         return {

@@ -32,7 +32,7 @@ def lip_eligible(shot: dict[str, Any], *, models: dict[str, Any] | None = None) 
     speaker = infer_speaker(shot)
     roles = shot.get("角色") or []
     role_n = len(roles) if isinstance(roles, list) else len([x for x in str(roles).split(",") if x.strip()])
-    dialogue = str(shot.get("对白") or "").strip()
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
     lip_cfg = (models or {}).get("lip") if isinstance((models or {}).get("lip"), dict) else {}
     # P0-2: a preset/project may explicitly disable lip (cheap), overriding the
     # provider name. Presence of enabled=False wins over the default-on behavior.
@@ -50,7 +50,7 @@ def lip_eligible(shot: dict[str, Any], *, models: dict[str, Any] | None = None) 
     if role_n > 1 and not speaker:
         return {"ok": False, "reason": "多角色同框未指定 speaker"}
     if not dialogue:
-        return {"ok": False, "reason": "没有对白"}
+        return {"ok": False, "reason": "没有字幕台词"}
     return {"ok": True, "reason": "", "kind": kind, "size": size, "speaker": speaker}
 
 

@@ -101,7 +101,7 @@ def _has_hook(doc: dict[str, Any], shots: list[dict[str, Any]]) -> bool:
     covering = [s for s in shots if _start(s) < HOOK_SECONDS]
     if not covering and shots:
         covering = shots[:1]
-    blob = " ".join(f"{s.get('画面') or ''} {s.get('对白') or ''}" for s in covering)
+    blob = " ".join(f"{s.get('画面') or ''} {s.get('字幕') or s.get('对白') or ''}" for s in covering)
     return any(mark in blob for mark in HOOK_MARKERS)
 
 
@@ -140,7 +140,7 @@ def _build_hook(doc: dict[str, Any], shots: list[dict[str, Any]], kept: dict[str
         "status": "open",
         "shot": n,
         "title": "前 3 秒缺钩子",
-        "reason": "开场偏慢热，建议在首镜画面写冲突/悬念/反差（不自动改对白）",
+        "reason": "开场偏慢热，建议在首镜画面写冲突/悬念/反差（不自动改台词）",
         "patch": patch,
     }
 
@@ -181,7 +181,7 @@ def _build_reactions(shots: list[dict[str, Any]], kept: dict[str, str]) -> list[
     for idx, shot in enumerate(shots[:-1]):
         if len(out) >= MAX_REACTION_SUGGESTIONS:
             break
-        if infer_kind(shot) != "dialogue" or not str(shot.get("对白") or "").strip():
+        if infer_kind(shot) != "dialogue" or not str(shot.get("字幕") or shot.get("对白") or "").strip():
             continue
         nxt = shots[idx + 1]
         if infer_kind(nxt) == "reaction":
@@ -202,8 +202,8 @@ def _build_reactions(shots: list[dict[str, Any]], kept: dict[str, str]) -> list[
                 "status": "open",
                 "shot": n,
                 "after_shot": int(shot.get("n") or 0),
-                "title": f"Shot {shot.get('n')} 对白后切反应镜",
-                "reason": f"连续对白缺少反应镜，建议 Shot {n} 改为 reaction CU（一集最多 {MAX_REACTION_SUGGESTIONS} 条）",
+                "title": f"Shot {shot.get('n')} 台词后切反应镜",
+                "reason": f"连续台词缺少反应镜，建议 Shot {n} 改为 reaction CU（一集最多 {MAX_REACTION_SUGGESTIONS} 条）",
                 "patch": {
                     "kind": "reaction",
                     "size": KIND_DEFAULT_SIZE["reaction"],

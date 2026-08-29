@@ -23,6 +23,7 @@ from tools.drama_studio import (
     list_render_jobs,
     generate_character_ref,
     refine_character_ref,
+    refine_shot,
     choose_character_candidate,
     delete_character_candidate,
     generate_episode_script,
@@ -104,8 +105,9 @@ class EpisodePatch(BaseModel):
 
 class ShotPatch(BaseModel):
     画面: str | None = None
-    对白: str | None = None
     字幕: str | None = None
+    旁白: str | None = None
+    对白: str | None = None  # legacy alias → 字幕
     角色: list[str] | str | None = None
     camera: str | None = None
     duration: float | None = None
@@ -115,6 +117,8 @@ class ShotPatch(BaseModel):
     volume: float | None = None
     transition: str | None = None
     i2v: str | None = None
+    i2v_ladder: str | None = None
+    i2v_source: str | None = None
     kind: str | None = None
     size: str | None = None
     speaker: str | None = None
@@ -175,6 +179,11 @@ class RefLockBody(BaseModel):
 
 class RefineRefBody(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000)
+
+
+class RefineShotBody(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
+    stage: str = Field(default="video", description="video | voice")
 
 
 class JobCreate(BaseModel):
@@ -433,6 +442,14 @@ async def drama_patch_shot(slug: str, episode: int, shot: int, body: ShotPatch):
     try:
         return patch_shot(slug, episode, shot, body.model_dump(exclude_unset=True))
     except (DramaNotFound, DramaBadRequest, ValueError, KeyError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/refine")
+def drama_refine_shot(slug: str, episode: int, shot: int, body: RefineShotBody):
+    try:
+        return refine_shot(slug, episode, shot, body.instruction, stage=body.stage)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 
 

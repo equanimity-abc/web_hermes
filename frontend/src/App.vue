@@ -63,6 +63,8 @@ const {
   generateCharacterRef,
   sendCastChatRefine,
   castChatMessages,
+  shotChatMessages,
+  refineShotChat,
   generateAllCharacterRefs,
   generateAllScenes,
   generateAllVideo,
@@ -146,6 +148,8 @@ const {
 } = useDramaStudio()
 
 const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
+const dramaVideoChatMessages = computed(() => shotChatMessages('video', dramaSelectedN.value))
+const dramaVoiceChatMessages = computed(() => shotChatMessages('voice', dramaSelectedN.value))
 
 const {
   currentSessionId,
@@ -332,6 +336,8 @@ onMounted(() => {
       :selected-character="dramaSelectedCharacter"
       :char-draft="dramaCharDraft"
       :cast-chat-messages="dramaCastChatMessages"
+      :video-chat-messages="dramaVideoChatMessages"
+      :voice-chat-messages="dramaVoiceChatMessages"
       :timeline-order="dramaTimelineOrder"
       :tl-draft="dramaTlDraft"
       :timeline-items="dramaTimelineItems"
@@ -395,6 +401,7 @@ onMounted(() => {
       @delete-character="deleteSelectedCharacter"
       @generate-character-ref="generateCharacterRef"
       @refine-character-ref="(cid, instruction) => sendCastChatRefine(cid, instruction)"
+      @refine-shot-chat="(stage, shotN, instruction) => refineShotChat(stage, shotN, instruction)"
       @generate-all-refs="(cat) => generateAllCharacterRefs(cat)"
       @generate-all-scenes="generateAllScenes"
       @generate-all-video="generateAllVideo"
