@@ -957,7 +957,7 @@ def _shot_block_type(shot: dict[str, Any], bundle: dict[str, Any]) -> list[tuple
         elif status == "ok" and not (check or {}).get("pass"):
             out.append((key, f"Shot {n} {label} 未通过"))
 
-    need_voice = bool(str(shot.get("对白") or "").strip() or str(shot.get("字幕") or "").strip())
+    need_voice = bool(str(shot.get("字幕") or shot.get("对白") or "").strip())
     if need_voice:
         voice = _asset_file(shot, "voice")
         if voice is None:
@@ -965,7 +965,7 @@ def _shot_block_type(shot: dict[str, Any], bundle: dict[str, Any]) -> list[tuple
 
     locked = set(shot.get("locked") or [])
     if infer_kind(shot) == "dialogue" and need_voice and "shot" not in locked and "scene" not in locked:
-        out.append(("unlocked", f"Shot {n} 对白镜画面未锁，改剧本可能被覆盖"))
+        out.append(("unlocked", f"Shot {n} 有台词镜画面未锁，改剧本可能被覆盖"))
 
     return out
 

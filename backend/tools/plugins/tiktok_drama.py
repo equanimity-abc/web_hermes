@@ -66,14 +66,14 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 ## 分镜
 ### Shot 1 (0-3s)
 - 画面:
-- 对白:
 - 字幕:
+- 旁白:
 - 角色:
 
 ### Shot 2 (3-12s)
 - 画面:
-- 对白:
 - 字幕:
+- 旁白:
 - 角色:
 """
 
@@ -494,7 +494,7 @@ def _action_rerender_shot(args: dict) -> str:
     ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
     content = _read_text(ep_rel)
     patch: dict[str, Any] = {}
-    for key in ("画面", "对白", "字幕", "角色", "camera", "timing"):
+    for key in ("画面", "字幕", "旁白", "对白", "角色", "camera", "timing"):
         if args.get(key) is not None:
             patch[key] = args.get(key)
     if args.get("duration") is not None:
@@ -1156,11 +1156,15 @@ def register_tiktok_drama() -> None:
                 },
                 "字幕": {
                     "type": "string",
-                    "description": "rerender_shot 时覆盖该镜字幕",
+                    "description": "rerender_shot 时覆盖该镜字幕（台词）",
+                },
+                "旁白": {
+                    "type": "string",
+                    "description": "rerender_shot 时覆盖该镜旁白（画外说明）",
                 },
                 "对白": {
                     "type": "string",
-                    "description": "rerender_shot 时覆盖该镜对白",
+                    "description": "legacy：等同字幕（台词）",
                 },
                 "画面": {
                     "type": "string",

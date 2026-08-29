@@ -22,6 +22,7 @@ export function useDramaStudio() {
   const selectedCharacterId = ref(null)
   const charDraft = ref(emptyCharDraft())
   const castChatHistory = ref({})
+  const shotChatHistory = ref({})
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
   const mixDraft = ref(emptyMixDraft())
@@ -137,7 +138,23 @@ export function useDramaStudio() {
   const selected = computed(() => shots.value.find((s) => s.n === selectedN.value) || null)
   const episodes = computed(() => project.value?.episodes || [])
   const characters = computed(() => project.value?.characters || episode.value?.characters || [])
-  const voices = computed(() => project.value?.voices || episode.value?.voices || [])
+  const voices = computed(() => {
+    const fromCfg = config.value?.nodes?.tts?.voices
+    if (Array.isArray(fromCfg) && fromCfg.length) {
+      return fromCfg
+        .map((v) => {
+          if (v && typeof v === 'object') {
+            const id = String(v.id || v.voice || '').trim()
+            if (!id) return null
+            return { id, label: String(v.label || v.name || id) }
+          }
+          if (typeof v === 'string' && v.trim()) return { id: v.trim(), label: v.trim() }
+          return null
+        })
+        .filter(Boolean)
+    }
+    return project.value?.voices || episode.value?.voices || []
+  })
   const selectedCharacter = computed(
     () => characters.value.find((c) => c.id === selectedCharacterId.value) || null,
   )
@@ -146,14 +163,17 @@ export function useDramaStudio() {
     if (!shot) return false
     return (
       String(draft.value.画面 || '') !== String(shot.画面 || '') ||
-      String(draft.value.对白 || '') !== String(shot.对白 || '') ||
       String(draft.value.字幕 || '') !== String(shot.字幕 || '') ||
+      String(draft.value.旁白 || '') !== String(shot.旁白 || '') ||
       String(draft.value.camera || '') !== String(shot.camera || '') ||
       Number(draft.value.duration || 0) !== Number(shot.duration || 0) ||
       String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto') ||
+      String(draft.value.i2v_ladder || '') !== String(shot.i2v_ladder || '') ||
+      String(draft.value.i2v_source || '') !== String(shot.i2v_source || '') ||
       String(draft.value.kind || '') !== String(shot.kind || '') ||
       String(draft.value.size || '') !== String(shot.size || '') ||
       String(draft.value.speaker || '') !== String(shot.speaker || '') ||
+      String(draft.value.voice || '') !== String(shot.voice || '') ||
       rolesKey(draft.value.角色) !== rolesKey(shot.角色)
     )
   })
@@ -197,7 +217,21 @@ export function useDramaStudio() {
   })
 
   function emptyDraft() {
-    return { 画面: '', 对白: '', 字幕: '', 角色: [], camera: 'punch_in', duration: 3, i2v: 'auto', kind: 'establishing', size: 'WS', speaker: '' }
+    return {
+      画面: '',
+      字幕: '',
+      旁白: '',
+      角色: [],
+      camera: 'punch_in',
+      duration: 3,
+      i2v: 'auto',
+      i2v_ladder: '',
+      i2v_source: '',
+      kind: 'establishing',
+      size: 'WS',
+      speaker: '',
+      voice: '',
+    }
   }
 
   function emptyCharDraft() {
@@ -228,18 +262,76 @@ export function useDramaStudio() {
     return list.map((x) => String(x || '').trim()).filter(Boolean).join(',')
   }
 
+  /** Mirror backend spoken_text / clean_subtitle for voice draft defaults. */
+  function cleanSpokenText(dialogue, subtitle = '') {
+    const text = String(dialogue || '').trim()
+    if (text) {
+      const quoteRe = /[「『“"]([^」』”"]+)[」』”"]/g
+      const quotes = []
+      let m
+      while ((m = quoteRe.exec(text)) !== null) {
+        const q = String(m[1] || '').trim()
+        if (q) quotes.push(q)
+      }
+      if (quotes.length) {
+        let out = quotes[0]
+        for (let i = 1; i < quotes.length; i += 1) {
+          if (!/[。！？!?…]$/.test(out)) out += '。'
+          out += quotes[i]
+        }
+        return out
+      }
+      let cleaned = text.replace(
+        /^(?:【[^】]{1,12}】|\[[^\]]{1,12}\])?[^:：\s「『“"]{1,16}(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*/,
+        '',
+      )
+      cleaned = cleaned.replace(/[（(][^）)]{0,24}[）)]/g, '').trim()
+      cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/^[ ：:，,]+|[ ：:，,]+$/g, '')
+      if (cleaned) return cleaned
+    }
+    return cleanSubtitleText(subtitle)
+  }
+
+  function cleanSubtitleText(subtitle) {
+    const text = String(subtitle || '').trim()
+    if (!text) return ''
+    let cleaned = text.replace(
+      /^(?:【[^】]{1,12}】|\[[^\]]{1,12}\])?[^:：\s「『“"]{1,16}(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*/,
+      '',
+    )
+    cleaned = cleaned.replace(/[（(][^）)]{0,24}[）)]/g, '').trim()
+    cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/^[ ：:，,]+|[ ：:，,]+$/g, '')
+    return cleaned || text
+  }
+
+  function voiceForSpeaker(speaker, shot) {
+    const name = String(speaker || '').trim()
+    if (name) {
+      const hit = (characters.value || []).find(
+        (c) => c.name === name || c.id === name || (c.aliases || []).includes(name),
+      )
+      if (hit?.voice) return String(hit.voice)
+    }
+    return String(shot?.voice || '')
+  }
+
   function fillDraft(shot) {
+    const speaker = shot?.speaker || ''
     draft.value = {
       画面: shot?.画面 || '',
-      对白: shot?.对白 || '',
-      字幕: shot?.字幕 || '',
+      // Keep raw script text so save/chat never strip speaker prefixes.
+      字幕: String(shot?.字幕 || shot?.对白 || ''),
+      旁白: String(shot?.旁白 || ''),
       角色: Array.isArray(shot?.角色) ? [...shot.角色] : [],
       camera: shot?.camera || 'punch_in',
       duration: Number(shot?.duration || 3),
       i2v: shot?.i2v || 'auto',
+      i2v_ladder: String(shot?.i2v_ladder || ''),
+      i2v_source: String(shot?.i2v_source || ''),
       kind: shot?.kind || 'establishing',
       size: shot?.size || 'WS',
-      speaker: shot?.speaker || '',
+      speaker,
+      voice: String(shot?.voice || '').trim() || voiceForSpeaker(speaker, shot),
     }
     fillTlDraft(shot)
   }
@@ -588,11 +680,16 @@ export function useDramaStudio() {
       const shot = selected.value
       const body = {}
       if (String(draft.value.画面 || '') !== String(shot.画面 || '')) body.画面 = draft.value.画面
-      if (String(draft.value.对白 || '') !== String(shot.对白 || '')) body.对白 = draft.value.对白
       if (String(draft.value.字幕 || '') !== String(shot.字幕 || '')) body.字幕 = draft.value.字幕
+      if (String(draft.value.旁白 || '') !== String(shot.旁白 || '')) body.旁白 = draft.value.旁白
       if (String(draft.value.camera || '') !== String(shot.camera || '')) body.camera = draft.value.camera
       if (Number(draft.value.duration || 0) !== Number(shot.duration || 0)) {
-        body.duration = Number(draft.value.duration)
+        const dur = Number(draft.value.duration)
+        if (!Number.isFinite(dur) || dur <= 0) {
+          error.value = '时长须为大于 0 的数字'
+          return
+        }
+        body.duration = dur
       }
       if (rolesKey(draft.value.角色) !== rolesKey(shot.角色)) {
         body.角色 = [...(draft.value.角色 || [])]
@@ -600,10 +697,19 @@ export function useDramaStudio() {
       if (String(draft.value.i2v || 'auto') !== String(shot.i2v || 'auto')) {
         body.i2v = draft.value.i2v || 'auto'
       }
+      if (String(draft.value.i2v_ladder || '') !== String(shot.i2v_ladder || '')) {
+        body.i2v_ladder = draft.value.i2v_ladder || ''
+      }
+      if (String(draft.value.i2v_source || '') !== String(shot.i2v_source || '')) {
+        body.i2v_source = draft.value.i2v_source || ''
+      }
       if (String(draft.value.kind || '') !== String(shot.kind || '')) body.kind = draft.value.kind
       if (String(draft.value.size || '') !== String(shot.size || '')) body.size = draft.value.size
       if (String(draft.value.speaker || '') !== String(shot.speaker || '')) {
         body.speaker = draft.value.speaker || ''
+      }
+      if (String(draft.value.voice || '') !== String(shot.voice || '')) {
+        body.voice = draft.value.voice || ''
       }
       if (!Object.keys(body).length) {
         notice.value = '没有改动'
@@ -612,7 +718,9 @@ export function useDramaStudio() {
       await dramaApi.patchShot(slug.value, episodeN.value, selectedN.value, body)
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = '已保存（未重渲）。脏层会在下次渲染时更新。'
+      notice.value = Object.prototype.hasOwnProperty.call(body, 'duration')
+        ? '已保存：时长已同步到剧本时间轴（后续镜头顺延）。脏层会在下次渲染时更新。'
+        : '已保存（未重渲）。脏层会在下次渲染时更新。'
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -1159,6 +1267,10 @@ export function useDramaStudio() {
         : '请先在「画面」步骤锁定关键帧后再生成视频'
       return
     }
+    if (dirty.value) {
+      await saveShot()
+      if (error.value) return
+    }
     rendering.value = true
     error.value = ''
     notice.value = ''
@@ -1204,20 +1316,26 @@ export function useDramaStudio() {
 
   async function generateShotLip() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
+    if (dirty.value) {
+      await saveShot()
+      if (error.value) return
+    }
+    rendering.value = true
     error.value = ''
     notice.value = ''
     try {
-      const result = await dramaApi.generateLip(slug.value, episodeN.value, selectedN.value)
+      // 声音页：配音 + 口型一起重建（与批量一致）
+      const result = await dramaApi.rerenderShot(slug.value, episodeN.value, selectedN.value, ['voice', 'lip'])
       if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = `Shot ${selectedN.value} 口型已加入后台队列`
-        return
+        await waitForJob(result, slug.value)
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = `口型完成（${result.lip_source || 'none'}）`
+      notice.value = `Shot ${selectedN.value} 配音与口型已完成`
     } catch (e) {
       error.value = e.message || String(e)
+    } finally {
+      rendering.value = false
     }
   }
 
@@ -1662,6 +1780,52 @@ export function useDramaStudio() {
     return data
   }
 
+  function shotChatKey(stage, shotN) {
+    return `${stage}:${episodeN.value || 0}:${shotN}`
+  }
+
+  function shotChatMessages(stage, shotN) {
+    if (!stage || !shotN) return []
+    return shotChatHistory.value[shotChatKey(stage, shotN)] || []
+  }
+
+  function pushShotChatMessage(stage, shotN, role, content) {
+    if (!stage || !shotN || !content) return
+    const key = shotChatKey(stage, shotN)
+    const prev = shotChatHistory.value[key] || []
+    shotChatHistory.value = {
+      ...shotChatHistory.value,
+      [key]: [...prev, { role, content }],
+    }
+  }
+
+  async function refineShotChat(stage, shotN, instruction) {
+    const text = String(instruction || '').trim()
+    if (!slug.value || !episodeN.value || !shotN || !text) return null
+    pushShotChatMessage(stage, shotN, 'user', text)
+    saving.value = true
+    error.value = ''
+    try {
+      const data = await dramaApi.refineShot(slug.value, episodeN.value, shotN, text, stage)
+      // Always reload episode so scriptDraft / cascaded timings stay globally in sync.
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      if (data?.shot && Number(selectedN.value) === Number(shotN)) {
+        fillDraft(data.shot)
+      }
+      const reply = data?.reply || '已更新分镜字段。'
+      pushShotChatMessage(stage, shotN, 'assistant', reply)
+      notice.value = reply
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+      pushShotChatMessage(stage, shotN, 'assistant', error.value)
+      return null
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function generateAllCharacterRefs(category = '') {
     if (!slug.value) return
     rendering.value = true
@@ -1828,10 +1992,11 @@ export function useDramaStudio() {
     try {
       for (const s of shots.value) {
         if ((s.locked || []).includes('shot')) continue
-        const hasDialogue = Boolean((s.对白 || '').trim() || (s.字幕 || '').trim())
+        // 配音只看字幕台词（旁白是画外说明，不进 TTS）
+        const hasDialogue = Boolean(String(s.字幕 || '').trim())
         if (!hasDialogue) continue
         try {
-          // 配音 + 口型一起走同一次重建（TTS 生成对白语音，再开口型）
+          // 配音 + 口型一起走同一次重建（TTS 生成台词语音，再开口型）
           await dramaApi.rerenderShot(slug.value, ep, s.n, ['voice', 'lip'])
           done += 1
         } catch {
@@ -1954,6 +2119,8 @@ export function useDramaStudio() {
     castChatHistory,
     castChatMessages,
     sendCastChatRefine,
+    shotChatMessages,
+    refineShotChat,
     generateAllCharacterRefs,
     chooseCharacterCandidate,
     deleteCharacterCandidate,

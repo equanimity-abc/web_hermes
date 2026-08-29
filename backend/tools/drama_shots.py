@@ -55,7 +55,7 @@ CANDIDATE_COUNT = 4
 WALL_MAX = 4
 LAYER_LABELS = {
     "scene": "画面",
-    "overlay": "字幕",
+    "overlay": "字幕叠层",
     "voice": "配音",
     "clip": "成片",
     "motion": "运动",
@@ -64,7 +64,25 @@ LAYER_LABELS = {
     "assemble": "整集拼接",
     "shot": "整镜",
 }
-_CONTENT_KEYS = ("画面", "对白", "字幕", "角色", "duration", "timing")
+# 字幕 = 台词（配音 + 底部字幕）；旁白 = 画外说明（左上角竖排）
+_CONTENT_KEYS = ("画面", "字幕", "旁白", "角色", "duration", "timing")
+
+
+def migrate_shot_script_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Legacy 对白/字幕 → 字幕/旁白. Idempotent for already-migrated shots."""
+    data = dict(raw or {})
+    if "对白" in data:
+        dialogue = data.pop("对白")
+        if "旁白" not in data:
+            data["旁白"] = data.get("字幕", "")
+        data["字幕"] = dialogue
+    elif "旁白" not in data and "字幕" in data:
+        # Ambiguous single field: keep as 字幕 (台词); 旁白 empty
+        data.setdefault("旁白", "")
+    else:
+        data.setdefault("字幕", data.get("字幕", ""))
+        data.setdefault("旁白", data.get("旁白", ""))
+    return data
 
 
 def utc_now() -> str:
@@ -300,6 +318,7 @@ def _asset_exists(rel: str) -> bool:
 
 def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
     """Upgrade legacy shot records (pre-D0 flat clip/scene fields) to assets schema."""
+    raw = migrate_shot_script_fields(raw)
     n = int(raw.get("n") or 0)
     defaults = shot_assets(slug, episode, n)
     existing = raw.get("assets") if isinstance(raw.get("assets"), dict) else {}
@@ -315,7 +334,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
     if legacy_scene in ("ai", "fallback") and not scene_source:
         scene_source = str(legacy_scene)
 
-    need_voice = bool(str(raw.get("对白") or "").strip() or str(raw.get("字幕") or "").strip())
+    need_voice = bool(str(raw.get("字幕") or "").strip())
     dirty = _as_str_list(raw.get("dirty"))
     if not dirty and "dirty" not in raw:
         # Fresh legacy docs have no dirty tracking — mark missing layers.
@@ -340,8 +359,8 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "end": float(raw.get("end") or duration),
         "duration": duration,
         "画面": str(raw.get("画面") or ""),
-        "对白": str(raw.get("对白") or ""),
         "字幕": str(raw.get("字幕") or ""),
+        "旁白": str(raw.get("旁白") or ""),
         "角色": normalize_roles(raw.get("角色")),
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
@@ -403,6 +422,7 @@ def normalize_doc(data: dict[str, Any], slug: str, episode: int) -> dict[str, An
 
 
 def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
+    raw = migrate_shot_script_fields(raw)
     n = int(raw.get("n") or 0)
     assets = shot_assets(slug, episode, n)
     duration = float(raw.get("duration") or 5)
@@ -413,8 +433,8 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "end": float(raw.get("end") or duration),
         "duration": duration,
         "画面": str(raw.get("画面") or ""),
-        "对白": str(raw.get("对白") or ""),
         "字幕": str(raw.get("字幕") or ""),
+        "旁白": str(raw.get("旁白") or ""),
         "角色": normalize_roles(raw.get("角色")),
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
@@ -444,7 +464,7 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
     dirty: list[str] = []
 
     def changed(key: str) -> bool:
-        if key == "duration":
+        if key in ("duration", "start", "end"):
             try:
                 return abs(float(old.get(key) or 0) - float(new_content.get(key) or 0)) > 0.05
             except (TypeError, ValueError):
@@ -453,16 +473,16 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
 
     if changed("画面"):
         dirty.extend(["scene", "clip"])
-    if changed("对白"):
-        dirty.extend(["voice", "overlay", "clip", "lip"])
     if changed("字幕"):
+        dirty.extend(["voice", "overlay", "clip", "lip"])
+    if changed("旁白"):
         dirty.extend(["overlay", "clip"])
     if roles_key(old.get("角色")) != roles_key(new_content.get("角色")):
         dirty.extend(["scene", "voice", "clip"])
     if changed("speaker"):
         dirty.extend(["lip", "clip"])
-    if changed("timing"):
-        dirty.extend(["clip"])
+    if changed("timing") or changed("duration") or changed("start") or changed("end"):
+        dirty.extend(["clip", "motion"])
     if str(old.get("camera") or "") != str(new_content.get("camera") or "") and str(
         new_content.get("camera") or ""
     ):
@@ -481,6 +501,207 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
         if layer in dirty and layer not in locked and layer not in ordered:
             ordered.append(layer)
     return ordered
+
+
+def format_timing_range(start: float, end: float) -> str:
+    """Format absolute timeline range for markdown headers, e.g. 0-5s / 5.5-12s."""
+
+    def _fmt(x: float) -> str:
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            v = 0.0
+        if abs(v - round(v)) < 1e-6:
+            return str(int(round(v)))
+        return f"{v:.2f}".rstrip("0").rstrip(".")
+
+    start_f = max(0.0, float(start or 0))
+    end_f = max(start_f + MIN_PLAY_SEC, float(end or 0))
+    return f"{_fmt(start_f)}-{_fmt(end_f)}s"
+
+
+def sync_shot_timing_fields(shot: dict[str, Any]) -> dict[str, Any]:
+    """Keep start/end/duration/timing consistent on one shot (duration wins when set)."""
+    try:
+        start = float(shot.get("start") or 0)
+    except (TypeError, ValueError):
+        start = 0.0
+    try:
+        duration = float(shot.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration <= 0:
+        try:
+            end = float(shot.get("end") or 0)
+        except (TypeError, ValueError):
+            end = start + 3.0
+        duration = max(MIN_PLAY_SEC, end - start)
+    start = max(0.0, start)
+    end = start + duration
+    shot["start"] = round(start, 3)
+    shot["end"] = round(end, 3)
+    shot["duration"] = round(duration, 3)
+    shot["timing"] = format_timing_range(shot["start"], shot["end"])
+    return shot
+
+
+def cascade_shot_timings(doc: dict[str, Any], from_n: int | None = None) -> list[int]:
+    """Recompute absolute start/end/timing for shots in order.
+
+    Durations stay as authored; later shots shift so the timeline stays contiguous.
+    If from_n is set, earlier shots keep their start; that shot keeps start and
+    only end/timing refresh from duration; subsequent shots shift after it.
+    Returns shot numbers whose timing fields changed.
+    """
+    shots = sorted((doc.get("shots") or []), key=lambda s: int(s.get("n") or 0))
+    if not shots:
+        return []
+    changed: list[int] = []
+    cursor = 0.0
+    pivot = int(from_n) if from_n is not None else None
+
+    for shot in shots:
+        n = int(shot.get("n") or 0)
+        before = (
+            float(shot.get("start") or 0),
+            float(shot.get("end") or 0),
+            float(shot.get("duration") or 0),
+            str(shot.get("timing") or ""),
+        )
+
+        try:
+            duration = float(shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration <= 0:
+            duration = max(MIN_PLAY_SEC, float(shot.get("end") or 0) - float(shot.get("start") or 0))
+        duration = max(MIN_PLAY_SEC, duration)
+
+        if pivot is None:
+            start = cursor
+        elif n < pivot:
+            # Keep authored placement; only normalize fields.
+            try:
+                start = float(shot.get("start") or 0)
+            except (TypeError, ValueError):
+                start = cursor
+            start = max(0.0, start)
+            shot["start"] = round(start, 3)
+            shot["duration"] = round(duration, 3)
+            shot["end"] = round(start + duration, 3)
+            shot["timing"] = format_timing_range(shot["start"], shot["end"])
+            cursor = float(shot["end"])
+            after = (shot["start"], shot["end"], shot["duration"], shot["timing"])
+            if before != after:
+                changed.append(n)
+            continue
+        elif n == pivot:
+            try:
+                start = float(shot.get("start") or cursor)
+            except (TypeError, ValueError):
+                start = cursor
+            start = max(0.0, start)
+        else:
+            start = cursor
+
+        shot["start"] = round(start, 3)
+        shot["duration"] = round(duration, 3)
+        shot["end"] = round(start + duration, 3)
+        shot["timing"] = format_timing_range(shot["start"], shot["end"])
+        after = (shot["start"], shot["end"], shot["duration"], shot["timing"])
+        if before != after:
+            changed.append(n)
+            if pivot is None or n >= pivot:
+                locked = set(_as_str_list(shot.get("locked")))
+                dirty = _as_str_list(shot.get("dirty"))
+                for layer in ("clip", "motion"):
+                    if layer not in locked and layer not in dirty:
+                        dirty.append(layer)
+                shot["dirty"] = dirty
+                if dirty:
+                    shot["status"] = "dirty"
+        cursor = float(shot["end"])
+
+    total = round(cursor, 2)
+    meta = doc.setdefault("meta", {})
+    if isinstance(meta, dict):
+        meta["时长"] = f"{int(total) if abs(total - round(total)) < 1e-6 else total}s"
+    return changed
+
+
+def episode_total_seconds(doc: dict[str, Any]) -> float:
+    shots = doc.get("shots") or []
+    if not shots:
+        return 0.0
+    try:
+        return max(float(s.get("end") or 0) for s in shots)
+    except (TypeError, ValueError):
+        return sum(max(MIN_PLAY_SEC, float(s.get("duration") or 0)) for s in shots)
+
+
+def shot_timing_drift(shot: dict[str, Any]) -> bool:
+    """True when duration and start/end/timing disagree (duration is authoring SoT)."""
+    try:
+        start = float(shot.get("start") or 0)
+        end = float(shot.get("end") or 0)
+        duration = float(shot.get("duration") or 0)
+    except (TypeError, ValueError):
+        return True
+    if duration <= 0:
+        return True
+    if abs((end - start) - duration) > 0.05:
+        return True
+    expected = format_timing_range(start, start + duration)
+    actual = str(shot.get("timing") or "").strip()
+    if not actual:
+        return True
+    # Compare numeric ranges, ignore formatting noise.
+    return abs(start + duration - end) > 0.05 or actual.replace(" ", "") != expected.replace(" ", "")
+
+
+def doc_timings_drift(doc: dict[str, Any] | None) -> bool:
+    if not doc:
+        return False
+    shots = sorted((doc.get("shots") or []), key=lambda s: int(s.get("n") or 0))
+    if not shots:
+        return False
+    cursor = 0.0
+    for shot in shots:
+        if shot_timing_drift(shot):
+            return True
+        try:
+            start = float(shot.get("start") or 0)
+        except (TypeError, ValueError):
+            return True
+        if abs(start - cursor) > 0.05:
+            return True
+        try:
+            cursor = float(shot.get("end") or 0)
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
+def reconcile_doc_timings(doc: dict[str, Any]) -> list[int]:
+    """Make start/end/timing match each shot.duration and form a contiguous timeline.
+
+    Duration is the source of truth (video/voice UI). Returns changed shot numbers.
+    """
+    if not doc:
+        return []
+    for shot in doc.get("shots") or []:
+        # Prefer duration; rebuild end/timing from start after cascade.
+        try:
+            dur = float(shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        if dur <= 0:
+            try:
+                dur = max(MIN_PLAY_SEC, float(shot.get("end") or 0) - float(shot.get("start") or 0))
+            except (TypeError, ValueError):
+                dur = 3.0
+            shot["duration"] = dur
+    return cascade_shot_timings(doc, from_n=None)
 
 
 def parse_layers(raw: Any, *, extra: tuple[str, ...] = ()) -> list[str]:
@@ -504,15 +725,20 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
     dirty: list[str] = []
     if "画面" in patch:
         dirty.extend(["scene", "clip"])
-    if "对白" in patch:
-        dirty.extend(["voice", "overlay", "clip", "lip"])
     if "字幕" in patch:
+        dirty.extend(["voice", "overlay", "clip", "lip"])
+    if "旁白" in patch:
         dirty.extend(["overlay", "clip"])
+    if "对白" in patch:
+        # legacy alias → same as 字幕
+        dirty.extend(["voice", "overlay", "clip", "lip"])
     if "角色" in patch:
         dirty.extend(["scene", "voice", "clip"])
     if "speaker" in patch:
         dirty.extend(["lip", "clip"])
     if "timing" in patch or "duration" in patch or "camera" in patch:
+        dirty.extend(["clip", "motion"])
+    if "i2v" in patch or "i2v_ladder" in patch or "i2v_source" in patch:
         dirty.extend(["clip", "motion"])
     if "kind" in patch or "size" in patch:
         dirty.extend(["clip", "motion", "lip"])
@@ -537,20 +763,29 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     if "scene" in locked:
         patch.pop("画面", None)
     if "overlay" in locked:
+        patch.pop("旁白", None)
         patch.pop("字幕", None)
+    if "voice" in locked:
+        patch.pop("voice", None)
     if "voice" in locked and "overlay" in locked:
+        patch.pop("字幕", None)
         patch.pop("对白", None)
     if "clip" in locked:
-        for key in ("camera", "duration", "timing", "start", "end", "kind", "size"):
+        for key in ("camera", "duration", "timing", "start", "end", "kind", "size", "i2v", "i2v_ladder"):
             patch.pop(key, None)
     if "kind" in locked:
         patch.pop("kind", None)
         patch.pop("size", None)
 
-    before = {k: shot.get(k) for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice")}
-    for key in ("画面", "对白", "字幕", "timing", "camera"):
+    before = {
+        k: shot.get(k)
+        for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice", "i2v", "i2v_ladder", "i2v_source")
+    }
+    for key in ("画面", "字幕", "旁白", "timing", "camera"):
         if key in patch and patch[key] is not None:
             shot[key] = str(patch[key])
+    if "对白" in patch and patch["对白"] is not None and "字幕" not in patch:
+        shot["字幕"] = str(patch["对白"])
     if "角色" in patch and patch["角色"] is not None:
         shot["角色"] = normalize_roles(patch["角色"])
     if "kind" in patch and patch["kind"] is not None:
@@ -567,18 +802,51 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         shot["size"] = size
     if "speaker" in patch:
         shot["speaker"] = str(patch["speaker"] or "").strip()
+    if "voice" in patch:
+        shot["voice"] = str(patch["voice"] or "").strip()
+    if "i2v" in patch and patch["i2v"] is not None:
+        shot["i2v"] = normalize_i2v_mode(patch["i2v"])
+    if "i2v_ladder" in patch:
+        from tools.drama_models import normalize_ladder
+
+        raw = str(patch.get("i2v_ladder") or "").strip()
+        shot["i2v_ladder"] = normalize_ladder(raw) if raw else ""
+    if "i2v_source" in patch:
+        src = str(patch.get("i2v_source") or "").strip().lower()
+        shot["i2v_source"] = "" if src in ("", "none") else src
     if "角色" in patch:
         roles = list(shot.get("角色") or [])
         if shot.get("speaker") and shot["speaker"] not in roles:
             shot["speaker"] = str(roles[0] if roles else "")
         if not shot.get("speaker"):
             shot["speaker"] = infer_speaker(shot)
-    if "duration" in patch and patch["duration"] is not None:
-        shot["duration"] = float(patch["duration"])
-    if "start" in patch and patch["start"] is not None:
-        shot["start"] = float(patch["start"])
-    if "end" in patch and patch["end"] is not None:
-        shot["end"] = float(patch["end"])
+
+    timing_keys = ("duration", "timing", "start", "end")
+    if any(k in patch and patch[k] is not None for k in timing_keys):
+        # Prefer explicit timing string; else duration/start/end.
+        if "timing" in patch and patch.get("timing") is not None:
+            timing = str(patch.get("timing") or "").strip()
+            if timing:
+                from tools.drama_video import _parse_timing
+
+                start, end, duration = _parse_timing(timing)
+                shot["start"] = start
+                shot["end"] = end
+                shot["duration"] = duration
+                shot["timing"] = format_timing_range(start, end)
+        else:
+            if "start" in patch and patch["start"] is not None:
+                shot["start"] = float(patch["start"])
+            if "duration" in patch and patch["duration"] is not None:
+                shot["duration"] = float(patch["duration"])
+            elif "end" in patch and patch["end"] is not None:
+                try:
+                    start = float(shot.get("start") or 0)
+                except (TypeError, ValueError):
+                    start = 0.0
+                shot["duration"] = max(MIN_PLAY_SEC, float(patch["end"]) - start)
+            sync_shot_timing_fields(shot)
+
     dirty = infer_dirty({**shot, **before, "locked": shot.get("locked")}, shot)
     if "duration" in patch and patch["duration"] is not None:
         if "clip" not in dirty and "clip" not in locked:
@@ -600,6 +868,16 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     if str(before.get("voice") or "") != str(shot.get("voice") or ""):
         if "voice" not in dirty and "voice" not in locked:
             dirty.append("voice")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
+    if str(before.get("i2v") or "auto") != str(shot.get("i2v") or "auto") or str(
+        before.get("i2v_ladder") or ""
+    ) != str(shot.get("i2v_ladder") or ""):
+        if "motion" not in dirty:
+            dirty.append("motion")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
+    if str(before.get("i2v_source") or "") != str(shot.get("i2v_source") or ""):
         if "clip" not in dirty and "clip" not in locked:
             dirty.append("clip")
     dirty = [layer for layer in dirty if layer not in locked]
@@ -662,7 +940,7 @@ def merge_from_parsed(
         old = old_by_n.get(rec["n"])
         roles = resolve_role_ids(rec.get("角色"), cards)
         if not roles:
-            roles = infer_roles_from_dialogue(str(rec.get("对白") or ""), cards)
+            roles = infer_roles_from_dialogue(str(rec.get("字幕") or ""), cards)
         if not roles and old:
             roles = normalize_roles(old.get("角色"))
         rec["角色"] = roles
@@ -687,7 +965,7 @@ def merge_from_parsed(
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
             rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
             rec["chosen"] = str(old.get("chosen") or "")
-            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "kind", "size", "speaker", "voice"):
+            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "i2v_ladder", "kind", "size", "speaker", "voice"):
                 if key in old:
                     rec[key] = old[key]
             if "kind" in locked:
@@ -697,25 +975,41 @@ def merge_from_parsed(
             if "scene" in locked:
                 rec["scene_source"] = str(old.get("scene_source") or rec["scene_source"])
             if "overlay" in locked:
-                rec["字幕"] = str(old.get("字幕") or rec["字幕"])
+                rec["旁白"] = str(old.get("旁白") or rec.get("旁白") or "")
             if "voice" in locked and "overlay" in locked:
-                rec["对白"] = str(old.get("对白") or rec["对白"])
-            if "clip" in locked:
+                rec["字幕"] = str(old.get("字幕") or old.get("对白") or rec.get("字幕") or "")
+            timing_changed = (
+                abs(float(rec.get("duration") or 0) - float(old.get("duration") or 0)) > 0.05
+                or abs(float(rec.get("start") or 0) - float(old.get("start") or 0)) > 0.05
+                or abs(float(rec.get("end") or 0) - float(old.get("end") or 0)) > 0.05
+                or str(rec.get("timing") or "") != str(old.get("timing") or "")
+            )
+            if "clip" in locked and not timing_changed:
                 rec["duration"] = float(old.get("duration") or rec["duration"])
+                rec["start"] = float(old.get("start") or rec["start"])
+                rec["end"] = float(old.get("end") or rec["end"])
+                rec["timing"] = str(old.get("timing") or rec.get("timing") or "")
             rec["dirty"] = infer_dirty(old, rec)
+            if timing_changed:
+                for layer in ("clip", "motion"):
+                    if layer not in rec["locked"] and layer not in rec["dirty"]:
+                        rec["dirty"].append(layer)
             if not rec["dirty"] and _asset_exists(rec["assets"].get("clip") or ""):
                 rec["status"] = "rendered"
                 rec["dirty"] = []
-                rec["duration"] = float(old.get("duration") or rec["duration"])
+                if not timing_changed:
+                    rec["duration"] = float(old.get("duration") or rec["duration"])
             else:
                 rec["status"] = "dirty" if rec["dirty"] else "pending"
-            if not rec["dirty"]:
-                # Keep generated duration from last render when content unchanged.
+            if not rec["dirty"] and not timing_changed:
+                # Keep generated duration from last render when script timing unchanged.
                 rec["duration"] = float(old.get("duration") or rec["duration"])
+            # Always keep start/end/timing aligned with duration after merge.
+            sync_shot_timing_fields(rec)
         else:
             rec["dirty"] = list(LAYERS)
             rec["status"] = "pending"
-        need_voice = bool(str(rec.get("对白") or "").strip() or str(rec.get("字幕") or "").strip())
+        need_voice = bool(str(rec.get("字幕") or "").strip())
         for layer in LAYERS:
             if layer == "voice" and not need_voice:
                 continue
@@ -738,12 +1032,18 @@ def merge_from_parsed(
     shots.sort(key=lambda s: int(s["n"]))
     existing_tl = (existing or {}).get("timeline")
     timeline = normalize_timeline(existing_tl, shots)
+    meta = parsed.get("meta") or {}
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        total = round(episode_total_seconds({"shots": shots}), 2)
+        if total > 0:
+            meta["时长"] = f"{int(total) if abs(total - round(total)) < 1e-6 else total}s"
 
     return {
         "slug": slug,
         "episode": episode,
         "title": title or parsed.get("title") or f"第{episode}集",
-        "meta": parsed.get("meta") or {},
+        "meta": meta,
         "script_path": script_rel(slug, episode),
         "work_dir": work_rel(slug, episode),
         "output": output_rel(slug, episode),
@@ -802,8 +1102,8 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "timing": shot.get("timing"),
         "duration": shot.get("duration"),
         "画面": shot.get("画面"),
-        "对白": shot.get("对白"),
         "字幕": shot.get("字幕"),
+        "旁白": shot.get("旁白"),
         "角色": normalize_roles(shot.get("角色")),
         "kind": infer_kind(shot),
         "size": infer_size(shot),
@@ -816,6 +1116,7 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "transition": tl["transition"],
         "i2v": normalize_i2v_mode(shot.get("i2v")),
         "i2v_source": shot.get("i2v_source") or "",
+        "i2v_ladder": str(shot.get("i2v_ladder") or ""),
         "lip_source": shot.get("lip_source") or "",
         "lip_score": shot.get("lip_score") or None,
         "keys": list(shot.get("keys") or []),
@@ -855,7 +1156,7 @@ def script_impact(
         if old is None:
             changed = ["新增"]
         else:
-            for key in ("画面", "对白", "字幕", "timing"):
+            for key in ("画面", "字幕", "旁白", "timing"):
                 if str(old.get(key) or "") != str(shot.get(key) or ""):
                     changed.append(key)
             if roles_key(old.get("角色")) != roles_key(shot.get("角色")):

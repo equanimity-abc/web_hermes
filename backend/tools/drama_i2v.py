@@ -49,6 +49,7 @@ def should_try_i2v(shot: dict[str, Any], *, slug: str | None = None) -> bool:
 
 
 def i2v_seconds(shot: dict[str, Any] | None = None) -> float:
+    """Provider I2V clip length (capped). Real APIs usually max ~4s; longer VO loops in encode."""
     raw = os.getenv("I2V_SECONDS")
     if shot and shot.get("i2v_seconds") is not None:
         raw = str(shot.get("i2v_seconds"))
@@ -57,6 +58,23 @@ def i2v_seconds(shot: dict[str, Any] | None = None) -> float:
     except (TypeError, ValueError):
         sec = DEFAULT_SECONDS
     return max(MIN_SECONDS, min(sec, MAX_SECONDS))
+
+
+KEN_BURNS_MAX_SECONDS = 30.0
+
+
+def motion_seconds(shot: dict[str, Any] | None = None) -> float:
+    """Ken Burns / fallback motion length: prefer script shot.duration."""
+    base = i2v_seconds(shot)
+    if not shot:
+        return base
+    try:
+        dur = float(shot.get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    if dur > base:
+        return max(MIN_SECONDS, min(dur, KEN_BURNS_MAX_SECONDS))
+    return base
 
 
 def _ffmpeg_bin() -> str:
@@ -335,6 +353,54 @@ def _concat_motion(first: Path, second: Path, dest: Path) -> bool:
                 pass
 
 
+def ensure_motion_seconds(path: Path, target: float) -> bool:
+    """Loop-pad a short motion mp4 up to script duration (provider I2V often max ~4s)."""
+    from tools.drama_video import FPS, _probe_duration, _run_ffmpeg
+
+    target = float(target or 0)
+    if target <= 0.1 or not path.is_file():
+        return False
+    cur = float(_probe_duration(path) or 0)
+    if cur <= 0.05 or cur + 0.12 >= target:
+        return cur + 0.12 >= target
+    tmp = path.with_suffix(".pad.tmp.mp4")
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(path),
+                "-t",
+                f"{target:.2f}",
+                "-an",
+                "-r",
+                str(FPS),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ],
+            timeout=180,
+        )
+        if not tmp.is_file() or tmp.stat().st_size < 500:
+            return False
+        tmp.replace(path)
+        return float(_probe_duration(path) or 0) + 0.12 >= target
+    except RuntimeError:
+        return False
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def _key_image(shot: dict[str, Any], index: int, fallback: Path) -> Path:
     keys = shot.get("keys") if isinstance(shot.get("keys"), list) else []
     if index < len(keys) and isinstance(keys[index], dict):
@@ -450,47 +516,59 @@ def try_generate_i2v(
 
     from tools.drama_models import effective_motion_ladder, models_with_overrides
 
-    sec = i2v_seconds(shot) if seconds is None else max(MIN_SECONDS, min(float(seconds), MAX_SECONDS))
+    # Provider I2V stays capped (~4s APIs); Ken Burns / keys / final motion follow script duration.
+    provider_sec = i2v_seconds(shot) if seconds is None else max(MIN_SECONDS, min(float(seconds), MAX_SECONDS))
+    ken_sec = motion_seconds(shot) if seconds is None else max(provider_sec, float(seconds))
+    ken_sec = max(MIN_SECONDS, min(ken_sec, KEN_BURNS_MAX_SECONDS))
+    sec = provider_sec
+    # Local mock generators should already render full script length (not the API cap).
+    local_mock = {"mock", "mock_ai", "l0"}
     slug = str(shot.get("_slug") or "") or None
     episode = int(shot.get("_episode") or 0) or None
     models = models_with_overrides(slug, shot=shot, episode=episode) if slug else None
     planned = effective_motion_ladder(shot, slug=slug, models=models)
     provider = _resolved_i2v_provider(shot)
     shot["i2v_provider"] = provider
+    run_sec = ken_sec if provider in local_mock else sec
+
+    def _finish(source: str) -> str:
+        if source in ("ai", "keys", "fallback") and dest.is_file():
+            ensure_motion_seconds(dest, ken_sec)
+        return source
 
     if planned == "L4":
         from tools.drama_keys import compose_keys_motion
 
-        if compose_keys_motion(scene, dest, shot, max(sec, 3.0)):
+        if compose_keys_motion(scene, dest, shot, max(ken_sec, 3.0)):
             shot["i2v_ladder"] = "L4"
-            return "keys"
+            return _finish("keys")
 
     if planned == "L3":
-        ok = _run_i2v_provider(provider, scene, dest, shot, max(sec, 3.0))
+        ok = _run_i2v_provider(provider, scene, dest, shot, max(run_sec, 3.0))
         if not ok:
-            ok = _provider_l3_mock(scene, dest, shot, max(sec, 3.0))
+            ok = _provider_l3_mock(scene, dest, shot, max(ken_sec, 3.0))
             if ok:
                 shot["i2v_ladder"] = "L3"
-                return "fallback"
+                return _finish("fallback")
         if ok:
             shot["i2v_ladder"] = "L3"
-            return "ai"
+            return _finish("ai")
         return "none"
 
     if planned == "L0" or provider in ("l0", "none", "off", ""):
         try:
-            _provider_mock_ai(scene, dest, shot, max(sec, 2.5))
-            return "fallback"
+            _provider_mock_ai(scene, dest, shot, max(ken_sec, 2.5))
+            return _finish("fallback")
         except Exception:
             return "none"
 
-    if _run_i2v_provider(provider, scene, dest, shot, sec):
-        return "ai"
+    if _run_i2v_provider(provider, scene, dest, shot, run_sec):
+        return _finish("ai")
 
     # 真 I2V 失败 → 明显 Ken Burns，标记 fallback（不要伪装成 ai）
     try:
-        _provider_mock_ai(scene, dest, shot, max(sec, 2.5))
-        return "fallback"
+        _provider_mock_ai(scene, dest, shot, max(ken_sec, 2.5))
+        return _finish("fallback")
     except Exception:
         return "none"
 
@@ -524,7 +602,7 @@ def generate_shot_i2v(
             "tried": True,
             "i2v_source": source,
             "motion": rel,
-            "seconds": i2v_seconds(shot),
+            "seconds": motion_seconds(shot),
             "ladder": shot.get("i2v_ladder") or ("L4" if source == "keys" else "L1"),
             "deferred": bool(shot.get("i2v_deferred")),
             "provider": shot.get("i2v_provider") or "",

@@ -17,7 +17,7 @@ _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$")
 _SPEAKER = re.compile(r"^[\s【\[]*([^:：\]】\s]{1,16})\s*[]】]?\s*[:：]")
 _SPLIT = re.compile(r"[,，、/|]+")
 
-VOICES = (
+DEFAULT_VOICES: tuple[tuple[str, str], ...] = (
     ("zh-CN-YunxiNeural", "云希 · 男"),
     ("zh-CN-YunyangNeural", "云扬 · 男旁白"),
     ("zh-CN-YunjianNeural", "云健 · 男"),
@@ -27,8 +27,61 @@ VOICES = (
     ("zh-CN-XiaohanNeural", "晓涵 · 女"),
     ("zh-CN-XiaozhenNeural", "晓甄 · 女"),
 )
-VOICE_IDS = tuple(v[0] for v in VOICES)
+# Back-compat alias; prefer list_voice_catalog(slug) for project config.
+VOICES = DEFAULT_VOICES
+VOICE_IDS = tuple(v[0] for v in DEFAULT_VOICES)
 DEFAULT_VOICE = "zh-CN-YunxiNeural"
+
+
+def _parse_voice_rows(raw: Any) -> list[tuple[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        vid = ""
+        label = ""
+        if isinstance(item, dict):
+            vid = str(item.get("id") or item.get("voice") or "").strip()
+            label = str(item.get("label") or item.get("name") or vid).strip() or vid
+        elif isinstance(item, (list, tuple)) and item:
+            vid = str(item[0] or "").strip()
+            label = str(item[1] if len(item) > 1 else vid).strip() or vid
+        elif isinstance(item, str):
+            vid = item.strip()
+            label = vid
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        out.append((vid, label))
+    return out
+
+
+def list_voice_catalog(slug: str | None = None) -> list[tuple[str, str]]:
+    """TTS voice dropdown options: models.json tts.voices, else built-in defaults."""
+    if slug:
+        try:
+            from tools.drama_models import load_models
+
+            tts = (load_models(slug) or {}).get("tts") or {}
+            rows = _parse_voice_rows(tts.get("voices"))
+            if rows:
+                return rows
+        except Exception:
+            pass
+    return list(DEFAULT_VOICES)
+
+
+def public_voices(slug: str | None = None) -> list[dict[str, str]]:
+    return [{"id": vid, "label": label} for vid, label in list_voice_catalog(slug)]
+
+
+def voice_ids_for(slug: str | None = None) -> tuple[str, ...]:
+    return tuple(vid for vid, _ in list_voice_catalog(slug))
+
+
+def default_tts_voices() -> list[dict[str, str]]:
+    return [{"id": vid, "label": label} for vid, label in DEFAULT_VOICES]
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
 CHAR_CANDIDATE_MAX = 4
 REF_SIZE_OPTIONS = (640, 1024, 1980)
@@ -237,9 +290,10 @@ def next_char_candidate_ids(char: dict[str, Any], count: int = 1) -> list[str]:
 def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     cid = parse_character_id(str(raw.get("id") or ""))
     name = str(raw.get("name") or cid).strip() or cid
+    allowed = voice_ids_for(slug)
     voice = str(raw.get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
-    if voice not in VOICE_IDS:
-        voice = DEFAULT_VOICE
+    if voice not in allowed:
+        voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
     ref = str(raw.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     chosen_ref = str(raw.get("chosen_ref") or "").strip()
     candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)
@@ -460,7 +514,7 @@ def resolve_shot_characters(shot: dict[str, Any], characters: list[dict[str, Any
     cast_cards = [c for c in characters if normalize_category(c.get("category")) == "character"]
     tokens = normalize_roles(shot.get("角色"))
     if not tokens:
-        tokens = infer_roles_from_dialogue(str(shot.get("对白") or ""), cast_cards)
+        tokens = infer_roles_from_dialogue(str(shot.get("字幕") or shot.get("对白") or ""), cast_cards)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for token in tokens:
@@ -549,12 +603,14 @@ def delete_char_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
     return rec
 
 
-def primary_voice(characters: list[dict[str, Any]]) -> str:
+def primary_voice(characters: list[dict[str, Any]], *, slug: str | None = None) -> str:
+    allowed = voice_ids_for(slug)
+    fallback = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
     for char in characters:
         voice = str(char.get("voice") or "").strip()
         if voice:
-            return voice if voice in VOICE_IDS else DEFAULT_VOICE
-    return DEFAULT_VOICE
+            return voice if voice in allowed else fallback
+    return fallback
 
 
 def palette_phrase(slug: str, char: dict[str, Any]) -> str:

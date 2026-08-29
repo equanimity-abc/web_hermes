@@ -24,7 +24,16 @@
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
     "lip": { "provider": "mock", "enabled": false },
-    "tts": { "provider": "edge-tts" },
+    "tts": { "provider": "edge-tts", "voices": [
+      { "id": "zh-CN-YunxiNeural", "label": "云希 · 男" },
+      { "id": "zh-CN-YunyangNeural", "label": "云扬 · 男旁白" },
+      { "id": "zh-CN-YunjianNeural", "label": "云健 · 男" },
+      { "id": "zh-CN-YunxiaNeural", "label": "云夏 · 男少年" },
+      { "id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女" },
+      { "id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 女" },
+      { "id": "zh-CN-XiaohanNeural", "label": "晓涵 · 女" },
+      { "id": "zh-CN-XiaozhenNeural", "label": "晓甄 · 女" }
+    ]},
     "subtitle": { "style": "static" }
   }
 }

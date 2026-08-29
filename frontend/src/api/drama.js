@@ -171,6 +171,13 @@ export function refineCharacterRef(slug, cid, instruction) {
   )
 }
 
+export function refineShot(slug, episode, shot, instruction, stage = 'video') {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/refine`,
+    { method: 'POST', body: JSON.stringify({ instruction, stage }) },
+  )
+}
+
 export function chooseCharacterCandidate(slug, cid, candId) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/candidates/${encodeURIComponent(candId)}/choose`,

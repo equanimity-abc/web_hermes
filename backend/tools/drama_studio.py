@@ -8,12 +8,12 @@ from typing import Any
 from urllib.parse import quote
 
 from tools.drama_characters import (
-    VOICES,
     CharacterError,
     delete_character,
     load_characters,
     normalize_roles,
     primary_voice,
+    public_voices,
     resolve_shot_characters,
     save_character_ref,
     set_ref_locked,
@@ -34,10 +34,14 @@ from tools.drama_models import (
 from tools.drama_shots import (
     apply_shot_class,
     apply_patch,
+    cascade_shot_timings,
+    doc_timings_drift,
+    episode_total_seconds,
     find_shot,
     json_rel,
     load_doc,
     public_shot,
+    reconcile_doc_timings,
     save_doc,
     script_impact,
     set_shot_locks,
@@ -177,7 +181,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
         cards = load_characters(slug)
         cast = resolve_shot_characters(shot, cards)
         pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
-        pub["voice_id"] = primary_voice(cast) if cast else ""
+        pub["voice_id"] = primary_voice(cast, slug=slug) if cast else ""
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
         from tools.drama_qc import qc_passed
@@ -279,7 +283,7 @@ def get_project(slug: str) -> dict[str, Any]:
         "episodes": episodes,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
     }
 
 
@@ -331,6 +335,84 @@ def _public_qc(doc: dict[str, Any] | None) -> dict[str, Any]:
     return public_episode_qc(doc)
 
 
+def _script_headers_match_doc(script: str | None, doc: dict[str, Any] | None) -> bool:
+    """False when markdown Shot headers disagree with shots.json timing."""
+    if not doc or script is None:
+        return True
+    from tools.drama_video import parse_episode_markdown
+
+    parsed = parse_episode_markdown(script)
+    by_n = {int(s.get("n") or 0): s for s in (doc.get("shots") or [])}
+    for ps in parsed.get("shots") or []:
+        n = int(ps.get("n") or 0)
+        shot = by_n.get(n)
+        if not shot:
+            continue
+        try:
+            if abs(float(ps.get("duration") or 0) - float(shot.get("duration") or 0)) > 0.05:
+                return False
+            if abs(float(ps.get("start") or 0) - float(shot.get("start") or 0)) > 0.05:
+                return False
+            if abs(float(ps.get("end") or 0) - float(shot.get("end") or 0)) > 0.05:
+                return False
+        except (TypeError, ValueError):
+            return False
+        if str(ps.get("timing") or "").strip() != str(shot.get("timing") or "").strip():
+            return False
+    return True
+
+
+def doc_timings_need_sync(doc: dict[str, Any] | None, script: str | None = None) -> bool:
+    if not doc:
+        return False
+    if doc_timings_drift(doc):
+        return True
+    return not _script_headers_match_doc(script, doc)
+
+
+def write_script_timings_from_doc(script: str, doc: dict[str, Any]) -> str:
+    """Rewrite every ### Shot N (…) header + episode 时长 from shots.json."""
+    from tools.drama_video import patch_episode_meta_duration, patch_shot_in_markdown
+
+    updated = str(script or "")
+    for shot in sorted((doc.get("shots") or []), key=lambda s: int(s.get("n") or 0)):
+        n = int(shot.get("n") or 0)
+        if n <= 0:
+            continue
+        updated = patch_shot_in_markdown(
+            updated,
+            n,
+            {
+                "timing": shot.get("timing"),
+                "start": shot.get("start"),
+                "end": shot.get("end"),
+                "duration": shot.get("duration"),
+            },
+        )
+    return patch_episode_meta_duration(updated, episode_total_seconds(doc))
+
+
+def sync_episode_timings(
+    slug: str,
+    episode: int,
+    doc: dict[str, Any],
+    *,
+    script_rel: str | None = None,
+    script: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Reconcile timings from duration, persist shots.json + markdown headers."""
+    reconcile_doc_timings(doc)
+    save_doc(doc)
+    rel = script_rel or str(doc.get("script_path") or _rel(slug, "episodes", f"ep{int(episode):02d}.md"))
+    text = script if script is not None else _read_text(rel)
+    if text is not None:
+        updated = write_script_timings_from_doc(text, doc)
+        if updated != text:
+            _write_text(rel, updated.rstrip() + "\n")
+        text = updated
+    return doc, text
+
+
 def get_episode(slug: str, episode: int) -> dict[str, Any]:
     project = load_project(slug)
     n = parse_episode(episode)
@@ -342,6 +424,25 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     script_rel = str(ep_meta.get("path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
     script = _read_text(script_rel)
     doc = load_doc(slug, n)
+    # Heal duration↔timing drift so UI / script / shots.json stay globally consistent.
+    if doc and doc_timings_need_sync(doc, script):
+        doc, script = sync_episode_timings(slug, n, doc, script_rel=script_rel, script=script)
+        for ep in project.get("episodes") or []:
+            if int(ep.get("n") or 0) == n:
+                from tools.drama_shots import episode_total_seconds
+
+                total = episode_total_seconds(doc)
+                if total > 0:
+                    ep["seconds"] = int(round(total))
+                break
+        try:
+            save_project(slug, project)
+        except Exception:
+            pass
+        ep_meta = next(
+            (e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n),
+            ep_meta,
+        )
     video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
     video = _asset_meta(video_rel)
     shots = [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])] if doc else []
@@ -370,7 +471,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
         "layer_ids": ["scene", "overlay", "voice", "motion", "lip", "clip"],
         "transitions": list(TRANSITIONS),
         "i2v_modes": list(I2V_MODES),
@@ -437,8 +538,18 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker", "voice")
+    allowed = ("画面", "字幕", "旁白", "对白", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "i2v_ladder", "i2v_source", "kind", "size", "speaker", "voice")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
+    # legacy 对白 → 字幕；若同时带旧「字幕」则视为旁白
+    if "对白" in body:
+        dialogue = body.pop("对白")
+        if "旁白" not in body and "字幕" in body:
+            body["旁白"] = body.pop("字幕")
+        body["字幕"] = dialogue
+    # Allow clearing optional overrides with empty string
+    for key in ("i2v_ladder", "i2v_source"):
+        if key in patch and patch[key] is not None and key not in body:
+            body[key] = patch[key]
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
     has_lock = any(patch.get(k) is not None for k in ("locked", "lock", "unlock") if k in patch)
@@ -462,8 +573,24 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
             raise DramaBadRequest(f"未知转场：{t}，可选 {', '.join(TRANSITIONS)}")
     if "i2v" in body:
         body["i2v"] = normalize_i2v_mode(body["i2v"])
+    if "i2v_ladder" in body:
+        from tools.drama_models import normalize_ladder
+
+        raw_ladder = str(body.get("i2v_ladder") or "").strip()
+        if raw_ladder:
+            ladder = normalize_ladder(raw_ladder)
+            if not ladder:
+                raise DramaBadRequest("i2v_ladder 须为 L0–L4")
+            body["i2v_ladder"] = ladder
+        else:
+            body["i2v_ladder"] = ""
+    if "i2v_source" in body:
+        src = str(body.get("i2v_source") or "").strip().lower()
+        if src and src not in ("ai", "keys", "fallback", "none"):
+            raise DramaBadRequest("i2v_source 须为 ai / keys / fallback / 空")
+        body["i2v_source"] = "" if src in ("", "none") else src
     if not body and not timeline_body and not has_lock:
-        raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
+        raise DramaBadRequest("没有可更新的字段（画面 / 字幕 / 旁白 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
 
     doc = _ensure_shots_doc(slug, n)
     _take_snapshot(slug, n, doc, tag="patch_shot")
@@ -478,6 +605,8 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
             unlock=patch.get("unlock"),
         )
     dirty: list[str] = []
+    timing_touched = any(k in body for k in ("duration", "timing", "start", "end"))
+    did_retime = False
     if body:
         if "shot" in (shot.get("locked") or []):
             dirty = []
@@ -486,29 +615,61 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
                 dirty = apply_patch(shot, body)
             except ValueError as e:
                 raise DramaBadRequest(str(e)) from e
+            if timing_touched:
+                cascade_shot_timings(doc, from_n=shot_n)
+                did_retime = True
+                body = {
+                    **body,
+                    "timing": shot.get("timing"),
+                    "start": shot.get("start"),
+                    "end": shot.get("end"),
+                    "duration": shot.get("duration"),
+                }
             script_rel = str(doc.get("script_path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
             script = _read_text(script_rel)
             if script is not None:
                 from tools.drama_video import patch_shot_in_markdown
 
-                updated = patch_shot_in_markdown(script, shot_n, body)
+                if did_retime:
+                    updated = write_script_timings_from_doc(script, doc)
+                else:
+                    updated = patch_shot_in_markdown(script, shot_n, body)
                 if updated != script:
                     _write_text(script_rel, updated.rstrip() + "\n")
     if timeline_body:
         apply_timeline_patch(shot, timeline_body)
-    if "i2v" in body:
-        if "clip" not in (shot.get("locked") or []) and "clip" not in (shot.get("dirty") or []):
-            shot.setdefault("dirty", []).append("clip")
+    if any(k in body for k in ("i2v", "i2v_ladder", "i2v_source")):
+        locked = set(shot.get("locked") or [])
+        dirty_list = list(shot.get("dirty") or [])
+        for layer in ("motion", "clip"):
+            if layer not in locked and layer not in dirty_list:
+                dirty_list.append(layer)
+        shot["dirty"] = dirty_list
+        if dirty_list:
             shot["status"] = "dirty"
     save_doc(doc)
+
+    if did_retime:
+        total = episode_total_seconds(doc)
+        try:
+            project = load_project(slug)
+            for ep in project.get("episodes") or []:
+                if int(ep.get("n") or 0) == n:
+                    ep["seconds"] = int(round(total)) if total else ep.get("seconds")
+                    break
+            save_project(slug, project)
+        except Exception:
+            pass
 
     return {
         "slug": slug,
         "episode": n,
-        "shot": enrich_shot(shot, slug=slug),
+        "shot": enrich_shot(shot, slug=slug, episode=n),
+        "shots": [enrich_shot(s, slug=slug, episode=n) for s in (doc.get("shots") or [])],
         "dirty": dirty or list(shot.get("dirty") or []),
         "locked": list(shot.get("locked") or []),
         "shots_json": json_rel(slug, n),
+        "retimed": did_retime,
     }
 
 
@@ -914,9 +1075,12 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     meta = parsed.get("meta") or {}
     seconds = 45
     raw_sec = str(meta.get("时长") or "")
-    digits = "".join(ch for ch in raw_sec if ch.isdigit())
+    digits = "".join(ch for ch in raw_sec if ch.isdigit() or ch == ".")
     if digits:
-        seconds = max(15, min(int(digits), 90))
+        try:
+            seconds = max(1, int(round(float(digits))))
+        except ValueError:
+            seconds = 45
     old_ep = next((e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n), {})
     if old_ep.get("seconds") and not digits:
         seconds = int(old_ep.get("seconds") or 45)
@@ -926,11 +1090,26 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     save_project(slug, project)
 
     merged = sync_shots_doc(slug, n, text, title=ep_title)
+    # Prefer summed shot timeline as the global episode length.
+    from tools.drama_shots import episode_total_seconds
+    from tools.drama_video import patch_episode_meta_duration
+
+    total = episode_total_seconds(merged)
+    if total > 0:
+        seconds = int(round(total))
+        for ep in project.get("episodes") or []:
+            if int(ep.get("n") or 0) == n:
+                ep["seconds"] = seconds
+                break
+        save_project(slug, project)
+        synced_md = patch_episode_meta_duration(text, total)
+        if synced_md != text:
+            _write_text(ep_rel, synced_md.rstrip() + "\n")
     impact = script_impact(
         existing,
         merged,
         old_meta=(existing or {}).get("meta") if existing else {},
-        new_meta=parsed.get("meta") or {},
+        new_meta=(merged.get("meta") or parsed.get("meta") or {}),
     )
     payload = get_episode(slug, n)
     payload["impact"] = impact
@@ -961,12 +1140,12 @@ def generate_episode_script(slug: str, episode: int, premise: str) -> dict[str, 
         "## 分镜\n"
         "### Shot 1 (0-3s)\n"
         "- 画面: 画面描述（含人物、动作、场景、镜头感）\n"
-        "- 对白: 角色:台词 或 旁白\n"
-        "- 字幕: 屏幕字幕文字\n"
+        "- 字幕: 角色台词（配音 + 底部字幕）\n"
+        "- 旁白: 画外说明（左上角竖排）\n"
         "- 角色: 出场角色\n\n"
         "### Shot 2 (3-6s)\n"
         "……\n\n"
-        "要求：4–8 个镜头；剧情紧凑、有钩子和反转；画面与对白要具体可拍。"
+        "要求：4–8 个镜头；剧情紧凑、有钩子和反转；画面与台词要具体可拍。"
     ).format(n=n)
 
     draft = draft_text_sync(slug, f"故事梗概：{text}", system=system)
@@ -1609,7 +1788,7 @@ def get_characters(slug: str) -> dict[str, Any]:
     return {
         "slug": slug,
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
     }
 
 
@@ -1789,6 +1968,122 @@ def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any
         "reply": reply,
         "look": new_look,
     }
+
+
+def refine_shot(
+    slug: str,
+    episode: int,
+    shot_n: int,
+    instruction: str,
+    *,
+    stage: str = "video",
+) -> dict[str, Any]:
+    """根据聊天指令更新分镜字段（视频/声音页）。"""
+    import asyncio
+    import json
+    import re
+
+    load_project(slug)
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    shot_n = parse_shot_n(shot_n)
+    text = str(instruction or "").strip()
+    if not text:
+        raise DramaBadRequest("请输入调整说明")
+    stage_key = str(stage or "video").strip().lower()
+    if stage_key not in ("video", "voice"):
+        raise DramaBadRequest("stage 须为 video 或 voice")
+
+    doc = _ensure_shots_doc(slug, n)
+    shot = find_shot(doc, shot_n)
+    if shot is None:
+        raise DramaNotFound(f"找不到 Shot {shot_n}")
+
+    from llm_client import llm_client
+
+    if stage_key == "video":
+        allowed = ("camera", "duration", "i2v", "i2v_ladder", "i2v_source")
+        current = {
+            "camera": shot.get("camera") or "",
+            "duration": shot.get("duration"),
+            "i2v": shot.get("i2v") or "auto",
+            "i2v_ladder": shot.get("i2v_ladder") or "",
+            "i2v_source": shot.get("i2v_source") or "",
+            "画面": shot.get("画面") or "",
+        }
+        system = (
+            "你是漫剧分镜视频助手。根据用户指令，仅输出一个 JSON 对象（不要 markdown）。"
+            "可改字段：camera, duration, i2v, i2v_ladder, i2v_source。"
+            f"camera 可选：{', '.join(CAMERAS)}。"
+            "i2v 可选：off / auto / on。"
+            "i2v_ladder 可选：L0–L4 或空字符串。"
+            "i2v_source 可选：ai / keys / fallback / 空字符串。"
+            "duration 为正数秒。"
+            "只返回需要修改的字段；另加 reply 字符串用中文简述改了什么。"
+            "若无法理解指令，返回 {\"reply\":\"…\"} 且不含其它字段。"
+        )
+    else:
+        allowed = ("字幕", "旁白", "speaker", "voice")
+        current = {
+            "字幕": shot.get("字幕") or shot.get("对白") or "",
+            "旁白": shot.get("旁白") or "",
+            "speaker": shot.get("speaker") or "",
+            "voice": shot.get("voice") or "",
+            "角色": shot.get("角色") or [],
+        }
+        system = (
+            "你是漫剧分镜配音助手。根据用户指令，仅输出一个 JSON 对象（不要 markdown）。"
+            "可改字段：字幕（台词，配音+底部字幕）、旁白（画外说明）、speaker、voice。"
+            "可用空字符串清空字幕或旁白。"
+            "只返回需要修改的字段；另加 reply 字符串用中文简述改了什么。"
+            "若无法理解指令，返回 {\"reply\":\"…\"} 且不含其它字段。"
+        )
+
+    user = (
+        f"当前 Shot {shot_n} 字段：\n{json.dumps(current, ensure_ascii=False)}\n\n"
+        f"用户调整指令：{text}"
+    )
+    raw = asyncio.run(
+        llm_client.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.3,
+            max_tokens=800,
+        )
+    )
+    raw_text = str(raw or "").strip()
+    parsed: dict[str, Any] = {}
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", raw_text)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    patch = {k: parsed[k] for k in allowed if k in parsed}
+    reply = str(parsed.get("reply") or "").strip()
+    if not patch:
+        if not reply:
+            reply = "没有识别到可应用的修改，请换一种说法（例如改运镜、时长、字幕或旁白）。"
+        return {
+            "slug": slug,
+            "episode": n,
+            "shot": enrich_shot(shot, slug=slug, episode=n),
+            "reply": reply,
+            "patched": {},
+        }
+
+    result = patch_shot(slug, n, shot_n, patch)
+    if not reply:
+        keys = "、".join(patch.keys())
+        reply = f"已更新：{keys}。可点击生成按钮使预览生效。"
+    result["reply"] = reply
+    result["patched"] = patch
+    return result
 
 
 def choose_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:

@@ -2112,6 +2112,86 @@
   outline-offset: -1px;
 }
 
+.drama-av-main {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 360px;
+  padding: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--color-border);
+}
+
+.drama-scene-main.drama-av-main {
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+.drama-av-preview-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 clamp(220px, 32%, 360px);
+  width: clamp(220px, 32%, 360px);
+  min-height: 0;
+  background: #111827;
+  border-right: 1px solid var(--color-border);
+}
+
+.drama-av-preview-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 10px 0;
+  gap: 8px;
+}
+
+.drama-av-frame {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 9 / 16;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.drama-av-frame .drama-media {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+
+.drama-av-frame .drama-stage-empty {
+  color: #9ca3af;
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.drama-av-preview-panel .drama-video-progress {
+  flex-shrink: 0;
+  margin: 0 10px 10px;
+}
+
+.drama-av-preview-panel .drama-voice-audio,
+.drama-av-preview-panel .drama-empty-hint {
+  flex-shrink: 0;
+  width: calc(100% - 20px);
+  margin: 0 10px 10px;
+}
+
 .drama-video-preview {
   display: flex;
   align-items: center;
@@ -2130,6 +2210,207 @@
   color: #9ca3af;
   text-align: center;
   padding: 24px 16px;
+}
+
+.drama-voice-preview {
+  position: relative;
+}
+
+.drama-voice-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: min(520px, 62vh);
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #000;
+}
+
+.drama-voice-frame .drama-media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 0;
+}
+
+.drama-voice-frame .drama-stage-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  color: #9ca3af;
+  text-align: center;
+  padding: 24px 16px;
+  box-sizing: border-box;
+}
+
+.drama-voice-sub-layer {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.drama-voice-sub-layer--narration {
+  left: 4.5%;
+  right: auto;
+  top: 5%;
+  bottom: auto;
+  width: auto;
+  max-width: 12%;
+  max-height: 78%;
+  overflow: hidden;
+}
+
+.drama-voice-sub-layer--dialogue {
+  left: 8%;
+  right: 8%;
+  bottom: 12%;
+}
+
+.drama-voice-sub-text {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #ffe566;
+  font-weight: 600;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 6px rgba(0, 0, 0, 0.65);
+}
+
+.drama-voice-sub-text--narration {
+  font-size: calc(clamp(14px, 2vw, 20px) * 2 / 3);
+  line-height: 1.2;
+  text-align: left;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.drama-voice-sub-text--dialogue {
+  font-size: clamp(14px, 2vw, 20px);
+  line-height: 1.4;
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 隐藏原生控件静音按钮，保留进度条与全屏 */
+.drama-video-preview video::-webkit-media-controls-mute-button,
+.drama-voice-frame video::-webkit-media-controls-mute-button,
+.drama-av-frame video::-webkit-media-controls-mute-button,
+.drama-video-preview video::-webkit-media-controls-volume-slider,
+.drama-voice-frame video::-webkit-media-controls-volume-slider,
+.drama-av-frame video::-webkit-media-controls-volume-slider,
+.drama-video-preview video::-webkit-media-controls-volume-control-container,
+.drama-voice-frame video::-webkit-media-controls-volume-control-container,
+.drama-av-frame video::-webkit-media-controls-volume-control-container {
+  display: none !important;
+}
+
+.drama-voice-audio {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.drama-voice-script-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.drama-voice-script-row .drama-field {
+  margin: 0;
+  min-width: 0;
+}
+
+.drama-voice-script-row .drama-scene-script-text {
+  min-height: 72px;
+}
+
+.drama-voice-meta-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.drama-video-meta-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.drama-voice-kv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: inherit;
+}
+
+.drama-voice-kv strong {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--color-muted, #9ca3af);
+  white-space: nowrap;
+}
+
+.drama-voice-kv select,
+.drama-voice-kv input,
+.drama-voice-kv > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drama-voice-kv select,
+.drama-video-duration-input {
+  max-width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border, #2a3344);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .drama-video-meta-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .drama-voice-script-row,
+  .drama-voice-meta-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .drama-voice-meta-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .drama-video-progress {
