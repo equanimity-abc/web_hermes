@@ -141,6 +141,8 @@ const premise = ref('')
 const refInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
+const voiceVideoRef = ref(null)
+const voiceAudioRef = ref(null)
 const selectedKeyId = ref(null)
 const castChatRef = ref(null)
 
@@ -150,7 +152,7 @@ const stageList = computed(() => [
   { id: 'script', label: '剧本', title: '步骤一：一句话生成完整剧本与分镜', done: Boolean(props.episode?.script) },
   { id: 'cast', label: '角色', title: '步骤二：文生图生成定妆图，定角色、物品、场景', done: (props.characters || []).some((c) => c.ref_exists) },
   { id: 'scene', label: '画面', title: '步骤三：分镜文生图与候选墙锁图', done: hasLayer('scene') },
-  { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动）', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
+  { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动），时长取自剧本', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
   { id: 'voice', label: '声音', title: '步骤五：配音与口型', done: hasLayer('voice') },
   { id: 'assemble', label: '成片', title: '步骤六：拼接、BGM 与导出', done: Boolean(props.episode?.play_url) },
 ])
@@ -459,7 +461,8 @@ function shotHasVideo(shot) {
 
 function shotVideoPreviewUrl(shot) {
   if (!shot) return ''
-  const url = shot.files?.motion?.url || shot.files?.clip?.url || shot.files?.scene?.url || ''
+  // 视频步看运动；避免带旧字幕遮罩的 clip
+  const url = shot.files?.motion?.url || shot.files?.scene?.url || shot.files?.clip?.url || ''
   if (!url) return ''
   return withBust(url)
 }
@@ -511,6 +514,37 @@ function i2vModeLabel(mode) {
   if (mode === 'off') return '关闭 I2V'
   return '自动'
 }
+
+const cameraOptions = computed(() => {
+  const ids = props.episode?.cameras?.length
+    ? props.episode.cameras
+    : ['punch_in', 'punch_shake', 'pan_right', 'pan_left', 'rise', 'fall', 'pull_out']
+  const labels = {
+    punch_in: '推进',
+    punch_shake: '推进抖动',
+    pan_right: '右摇',
+    pan_left: '左摇',
+    rise: '升起',
+    fall: '下降',
+    pull_out: '拉远',
+  }
+  return ids.map((id) => ({ id, label: labels[id] || id }))
+})
+
+const ladderOptions = [
+  { id: 'L0', label: 'L0 静图运镜' },
+  { id: 'L1', label: 'L1 I2V' },
+  { id: 'L2', label: 'L2 口型' },
+  { id: 'L3', label: 'L3 动作' },
+  { id: 'L4', label: 'L4 关键帧' },
+]
+
+const i2vSourceOptions = [
+  { id: '', label: '待生成' },
+  { id: 'fallback', label: '静图运镜' },
+  { id: 'ai', label: 'AI' },
+  { id: 'keys', label: '关键帧' },
+]
 
 function cameraLabel(shot) {
   return String(shot?.camera || '—')
@@ -600,6 +634,245 @@ function onGenerateVideo() {
 function onGenerateAllVideo() {
   emit('generate-all-video')
 }
+
+function onGenerateVoice() {
+  emit('generate-lip')
+}
+
+function onGenerateAllVoice() {
+  emit('generate-all-voice')
+}
+
+function shotHasVoice(shot) {
+  return Boolean(shot?.files?.voice?.exists || shot?.voice)
+}
+
+function shotHasLip(shot) {
+  return Boolean(shot?.files?.lip?.exists || ['mock', 'http', 'ai'].includes(shot?.lip_source))
+}
+
+function shotDialoguePreview(shot) {
+  const raw = String(shot?.对白 || '').trim()
+  if (!raw) return '（无对白）'
+  const quoteRe = /[「『“"]([^」』”"]+)[」』”"]/g
+  const quotes = []
+  let m
+  while ((m = quoteRe.exec(raw)) !== null) {
+    const q = String(m[1] || '').trim()
+    if (q) quotes.push(q)
+  }
+  const cleaned = quotes.length
+    ? (() => {
+        let out = quotes[0]
+        for (let i = 1; i < quotes.length; i += 1) {
+          if (!/[。！？!?…]$/.test(out)) out += '。'
+          out += quotes[i]
+        }
+        return out
+      })()
+    : raw
+        .replace(
+          /^(?:【[^】]{1,12}】|\[[^\]]{1,12}\])?[^:：\s「『“"]{1,16}(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*/,
+          '',
+        )
+        .replace(/[（(][^）)]{0,24}[）)]/g, '')
+        .trim() || raw
+  const clause = cleaned.split(/[。！？；;\n]/u).map((s) => s.trim()).find(Boolean) || cleaned
+  const max = 22
+  return clause.length > max ? `${clause.slice(0, max)}…` : clause
+}
+
+function shotVoiceRowDesc(shot) {
+  if (shotHasVoice(shot)) {
+    return shotHasLip(shot) ? '已配音·口型' : '已配音'
+  }
+  return shotDialoguePreview(shot)
+}
+
+function shotVoiceStatusLabel(shot) {
+  if (props.rendering && props.selectedN === shot.n) return '…'
+  const locked = shot.locked || []
+  if (locked.includes('shot') || locked.includes('voice')) return '锁'
+  if (shotHasLip(shot)) return '口'
+  if (shotHasVoice(shot)) return '音'
+  const dirty = shot.dirty || []
+  if (dirty.includes('voice') || dirty.includes('lip')) return '脏'
+  if ((shot.对白 || '').trim()) return '待'
+  return '—'
+}
+
+function shotVoiceStatusClass(shot) {
+  if (props.rendering && props.selectedN === shot.n) return 'is-busy'
+  const locked = shot.locked || []
+  if (locked.includes('shot') || locked.includes('voice')) return 'is-locked'
+  if (shotHasLip(shot)) return 'is-done'
+  if (shotHasVoice(shot)) return 'is-scene'
+  const dirty = shot.dirty || []
+  if (dirty.includes('voice') || dirty.includes('lip')) return 'is-dirty'
+  return 'is-todo'
+}
+
+function shotVoicePreviewUrl(shot) {
+  if (!shot) return ''
+  // 预览用无烧录遮罩的 motion/scene；声音走下方 audio，字幕用浮层文字
+  const url =
+    shot.files?.motion?.url ||
+    shot.files?.scene?.url ||
+    shot.files?.lip?.url ||
+    shot.files?.clip?.url ||
+    ''
+  if (!url) return ''
+  return withBust(url)
+}
+
+function shotVoicePreviewKind(shot) {
+  const url = shotVoicePreviewUrl(shot)
+  if (!url) return 'empty'
+  return url.includes('.mp4') ? 'video' : 'image'
+}
+
+function shotVoiceAudioUrl(shot) {
+  const url = shot?.files?.voice?.url || ''
+  if (!url) return ''
+  return withBust(url)
+}
+
+function voiceOverlayText() {
+  // 字幕 = 剧情说明（画面浮层）；对白走配音，不叠在画面上
+  let text = String(props.draft?.字幕 || '').trim()
+  if (!text) return ''
+  text = text.replace(/^(?:【\s*)?(?:内心独白|心声|OS)(?:\s*】)?\s*[:：]?\s*/i, '').trim()
+  return text
+}
+
+function voiceOverlayIsMonologue() {
+  const raw = String(props.draft?.字幕 || '').trim()
+  if (!raw) return false
+  if (/(?:内心独白|心声|OS)/i.test(raw)) return true
+  const text = voiceOverlayText()
+  if (!text || /[·・]/.test(text) || /^第[一二三四五六七八九十百千\d]+[集章回]/.test(text)) return false
+  if (/^[他她您]/.test(text)) return false
+  return /我|自己|这一次|这一世|不会再/.test(text)
+}
+
+function syncVoiceAudioToVideo() {
+  const video = voiceVideoRef.value
+  const audio = voiceAudioRef.value
+  if (!video || !audio) return
+  audio.muted = false
+  if (Math.abs((audio.currentTime || 0) - (video.currentTime || 0)) > 0.3) {
+    try {
+      audio.currentTime = video.currentTime || 0
+    } catch {
+      /* ignore seek errors while loading */
+    }
+  }
+}
+
+function onVoiceVideoPlay() {
+  const audio = voiceAudioRef.value
+  if (!audio) return
+  syncVoiceAudioToVideo()
+  audio.play().catch(() => {})
+}
+
+function onVoiceVideoPause() {
+  const video = voiceVideoRef.value
+  const audio = voiceAudioRef.value
+  // 画面播完循环等配音时，不要把声音一并停掉
+  if (video && video.ended && audio && !audio.ended) return
+  audio?.pause()
+}
+
+function onVoiceVideoSeeked() {
+  syncVoiceAudioToVideo()
+}
+
+function onVoiceVideoEnded() {
+  const video = voiceVideoRef.value
+  const audio = voiceAudioRef.value
+  if (!video || !audio) return
+  if (!audio.paused && !audio.ended && audio.currentTime < (audio.duration || 0) - 0.15) {
+    video.currentTime = 0
+    video.play().catch(() => {})
+  }
+}
+
+function onVoiceAudioPlay() {
+  const video = voiceVideoRef.value
+  const audio = voiceAudioRef.value
+  if (!video || !audio) return
+  audio.muted = false
+  video.muted = true
+  if (Math.abs((video.currentTime || 0) - (audio.currentTime || 0)) > 0.3) {
+    try {
+      video.currentTime = audio.currentTime || 0
+    } catch {
+      /* ignore */
+    }
+  }
+  video.play().catch(() => {})
+}
+
+function onVoiceAudioPause() {
+  const video = voiceVideoRef.value
+  if (video && !video.paused) video.pause()
+}
+
+function onVoiceAudioEnded() {
+  const video = voiceVideoRef.value
+  if (video && !video.paused) video.pause()
+}
+
+function speakerLabel(shot) {
+  return String(shot?.speaker || shot?.voice_id || '—')
+}
+
+function voiceIdLabel(shot) {
+  const id = String(shot?.voice || shot?.voice_id || '')
+  if (!id) return '—'
+  const hit = (props.voices || []).find((v) => v.id === id)
+  return hit?.label || id
+}
+
+function voiceSpeakerOptions(shot) {
+  const names = new Set()
+  for (const r of shot?.角色 || []) {
+    const n = String(r || '').trim()
+    if (n) names.add(n)
+  }
+  for (const c of props.characters || []) {
+    if ((c.category || 'character') !== 'character') continue
+    const n = String(c.name || c.id || '').trim()
+    if (n) names.add(n)
+  }
+  const cur = String(props.draft?.speaker || shot?.speaker || '').trim()
+  if (cur) names.add(cur)
+  return [...names]
+}
+
+function onVoiceSpeakerChange() {
+  const name = String(props.draft?.speaker || '').trim()
+  if (!name || !props.draft) return
+  const hit = (props.characters || []).find(
+    (c) => c.name === name || c.id === name || (c.aliases || []).includes(name),
+  )
+  if (hit?.voice) props.draft.voice = hit.voice
+}
+
+function lipStatusLabel(shot) {
+  if (shotHasLip(shot)) return shot?.lip_source || '已生成'
+  if (shot?.lip?.will_run || shot?.lip?.ok) return '可生成'
+  return '暂无'
+}
+
+function canGenerateVoiceFor(shot) {
+  if (!shot) return false
+  if ((shot.locked || []).includes('shot')) return false
+  return Boolean((shot.对白 || '').trim())
+}
+
+const canGenerateVoice = computed(() => canGenerateVoiceFor(props.selected))
 
 function isVideoGeneratingShot(n) {
   const p = props.videoGenProgress
@@ -826,6 +1099,14 @@ const videoProgressPct = computed(() => {
                       :value="`${opt.provider}|${opt.model}`"
                     >
                       {{ opt.label }}
+                    </option>
+                  </select>
+                </label>
+                <label v-if="castCategory === 'character'" class="drama-field">
+                  音色
+                  <select v-model="charDraft.voice">
+                    <option v-for="v in voices" :key="v.id" :value="v.id">
+                      {{ v.label || v.id }}
                     </option>
                   </select>
                 </label>
@@ -1063,9 +1344,12 @@ const videoProgressPct = computed(() => {
             <div class="drama-scene-detail-head">
               <div class="drama-scene-detail-title">
                 <h3>Shot {{ selected.n }}</h3>
-                <p class="drama-shot-subhint">生成 I2V 前请先在「画面」步骤锁定关键帧；L0 定场镜仅支持静图运镜。</p>
+                <p class="drama-shot-subhint">时长取自剧本分镜；生成前请先在「画面」锁定关键帧。L0 定场镜仅静图运镜。</p>
               </div>
               <div class="drama-scene-detail-actions">
+                <button type="button" class="btn-ghost btn-sm" :disabled="saving || !dirty" @click="emit('save')">
+                  {{ saving ? '保存中…' : dirty ? '保存' : '已保存' }}
+                </button>
                 <button
                   type="button"
                   class="btn-primary btn-sm"
@@ -1088,19 +1372,51 @@ const videoProgressPct = computed(() => {
                   placeholder="（剧本中尚未填写画面描述）"
                 />
               </label>
-              <div class="drama-scene-meta drama-scene-meta-inline">
-                <span class="drama-scene-meta-item">
-                  <strong>运镜</strong>{{ cameraLabel(selected) }}
-                </span>
-                <span class="drama-scene-meta-item">
-                  <strong>I2V</strong>{{ i2vModeLabel(selected.i2v || 'auto') }}
-                </span>
-                <span class="drama-scene-meta-item">
-                  <strong>路由</strong>{{ routeLabel(selected) }}
-                </span>
-                <span class="drama-scene-meta-item">
-                  <strong>状态</strong>{{ i2vSourceLabel }}
-                </span>
+              <div class="drama-voice-meta-row drama-video-meta-row">
+                <label class="drama-voice-kv">
+                  <strong>运镜</strong>
+                  <select v-model="draft.camera">
+                    <option v-for="cam in cameraOptions" :key="cam.id" :value="cam.id">
+                      {{ cam.label }}
+                    </option>
+                  </select>
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>I2V</strong>
+                  <select v-model="draft.i2v">
+                    <option v-for="mode in i2vModes" :key="mode" :value="mode">
+                      {{ i2vModeLabel(mode) }}
+                    </option>
+                  </select>
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>路由</strong>
+                  <select v-model="draft.i2v_ladder">
+                    <option value="">自动（{{ selected.route?.ladder || '—' }}）</option>
+                    <option v-for="lad in ladderOptions" :key="lad.id" :value="lad.id">
+                      {{ lad.label }}
+                    </option>
+                  </select>
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>时长</strong>
+                  <input
+                    v-model="draft.duration"
+                    class="drama-video-duration-input"
+                    type="text"
+                    inputmode="decimal"
+                    placeholder="秒"
+                    title="分镜时长（秒），来自剧本，可改"
+                  />
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>状态</strong>
+                  <select v-model="draft.i2v_source">
+                    <option v-for="src in i2vSourceOptions" :key="src.id" :value="src.id">
+                      {{ src.label }}
+                    </option>
+                  </select>
+                </label>
               </div>
             </div>
 
@@ -1154,23 +1470,169 @@ const videoProgressPct = computed(() => {
       </section>
 
       <!-- ============ 阶段 5：声音 ============ -->
-      <section v-else-if="stage === 'voice'" class="drama-stage-panel">
-        <div class="drama-panel-body">
-          <div class="drama-actions">
-            <button type="button" class="btn-primary" :disabled="rendering" @click="emit('generate-all-voice')">
-              {{ rendering ? '生成中…' : '一键生成配音与口型' }}
-            </button>
-          </div>
-          <div class="drama-shot-list">
-            <div v-for="shot in shots" :key="shot.n" class="drama-row" :class="{ active: shot.n === selectedN }" role="button" tabindex="0" @click="emit('select-shot', shot.n)">
-              <span class="drama-row-n">{{ shot.n }}</span>
-              <span class="drama-row-body">{{ shot.对白 || shot.字幕 || '（无对白）' }}</span>
-              <span class="drama-row-flag">{{ shot.voice ? '配音' : '未配' }}</span>
-              <button type="button" class="btn-tiny" :disabled="rendering || !canGenerateLip" @click.stop="emit('generate-lip')">生成口型</button>
+      <section v-else-if="stage === 'voice'" class="drama-stage-panel drama-voice-stage">
+        <div class="drama-panel-body drama-scene-layout">
+          <div class="drama-scene-sidebar">
+            <div class="drama-scene-toolbar">
+              <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllVoice">
+                {{ rendering ? '生成中…' : '批量生成配音' }}
+              </button>
             </div>
-            <p v-if="!shots.filter((s) => (s.对白 || s.字幕 || '').trim()).length" class="drama-empty-hint">剧本里没有对白镜头，仍需生成。</p>
+            <div class="drama-scene-list">
+              <div class="drama-scene-rows">
+                <button
+                  v-for="shot in shots"
+                  :key="shot.n"
+                  type="button"
+                  class="drama-scene-row"
+                  :class="{ active: shot.n === selectedN, ready: shotHasVoice(shot) }"
+                  @click="emit('select-shot', shot.n)"
+                >
+                  <div class="drama-scene-thumb">
+                    <DramaThumbImg
+                      v-if="shotThumb(shot)"
+                      :key="shotThumbKey(shot)"
+                      :src="shotThumb(shot)"
+                      :alt="`Shot ${shot.n}`"
+                      :fetchpriority="shot.n === selectedN ? 'high' : 'low'"
+                    />
+                    <span v-else class="drama-scene-thumb-empty">{{ shot.n }}</span>
+                  </div>
+                  <div class="drama-scene-row-body">
+                    <span class="drama-scene-row-n">Shot {{ shot.n }}</span>
+                    <span class="drama-scene-row-desc">{{ shotVoiceRowDesc(shot) }}</span>
+                  </div>
+                  <span class="drama-status-dot" :class="shotVoiceStatusClass(shot)">{{ shotVoiceStatusLabel(shot) }}</span>
+                </button>
+              </div>
+              <p v-if="!shots.length" class="drama-empty-hint">暂无分镜，请先在「剧本」步骤生成分镜表。</p>
+            </div>
           </div>
-          <p v-if="selected" class="drama-empty-hint" :class="identityClass">{{ identityLabel }}</p>
+
+          <div v-if="selected" class="drama-scene-detail">
+            <div class="drama-scene-detail-head">
+              <div class="drama-scene-detail-title">
+                <h3>Shot {{ selected.n }}</h3>
+                <p class="drama-shot-subhint">对白用于配音；字幕为剧情说明，浮在画面上。可编辑后保存。</p>
+              </div>
+              <div class="drama-scene-detail-actions">
+                <button type="button" class="btn-ghost btn-sm" :disabled="saving || !dirty" @click="emit('save')">
+                  {{ saving ? '保存中…' : dirty ? '保存' : '已保存' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="rendering || !canGenerateVoice"
+                  @click="onGenerateVoice"
+                >
+                  {{ rendering ? '生成中…' : '生成配音' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="drama-scene-script">
+              <div class="drama-voice-script-row">
+                <label class="drama-field">
+                  对白
+                  <textarea
+                    v-model="draft.对白"
+                    class="drama-scene-script-text"
+                    rows="3"
+                    placeholder="（本镜无对白）"
+                  />
+                </label>
+                <label class="drama-field">
+                  字幕
+                  <textarea
+                    v-model="draft.字幕"
+                    class="drama-scene-script-text"
+                    rows="3"
+                    placeholder="（本镜无字幕）"
+                  />
+                </label>
+              </div>
+              <div class="drama-voice-meta-row">
+                <label class="drama-voice-kv">
+                  <strong>说话人</strong>
+                  <select v-model="draft.speaker" @change="onVoiceSpeakerChange">
+                    <option value="">（未指定）</option>
+                    <option v-for="name in voiceSpeakerOptions(selected)" :key="name" :value="name">
+                      {{ name }}
+                    </option>
+                  </select>
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>音色</strong>
+                  <select v-model="draft.voice">
+                    <option value="">（默认）</option>
+                    <option v-for="v in voices" :key="v.id" :value="v.id">
+                      {{ v.label || v.id }}
+                    </option>
+                  </select>
+                </label>
+                <div class="drama-voice-kv">
+                  <strong>口型</strong>
+                  <span>{{ lipStatusLabel(selected) }}</span>
+                </div>
+                <div class="drama-voice-kv" :class="identityClass">
+                  <strong>身份</strong>
+                  <span>{{ identityLabel }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="drama-scene-main">
+              <div class="drama-video-preview drama-voice-preview">
+                <video
+                  v-if="shotVoicePreviewKind(selected) === 'video'"
+                  :key="shotVoicePreviewUrl(selected)"
+                  ref="voiceVideoRef"
+                  class="drama-media"
+                  :src="shotVoicePreviewUrl(selected)"
+                  controls
+                  playsinline
+                  :muted="Boolean(shotVoiceAudioUrl(selected))"
+                  @play="onVoiceVideoPlay"
+                  @pause="onVoiceVideoPause"
+                  @seeked="onVoiceVideoSeeked"
+                  @ended="onVoiceVideoEnded"
+                />
+                <img
+                  v-else-if="shotVoicePreviewKind(selected) === 'image'"
+                  class="drama-media"
+                  :src="shotVoicePreviewUrl(selected)"
+                  alt="镜头画面"
+                />
+                <div v-else class="drama-stage-empty">本镜尚未出图；可先在「画面 / 视频」步骤生成</div>
+                <div
+                  v-if="voiceOverlayText()"
+                  class="drama-voice-sub-layer"
+                  :class="{ 'is-monologue': voiceOverlayIsMonologue() }"
+                  aria-hidden="true"
+                >
+                  <p class="drama-voice-sub-text" :class="{ 'is-monologue': voiceOverlayIsMonologue() }">
+                    {{ voiceOverlayText() }}
+                  </p>
+                </div>
+              </div>
+              <audio
+                v-if="shotVoiceAudioUrl(selected)"
+                :key="shotVoiceAudioUrl(selected)"
+                ref="voiceAudioRef"
+                class="drama-audio drama-voice-audio"
+                :src="shotVoiceAudioUrl(selected)"
+                controls
+                @play="onVoiceAudioPlay"
+                @pause="onVoiceAudioPause"
+                @ended="onVoiceAudioEnded"
+              />
+              <p v-else class="drama-empty-hint" style="margin-top: 10px">尚未生成配音</p>
+            </div>
+          </div>
+
+          <div v-else class="drama-cast-empty">
+            <p>从左侧选择一镜，查看对白并生成配音与口型。</p>
+          </div>
         </div>
       </section>
 

@@ -2132,6 +2132,150 @@
   padding: 24px 16px;
 }
 
+.drama-voice-preview {
+  position: relative;
+}
+
+.drama-voice-sub-layer {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 12%;
+  z-index: 2;
+  pointer-events: none;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.drama-voice-sub-layer.is-monologue {
+  left: 5%;
+  right: auto;
+  top: 7%;
+  bottom: auto;
+  width: auto;
+  max-width: 2.2em;
+}
+
+.drama-voice-sub-text {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #ffe566;
+  font-size: clamp(14px, 2vw, 20px);
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 6px rgba(0, 0, 0, 0.65);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.drama-voice-sub-text.is-monologue {
+  font-size: calc(clamp(14px, 2vw, 20px) * 2 / 3);
+  line-height: 1.15;
+  text-align: left;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.drama-voice-audio {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.drama-voice-script-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.drama-voice-script-row .drama-field {
+  margin: 0;
+  min-width: 0;
+}
+
+.drama-voice-script-row .drama-scene-script-text {
+  min-height: 72px;
+}
+
+.drama-voice-meta-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.drama-video-meta-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.drama-voice-kv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: inherit;
+}
+
+.drama-voice-kv strong {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--color-muted, #9ca3af);
+  white-space: nowrap;
+}
+
+.drama-voice-kv select,
+.drama-voice-kv input,
+.drama-voice-kv > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drama-voice-kv select,
+.drama-video-duration-input {
+  max-width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border, #2a3344);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .drama-video-meta-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .drama-voice-script-row,
+  .drama-voice-meta-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .drama-voice-meta-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .drama-video-progress {
   margin-top: 12px;
   padding: 10px 12px;

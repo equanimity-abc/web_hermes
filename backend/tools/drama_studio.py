@@ -8,12 +8,12 @@ from typing import Any
 from urllib.parse import quote
 
 from tools.drama_characters import (
-    VOICES,
     CharacterError,
     delete_character,
     load_characters,
     normalize_roles,
     primary_voice,
+    public_voices,
     resolve_shot_characters,
     save_character_ref,
     set_ref_locked,
@@ -177,7 +177,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
         cards = load_characters(slug)
         cast = resolve_shot_characters(shot, cards)
         pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
-        pub["voice_id"] = primary_voice(cast) if cast else ""
+        pub["voice_id"] = primary_voice(cast, slug=slug) if cast else ""
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
         from tools.drama_qc import qc_passed
@@ -279,7 +279,7 @@ def get_project(slug: str) -> dict[str, Any]:
         "episodes": episodes,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
     }
 
 
@@ -370,7 +370,7 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "play_url": video.get("url") if video["exists"] else None,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
         "layer_ids": ["scene", "overlay", "voice", "motion", "lip", "clip"],
         "transitions": list(TRANSITIONS),
         "i2v_modes": list(I2V_MODES),
@@ -437,8 +437,12 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
     slug = parse_slug(slug)
     n = parse_episode(episode)
     shot_n = parse_shot_n(shot_n)
-    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "kind", "size", "speaker", "voice")
+    allowed = ("画面", "对白", "字幕", "角色", "camera", "timing", "duration", "trim_in", "trim_out", "volume", "transition", "i2v", "i2v_ladder", "i2v_source", "kind", "size", "speaker", "voice")
     body = {k: patch[k] for k in allowed if k in patch and patch[k] is not None}
+    # Allow clearing optional overrides with empty string
+    for key in ("i2v_ladder", "i2v_source"):
+        if key in patch and patch[key] is not None and key not in body:
+            body[key] = patch[key]
     timeline_keys = ("trim_in", "trim_out", "volume", "transition")
     timeline_body = {k: body.pop(k) for k in timeline_keys if k in body}
     has_lock = any(patch.get(k) is not None for k in ("locked", "lock", "unlock") if k in patch)
@@ -462,6 +466,22 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
             raise DramaBadRequest(f"未知转场：{t}，可选 {', '.join(TRANSITIONS)}")
     if "i2v" in body:
         body["i2v"] = normalize_i2v_mode(body["i2v"])
+    if "i2v_ladder" in body:
+        from tools.drama_models import normalize_ladder
+
+        raw_ladder = str(body.get("i2v_ladder") or "").strip()
+        if raw_ladder:
+            ladder = normalize_ladder(raw_ladder)
+            if not ladder:
+                raise DramaBadRequest("i2v_ladder 须为 L0–L4")
+            body["i2v_ladder"] = ladder
+        else:
+            body["i2v_ladder"] = ""
+    if "i2v_source" in body:
+        src = str(body.get("i2v_source") or "").strip().lower()
+        if src and src not in ("ai", "keys", "fallback", "none"):
+            raise DramaBadRequest("i2v_source 须为 ai / keys / fallback / 空")
+        body["i2v_source"] = "" if src in ("", "none") else src
     if not body and not timeline_body and not has_lock:
         raise DramaBadRequest("没有可更新的字段（画面 / 对白 / 字幕 / 角色 / camera / duration / kind / speaker / 时间线 / locked）")
 
@@ -496,9 +516,14 @@ def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> d
                     _write_text(script_rel, updated.rstrip() + "\n")
     if timeline_body:
         apply_timeline_patch(shot, timeline_body)
-    if "i2v" in body:
-        if "clip" not in (shot.get("locked") or []) and "clip" not in (shot.get("dirty") or []):
-            shot.setdefault("dirty", []).append("clip")
+    if any(k in body for k in ("i2v", "i2v_ladder", "i2v_source")):
+        locked = set(shot.get("locked") or [])
+        dirty_list = list(shot.get("dirty") or [])
+        for layer in ("motion", "clip"):
+            if layer not in locked and layer not in dirty_list:
+                dirty_list.append(layer)
+        shot["dirty"] = dirty_list
+        if dirty_list:
             shot["status"] = "dirty"
     save_doc(doc)
 
@@ -1609,7 +1634,7 @@ def get_characters(slug: str) -> dict[str, Any]:
     return {
         "slug": slug,
         "characters": list_characters(slug),
-        "voices": [{"id": vid, "label": label} for vid, label in VOICES],
+        "voices": public_voices(slug),
     }
 
 
