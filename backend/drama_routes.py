@@ -115,6 +115,8 @@ class ShotPatch(BaseModel):
     volume: float | None = None
     transition: str | None = None
     i2v: str | None = None
+    i2v_ladder: str | None = None
+    i2v_source: str | None = None
     kind: str | None = None
     size: str | None = None
     speaker: str | None = None

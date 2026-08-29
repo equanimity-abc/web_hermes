@@ -114,6 +114,20 @@ def _scene_text_for_prompt(raw: str) -> str:
     return scene or "现代都市电影感场景"
 _RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–~]\s*(\d+(?:\.\d+)?)")
 _QUOTE = re.compile(r"[「『“\"]([^」』”\"]+)[」』”\"]")
+# 林薇薇（夸张地）: / 林晚: / 【旁白】：
+_SPEAKER_PREFIX = re.compile(
+    r"^(?:【[^】]{1,12}】|\[[^\]]{1,12}\])?"
+    r"[^:：\s「『“\"]{1,16}"
+    r"(?:\s*[（(][^）)]{0,40}[）)])?"
+    r"\s*[:：]\s*"
+)
+_STAGE_PAREN = re.compile(r"[（(][^）)]{0,24}[）)]")
+# 林晚（低声）: “……”
+_NAMED_QUOTE = re.compile(
+    r"(?P<name>[^:：\s「『“\"（(【\[]{1,16})"
+    r"(?:\s*[（(][^）)]{0,40}[）)])?"
+    r"\s*[:：]\s*[「『“\"](?P<text>[^」』”\"]+)[」』”\"]"
+)
 
 _FONT_CANDIDATES = [
     Path(r"C:\Windows\Fonts\msyh.ttc"),
@@ -262,14 +276,148 @@ def _parse_timing(timing: str) -> tuple[float, float, float]:
 
 
 def spoken_text(dialogue: str, subtitle: str = "") -> str:
+    """Strip script stagecraft; keep spoken lines for TTS.
+
+    对白 → 配音；字幕是剧情说明，默认不拿来念。
+    """
     text = (dialogue or "").strip()
-    quotes = _QUOTE.findall(text)
-    if quotes:
-        return "。".join(q.strip() for q in quotes if q.strip())
-    stripped = re.sub(r"^[^:：]{1,16}[:：]\s*", "", text).strip()
-    if stripped:
-        return stripped
-    return (subtitle or "").strip()
+    if text:
+        quotes = [q.strip() for q in _QUOTE.findall(text) if q.strip()]
+        if quotes:
+            out = quotes[0]
+            for q in quotes[1:]:
+                if out[-1] not in "。！？!?…":
+                    out += "。"
+                out += q
+            return out
+        cleaned = _SPEAKER_PREFIX.sub("", text).strip()
+        cleaned = _STAGE_PAREN.sub("", cleaned).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ：:，,")
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _join_spoken(parts: list[str]) -> str:
+    out = ""
+    for p in parts:
+        p = (p or "").strip()
+        if not p:
+            continue
+        if not out:
+            out = p
+            continue
+        if out[-1] not in "。！？!?…":
+            out += "。"
+        out += p
+    return out
+
+
+def _speaker_names_match(a: str, b: str) -> bool:
+    x = re.sub(r"[\s【】\[\]]+", "", str(a or "").strip())
+    y = re.sub(r"[\s【】\[\]]+", "", str(b or "").strip())
+    if not x or not y:
+        return False
+    if x == y:
+        return True
+    # 林薇 ↔ 林薇薇
+    return x.startswith(y) or y.startswith(x)
+
+
+def parse_dialogue_segments(dialogue: str) -> list[tuple[str, str]]:
+    """Return [(speaker_name, spoken_line), ...] from script-style 对白."""
+    text = (dialogue or "").strip()
+    if not text:
+        return []
+    segs = [(m.group("name").strip(), m.group("text").strip()) for m in _NAMED_QUOTE.finditer(text)]
+    segs = [(n, t) for n, t in segs if n and t]
+    if segs:
+        return segs
+    plain = spoken_text(text)
+    return [("", plain)] if plain else []
+
+
+def spoken_text_for_shot(shot: dict[str, Any]) -> str:
+    """TTS text: prefer current speaker's lines so 对白/声音对齐."""
+    dialogue = str(shot.get("对白") or "")
+    speaker = str(shot.get("speaker") or "").strip()
+    segs = parse_dialogue_segments(dialogue)
+    if not segs:
+        return ""
+    if speaker:
+        matched = [t for n, t in segs if n and _speaker_names_match(n, speaker)]
+        if matched:
+            return _join_spoken(matched)
+        # speaker id / alias may not appear in script prefix — use full cleaned line
+    if len(segs) == 1:
+        return segs[0][1]
+    # multi-speaker without match: only first speaker's line (avoid one voice reading all)
+    if segs[0][0]:
+        first = segs[0][0]
+        return _join_spoken([t for n, t in segs if n == first])
+    return _join_spoken([t for _, t in segs])
+
+
+def voice_id_for_shot(shot: dict[str, Any], cast: list[dict[str, Any]], *, slug: str | None = None) -> str:
+    """Resolve TTS voice: shot.voice → speaker's character card → cast primary."""
+    explicit = str(shot.get("voice") or "").strip()
+    if explicit:
+        return explicit
+    speaker = str(shot.get("speaker") or "").strip()
+    if speaker and cast:
+        for char in cast:
+            name = str(char.get("name") or "")
+            cid = str(char.get("id") or "")
+            aliases = char.get("aliases") or []
+            if not isinstance(aliases, list):
+                aliases = []
+            if (
+                _speaker_names_match(speaker, name)
+                or _speaker_names_match(speaker, cid)
+                or any(_speaker_names_match(speaker, a) for a in aliases)
+            ):
+                voice = str(char.get("voice") or "").strip()
+                if voice:
+                    return voice
+    return primary_voice(cast, slug=slug) if cast else _tts_voice()
+
+
+def clean_subtitle(subtitle: str) -> str:
+    """Strip speaker tags / stage parens from subtitle; keep narrative lines."""
+    text = (subtitle or "").strip()
+    if not text:
+        return ""
+    cleaned = _SPEAKER_PREFIX.sub("", text).strip()
+    cleaned = _STAGE_PAREN.sub("", cleaned).strip()
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ：:，,")
+    return cleaned or text
+
+
+_MONOLOGUE_TAG = re.compile(r"(?:【\s*)?(内心独白|心声|OS)(?:\s*】)?\s*[:：]?", re.IGNORECASE)
+_LOCATION_SUB = re.compile(r"[·・]|^(第[一二三四五六七八九十百千\d]+[集章回])")
+
+
+def is_inner_monologue(subtitle: str) -> bool:
+    """True for 内心独白 captions (vertical top-left), not place cards / third-person chyron."""
+    raw = (subtitle or "").strip()
+    if not raw:
+        return False
+    if _MONOLOGUE_TAG.search(raw):
+        return True
+    text = clean_subtitle(raw)
+    if not text or _LOCATION_SUB.search(text):
+        return False
+    if re.match(r"^[他她您]", text):
+        return False
+    # first-person / thought-style lines common in short drama
+    return bool(re.search(r"我|自己|这一次|这一世|不会再", text))
+
+
+def monologue_display_text(subtitle: str) -> str:
+    """Subtitle text for on-screen monologue (tags stripped)."""
+    text = clean_subtitle(subtitle)
+    text = _MONOLOGUE_TAG.sub("", text).strip(" ：:，,")
+    return text.strip()
 
 
 def _find_font() -> Path:
@@ -772,40 +920,54 @@ def upload_shot_candidate(slug: str, episode: int, shot: dict[str, Any], data: b
 
 
 def _draw_subtitle_overlay(shot: dict[str, Any], dest: Path) -> None:
-    from PIL import Image, ImageDraw, ImageFilter
+    """Burn-in 剧情字幕；内心独白左上角竖排（字号 2/3），其余底部横排。"""
+    from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shade)
-    sd.rectangle((0, HEIGHT - 520, WIDTH, HEIGHT), fill=(12, 8, 6, 200))
-    img = Image.alpha_composite(img, shade.filter(ImageFilter.GaussianBlur(8)))
     draw = ImageDraw.Draw(img)
-    draw.rectangle((80, HEIGHT - 522, WIDTH - 80, HEIGHT - 516), fill=(212, 160, 23, 230))
+    raw = shot.get("字幕") or ""
+    if is_inner_monologue(raw):
+        _draw_monologue_vertical(draw, monologue_display_text(raw))
+    else:
+        _draw_caption_bottom(draw, clean_subtitle(raw))
 
-    font_sub = _load_font(58)
-    font_dlg = _load_font(36)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest, "PNG")
+
+
+_SUB_FONT = 58
+_MONO_FONT = max(24, int(round(_SUB_FONT * 2 / 3)))  # ≈39
+
+
+def _draw_caption_bottom(draw, text: str) -> None:
+    font_sub = _load_font(_SUB_FONT)
     max_w = WIDTH - 120
-    y = HEIGHT - 470
-    dialogue = (shot.get("对白") or "").strip()
-    if dialogue:
-        for line in _wrap(draw, dialogue, font_dlg, max_w)[:2]:
-            w = draw.textlength(line, font=font_dlg)
-            x = (WIDTH - w) / 2
-            draw.text((x + 2, y + 2), line, font=font_dlg, fill=(0, 0, 0, 180))
-            draw.text((x, y), line, font=font_dlg, fill=(255, 244, 220, 230))
-            y += 48
-        y += 10
-
-    sub = (shot.get("字幕") or "").strip()
-    for line in _wrap(draw, sub, font_sub, max_w)[:3]:
+    y = HEIGHT - 280
+    for line in _wrap(draw, text, font_sub, max_w)[:3]:
         w = draw.textlength(line, font=font_sub)
         x = (WIDTH - w) / 2
         draw.text((x + 3, y + 3), line, font=font_sub, fill=(0, 0, 0, 200))
         draw.text((x, y), line, font=font_sub, fill=(255, 229, 102, 255))
         y += 72
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    img.save(dest, "PNG")
+
+def _draw_monologue_vertical(draw, text: str) -> None:
+    """左上角竖排：一字一行，字号为底部字幕的 2/3。"""
+    chars = [c for c in (text or "").replace("\n", "").replace(" ", "") if c]
+    if not chars:
+        return
+    font = _load_font(_MONO_FONT)
+    x = 48
+    y = 72
+    max_y = HEIGHT - 160
+    for ch in chars:
+        bbox = draw.textbbox((0, 0), ch, font=font)
+        ch_h = max((bbox[3] - bbox[1]) if bbox else _MONO_FONT, int(_MONO_FONT * 1.05))
+        if y + ch_h > max_y:
+            break
+        draw.text((x + 2, y + 2), ch, font=font, fill=(0, 0, 0, 200))
+        draw.text((x, y), ch, font=font, fill=(255, 229, 102, 255))
+        y += ch_h
 
 
 def _motion_expr(shot: dict[str, Any], frames: int) -> str:
@@ -1010,8 +1172,9 @@ def _encode_clip_from_still(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Ken Burns on PNG still."""
-    frames = max(int(round(duration * FPS)), FPS)
+    """Ken Burns on PNG still. Length follows script duration."""
+    target = max(float(duration or 0), 0.5)
+    frames = max(int(round(target * FPS)), FPS)
     motion = _motion_expr(shot, frames)
     look = _look_filters(shot)
     vf = (
@@ -1052,7 +1215,7 @@ def _encode_clip_from_still(
         "-map",
         "2:a",
         "-t",
-        f"{duration:.2f}",
+        f"{target:.2f}",
         "-r",
         str(FPS),
         "-c:v",
@@ -1067,7 +1230,6 @@ def _encode_clip_from_still(
         "44100",
         "-ac",
         "2",
-        "-shortest",
         "-movflags",
         "+faststart",
         str(clip),
@@ -1083,14 +1245,25 @@ def _encode_clip_from_motion(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Composite pre-rendered I2V motion with subtitles and voice."""
+    """Composite pre-rendered I2V motion with subtitles and voice.
+
+    Clip length follows script duration. Short motion is looped to fill that length;
+    longer audio is cut to match.
+    """
     look = _look_filters(shot)
+    target = max(float(duration or 0), 0.5)
+    motion_dur = _probe_duration(motion) if motion.is_file() else 0.0
+    # Loop short motion so output can reach script duration.
+    loop_motion = motion_dur > 0.05 and motion_dur + 0.05 < target
     vf = (
         f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
         f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS}[v];"
         f"[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
     )
-    args = ["-y", "-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
+    args = ["-y"]
+    if loop_motion:
+        args += ["-stream_loop", "-1"]
+    args += ["-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
     if audio is not None:
         args += ["-i", str(audio)]
     else:
@@ -1103,7 +1276,7 @@ def _encode_clip_from_motion(
         "-map",
         "2:a",
         "-t",
-        f"{duration:.2f}",
+        f"{target:.2f}",
         "-r",
         str(FPS),
         "-c:v",
@@ -1118,7 +1291,6 @@ def _encode_clip_from_motion(
         "44100",
         "-ac",
         "2",
-        "-shortest",
         "-movflags",
         "+faststart",
         str(clip),
@@ -1375,7 +1547,7 @@ def render_shot_layers(
 
     duration = float(shot.get("duration") or 5)
     if "voice" in wanted:
-        speech = spoken_text(shot.get("对白") or "", shot.get("字幕") or "")
+        speech = spoken_text_for_shot(shot)
         if speech:
             from tools.drama_models import load_models
             from tools.drama_retry import retry_call
@@ -1383,7 +1555,7 @@ def render_shot_layers(
 
             tts_cfg = (load_models(slug) or {}).get("tts") or {}
             tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
-            voice_sel = str(shot.get("voice") or "").strip() or primary_voice(cast)
+            voice_sel = voice_id_for_shot(shot, cast, slug=slug)
             has_audio = bool(
                 retry_call(
                     registry.dispatch,
@@ -1398,8 +1570,9 @@ def render_shot_layers(
             has_audio = False
         if has_audio:
             used_tts = True
-            duration = max(duration, _probe_duration(voice) + 0.25)
-            shot["duration"] = round(duration, 2)
+            # 时长以剧本分镜为准，不因配音改写 shot.duration
+            if not str(shot.get("voice") or "").strip():
+                shot["voice"] = voice_sel
         elif voice.exists():
             try:
                 voice.unlink()
@@ -1408,9 +1581,6 @@ def render_shot_layers(
         if speech and not has_audio:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "voice", "reason": "TTS 失败，本镜无声"})
         rebuilt.append("voice")
-    elif voice.is_file() and voice.stat().st_size > 0:
-        duration = max(duration, _probe_duration(voice) + 0.25)
-        shot["duration"] = round(duration, 2)
 
     if do_lip:
         from tools.drama_lip import generate_shot_lip

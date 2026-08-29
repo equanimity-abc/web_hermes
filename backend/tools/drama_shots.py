@@ -315,7 +315,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
     if legacy_scene in ("ai", "fallback") and not scene_source:
         scene_source = str(legacy_scene)
 
-    need_voice = bool(str(raw.get("对白") or "").strip() or str(raw.get("字幕") or "").strip())
+    need_voice = bool(str(raw.get("对白") or "").strip())
     dirty = _as_str_list(raw.get("dirty"))
     if not dirty and "dirty" not in raw:
         # Fresh legacy docs have no dirty tracking — mark missing layers.
@@ -514,6 +514,8 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
         dirty.extend(["lip", "clip"])
     if "timing" in patch or "duration" in patch or "camera" in patch:
         dirty.extend(["clip", "motion"])
+    if "i2v" in patch or "i2v_ladder" in patch or "i2v_source" in patch:
+        dirty.extend(["clip", "motion"])
     if "kind" in patch or "size" in patch:
         dirty.extend(["clip", "motion", "lip"])
     if "voice" in patch:
@@ -538,16 +540,21 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         patch.pop("画面", None)
     if "overlay" in locked:
         patch.pop("字幕", None)
+    if "voice" in locked:
+        patch.pop("voice", None)
     if "voice" in locked and "overlay" in locked:
         patch.pop("对白", None)
     if "clip" in locked:
-        for key in ("camera", "duration", "timing", "start", "end", "kind", "size"):
+        for key in ("camera", "duration", "timing", "start", "end", "kind", "size", "i2v", "i2v_ladder"):
             patch.pop(key, None)
     if "kind" in locked:
         patch.pop("kind", None)
         patch.pop("size", None)
 
-    before = {k: shot.get(k) for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice")}
+    before = {
+        k: shot.get(k)
+        for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice", "i2v", "i2v_ladder", "i2v_source")
+    }
     for key in ("画面", "对白", "字幕", "timing", "camera"):
         if key in patch and patch[key] is not None:
             shot[key] = str(patch[key])
@@ -567,6 +574,18 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         shot["size"] = size
     if "speaker" in patch:
         shot["speaker"] = str(patch["speaker"] or "").strip()
+    if "voice" in patch:
+        shot["voice"] = str(patch["voice"] or "").strip()
+    if "i2v" in patch and patch["i2v"] is not None:
+        shot["i2v"] = normalize_i2v_mode(patch["i2v"])
+    if "i2v_ladder" in patch:
+        from tools.drama_models import normalize_ladder
+
+        raw = str(patch.get("i2v_ladder") or "").strip()
+        shot["i2v_ladder"] = normalize_ladder(raw) if raw else ""
+    if "i2v_source" in patch:
+        src = str(patch.get("i2v_source") or "").strip().lower()
+        shot["i2v_source"] = "" if src in ("", "none") else src
     if "角色" in patch:
         roles = list(shot.get("角色") or [])
         if shot.get("speaker") and shot["speaker"] not in roles:
@@ -600,6 +619,16 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     if str(before.get("voice") or "") != str(shot.get("voice") or ""):
         if "voice" not in dirty and "voice" not in locked:
             dirty.append("voice")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
+    if str(before.get("i2v") or "auto") != str(shot.get("i2v") or "auto") or str(
+        before.get("i2v_ladder") or ""
+    ) != str(shot.get("i2v_ladder") or ""):
+        if "motion" not in dirty:
+            dirty.append("motion")
+        if "clip" not in dirty and "clip" not in locked:
+            dirty.append("clip")
+    if str(before.get("i2v_source") or "") != str(shot.get("i2v_source") or ""):
         if "clip" not in dirty and "clip" not in locked:
             dirty.append("clip")
     dirty = [layer for layer in dirty if layer not in locked]
@@ -687,7 +716,7 @@ def merge_from_parsed(
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
             rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
             rec["chosen"] = str(old.get("chosen") or "")
-            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "kind", "size", "speaker", "voice"):
+            for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "i2v_ladder", "kind", "size", "speaker", "voice"):
                 if key in old:
                     rec[key] = old[key]
             if "kind" in locked:
@@ -715,7 +744,7 @@ def merge_from_parsed(
         else:
             rec["dirty"] = list(LAYERS)
             rec["status"] = "pending"
-        need_voice = bool(str(rec.get("对白") or "").strip() or str(rec.get("字幕") or "").strip())
+        need_voice = bool(str(rec.get("对白") or "").strip())
         for layer in LAYERS:
             if layer == "voice" and not need_voice:
                 continue
@@ -816,6 +845,7 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "transition": tl["transition"],
         "i2v": normalize_i2v_mode(shot.get("i2v")),
         "i2v_source": shot.get("i2v_source") or "",
+        "i2v_ladder": str(shot.get("i2v_ladder") or ""),
         "lip_source": shot.get("lip_source") or "",
         "lip_score": shot.get("lip_score") or None,
         "keys": list(shot.get("keys") or []),
