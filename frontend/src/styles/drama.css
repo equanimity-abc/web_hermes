@@ -2699,6 +2699,19 @@
   margin-top: 12px;
 }
 
+.drama-voice-readonly {
+  color: inherit;
+  opacity: 0.92;
+}
+
+.drama-voice-lip-hint {
+  margin: 8px 0 0;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #d97706;
+}
+
 .drama-video-meta-row {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }

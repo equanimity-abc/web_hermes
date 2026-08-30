@@ -43,6 +43,11 @@ class Config:
         "PIXVERSE_LIP_MODEL", "pixverse/pixverse-lipsync"
     )
 
+    # LatentSync（最高画质开源口型，经 Replicate）
+    REPLICATE_API_TOKEN: str = os.getenv("REPLICATE_API_TOKEN", "")
+    REPLICATE_LIP_MODEL: str = os.getenv("REPLICATE_LIP_MODEL", "bytedance/latentsync")
+    REPLICATE_LIP_VERSION: str = os.getenv("REPLICATE_LIP_VERSION", "")
+
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))
@@ -109,10 +114,17 @@ class Config:
     I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "300.0"))
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
-    # 口型（Q2 + S3）：仅 dialogue CU/MCU；none|mock|fail|http|musetalk|wav2lip
-    LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "mock")
+    # 口型（质量优先）：latentsync | pixverse | musetalk | http | mock
+    # 默认 max：优先 LatentSync(Replicate) → PixVerse(百炼) → 自建网关；默认禁止伪波形 mock
+    LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "pixverse")
     LIP_API_URL: str = os.getenv("LIP_API_URL", "")
     LIP_API_KEY: str = os.getenv("LIP_API_KEY", "")
+    LIP_QUALITY: str = os.getenv("LIP_QUALITY", "max")
+    LIP_ALLOW_MOCK: str = os.getenv("LIP_ALLOW_MOCK", "0")
+    LIP_ENSURE_MOTION: str = os.getenv("LIP_ENSURE_MOTION", "1")
+    LIP_INFERENCE_STEPS: int = int(os.getenv("LIP_INFERENCE_STEPS", "30"))
+    LIP_GUIDANCE_SCALE: float = float(os.getenv("LIP_GUIDANCE_SCALE", "1.5"))
+    LIP_POLL_TIMEOUT: float = float(os.getenv("LIP_POLL_TIMEOUT", "600"))
 
     # 高拟真 TTS（S3）：真 TTS 走自建 HTTP 网关；未配置时诚实回退 edge-tts。
     # 适配器契约：multipart POST { text, voice } 或 JSON { text, voice, model }

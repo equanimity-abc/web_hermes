@@ -184,6 +184,22 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
         cast = resolve_shot_characters(shot, cards)
         pub["cast"] = [{"id": c["id"], "name": c["name"], "voice": c["voice"]} for c in cast]
         pub["voice_id"] = primary_voice(cast, slug=slug) if cast else ""
+        from tools.drama_video import shot_voice_speakers
+
+        pub["voice_speakers"] = shot_voice_speakers(shot, cards, slug=slug)
+        pub["voice_turns"] = list(shot.get("voice_turns") or [])
+        pub["lip_base_used"] = bool(shot.get("lip_base_used"))
+        pub["motion_locked"] = "motion" in (shot.get("locked") or []) or "shot" in (shot.get("locked") or [])
+        # Mismatch: lip was built from still lip_base while video-page motion exists
+        motion_rel = str((shot.get("assets") or {}).get("motion") or "")
+        has_motion_asset = False
+        if motion_rel:
+            try:
+                mp = resolve_safe(motion_rel)
+                has_motion_asset = mp.is_file() and mp.stat().st_size > 500
+            except ValueError:
+                has_motion_asset = False
+        pub["lip_base_mismatch"] = bool(pub["lip_base_used"] and has_motion_asset)
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
         from tools.drama_qc import qc_passed

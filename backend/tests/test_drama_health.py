@@ -55,6 +55,16 @@ def test_musetalk_gated_without_lip_url():
     assert "LIP_API_URL" in lip["reason"]
 
 
+def test_latentsync_gated_without_replicate_token():
+    models = default_models()
+    models["lip"]["provider"] = "latentsync"
+    health = provider_health(models)
+    lip = next(it for it in health["items"] if it["capability"] == "lip")
+    assert lip["written"] == "latentsync"
+    assert lip["status"] == "gated"
+    assert "REPLICATE_API_TOKEN" in lip["reason"]
+
+
 def test_local_backends_are_live():
     """name-accurate local backends are live, never flagged as degrades."""
     models = default_models()
@@ -69,15 +79,14 @@ def test_local_backends_are_live():
 
 
 def test_default_models_reports_pro_promise_degraded():
-    """default models promise musetalk (lip) + kling (action) but have no real adapter."""
+    """default models promise latentsync (lip) which gates without REPLICATE token."""
     health = provider_health(default_models())
     degraded = {
         it["written"]
         for it in health["items"]
         if it["status"] in ("alias", "missing", "gated")
     }
-    assert "musetalk" in degraded
-    assert "kling" in degraded
+    assert "latentsync" in degraded
 
 
 def test_build_asset_ref_prompt_includes_three_view_look():

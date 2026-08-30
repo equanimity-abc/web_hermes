@@ -22,9 +22,35 @@ def test_clean_subtitle_keeps_narrative():
 def test_spoken_text_for_shot_uses_speaker_lines_only():
     shot = {
         "speaker": "林晚",
-        "字幕": '林薇薇（夸张地）: “哎呀！对不起姐姐！” 林晚（低头）: “没关系。一件衣服而已。”',
+        "字幕": '林晚（低头）: “没关系。一件衣服而已。”',
     }
     assert spoken_text_for_shot(shot) == "没关系。一件衣服而已。"
+
+
+def test_spoken_text_for_shot_multi_speaker_joins_all():
+    shot = {
+        "speaker": "林晚",
+        "字幕": '林薇薇（夸张地）: “哎呀！对不起姐姐！” 林晚（低头）: “没关系。一件衣服而已。”',
+    }
+    assert spoken_text_for_shot(shot) == "哎呀！对不起姐姐！没关系。一件衣服而已。"
+
+
+def test_dialogue_turns_multi_speaker_uses_distinct_voices():
+    from tools.drama_video import dialogue_turns_for_shot
+
+    cast = [
+        {"id": "a", "name": "林薇薇", "voice": "zh-CN-XiaoxiaoNeural", "aliases": []},
+        {"id": "b", "name": "林晚", "voice": "zh-CN-XiaoyiNeural", "aliases": []},
+    ]
+    shot = {
+        "字幕": '林薇薇（夸张地）: “哎呀！对不起姐姐！” 林晚（低头）: “没关系。”',
+    }
+    turns = dialogue_turns_for_shot(shot, cast)
+    assert len(turns) == 2
+    assert turns[0]["speaker"] == "林薇薇"
+    assert turns[0]["voice"] == "zh-CN-XiaoxiaoNeural"
+    assert turns[1]["speaker"] == "林晚"
+    assert turns[1]["voice"] == "zh-CN-XiaoyiNeural"
 
 
 def test_spoken_text_for_shot_fuzzy_speaker_name():

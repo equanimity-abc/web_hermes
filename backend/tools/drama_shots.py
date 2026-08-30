@@ -1215,6 +1215,8 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "i2v_ladder": str(shot.get("i2v_ladder") or ""),
         "lip_source": shot.get("lip_source") or "",
         "lip_score": shot.get("lip_score") or None,
+        "lip_base_used": bool(shot.get("lip_base_used")),
+        "voice_turns": list(shot.get("voice_turns") or []),
         "keys": list(shot.get("keys") or []),
         "identity": shot.get("identity") if isinstance(shot.get("identity"), dict) else None,
         "identity_hint": shot.get("identity_hint") or "",

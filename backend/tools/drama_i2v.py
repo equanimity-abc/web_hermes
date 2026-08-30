@@ -354,7 +354,10 @@ def _concat_motion(first: Path, second: Path, dest: Path) -> bool:
 
 
 def ensure_motion_seconds(path: Path, target: float) -> bool:
-    """Loop-pad a short motion mp4 up to script duration (provider I2V often max ~4s)."""
+    """Pad a short motion mp4 up to script duration by freezing the last frame.
+
+    Avoids stream_loop so performance masters are not polluted with a restart seam.
+    """
     from tools.drama_video import FPS, _probe_duration, _run_ffmpeg
 
     target = float(target or 0)
@@ -363,18 +366,19 @@ def ensure_motion_seconds(path: Path, target: float) -> bool:
     cur = float(_probe_duration(path) or 0)
     if cur <= 0.05 or cur + 0.12 >= target:
         return cur + 0.12 >= target
+    hold = max(0.0, target - cur)
     tmp = path.with_suffix(".pad.tmp.mp4")
     try:
         _run_ffmpeg(
             [
                 "-y",
-                "-stream_loop",
-                "-1",
                 "-i",
                 str(path),
+                "-vf",
+                f"tpad=stop_mode=clone:stop_duration={hold:.3f},fps={FPS}",
+                "-an",
                 "-t",
                 f"{target:.2f}",
-                "-an",
                 "-r",
                 str(FPS),
                 "-c:v",
@@ -579,17 +583,44 @@ def generate_shot_i2v(
     shot: dict[str, Any],
     *,
     force: bool = False,
+    allow_locked: bool = False,
 ) -> dict[str, Any]:
-    """Try I2V when enabled; rebuild motion asset. Returns status dict."""
+    """Try I2V when enabled; rebuild motion asset. Returns status dict.
+
+    Motion is the performance master. Locked motion is not overwritten unless
+    the caller is an explicit video-page regenerate (force + allow_locked).
+    Successful ai/keys runs auto-lock the motion layer.
+    """
+    from tools.drama_shots import set_shot_locks
+
     shot["_slug"] = slug
     shot["_episode"] = episode
-    if not force and not should_try_i2v(shot, slug=slug):
-        return {"tried": False, "i2v_source": str(shot.get("i2v_source") or "none"), "reason": "i2v_off"}
+    locked = set(shot.get("locked") or [])
+    motion_locked = "motion" in locked or "shot" in locked
     rel = motion_rel(slug, episode, int(shot.get("n") or 0))
     assets = shot.setdefault("assets", {})
     assets["motion"] = rel
-    scene = resolve_safe(str(assets.get("scene") or ""))
     dest = resolve_safe(rel)
+
+    if motion_locked and not (force and allow_locked):
+        src = str(shot.get("i2v_source") or "none")
+        exists = dest.is_file() and dest.stat().st_size > 500
+        shot.pop("_slug", None)
+        shot.pop("_episode", None)
+        return {
+            "tried": False,
+            "i2v_source": src if exists else "none",
+            "motion": rel if exists else None,
+            "reason": "motion_locked",
+            "locked": True,
+        }
+
+    if not force and not should_try_i2v(shot, slug=slug):
+        shot.pop("_slug", None)
+        shot.pop("_episode", None)
+        return {"tried": False, "i2v_source": str(shot.get("i2v_source") or "none"), "reason": "i2v_off"}
+
+    scene = resolve_safe(str(assets.get("scene") or ""))
     source = try_generate_i2v(scene, dest, shot)
     shot["i2v_source"] = source
     if source == "ai" and str(shot.get("i2v_provider") or "") in ("kling", "kling-video", "kling-maas", "hailuo"):
@@ -598,6 +629,17 @@ def generate_shot_i2v(
     shot.pop("_slug", None)
     shot.pop("_episode", None)
     if source in ("ai", "keys", "fallback") and dest.is_file() and dest.stat().st_size > 500:
+        # Auto-lock real performance masters so voice/lip cannot pollute them.
+        if source in ("ai", "keys") and "motion" not in (shot.get("locked") or []) and "shot" not in (
+            shot.get("locked") or []
+        ):
+            try:
+                set_shot_locks(shot, lock=["motion"])
+            except Exception:
+                locked_list = list(shot.get("locked") or [])
+                if "motion" not in locked_list:
+                    locked_list.append("motion")
+                    shot["locked"] = locked_list
         return {
             "tried": True,
             "i2v_source": source,

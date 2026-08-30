@@ -202,36 +202,44 @@ def default_providers() -> dict[str, dict[str, Any]]:
             "notes": "海螺/MiniMax 类 I2V。Q0 未开通。",
         },
         "musetalk": {
-            "available": False,
+            "available": True,
             "cost_per_shot": 0.8,
             "rpm": 6,
             "timeout_s": 180,
             "fallback": "mock",
-            "notes": "对话特写口型。Q2 默认 mock；无完整调研卡禁止 available。",
+            "notes": "自建 MuseTalk 网关（LIP_API_URL）。实时向口型；画质次于 LatentSync。",
         },
         "wav2lip": {
-            "available": False,
+            "available": True,
             "cost_per_shot": 0.4,
             "rpm": 6,
             "timeout_s": 180,
             "fallback": "mock",
-            "notes": "开源口型，画质不稳。Q2 候选，Q0 未接。",
+            "notes": "自建 Wav2Lip 网关（LIP_API_URL）。轻量，口型准但嘴部分辨率低。",
+        },
+        "latentsync": {
+            "available": True,
+            "cost_per_shot": 1.2,
+            "rpm": 4,
+            "timeout_s": 600,
+            "fallback": "musetalk",
+            "notes": "ByteDance LatentSync（Replicate bytedance/latentsync）。扩散口型，画质最高；需 REPLICATE_API_TOKEN。",
         },
         "pixverse": {
             "available": True,
             "cost_per_shot": 0.36,
             "rpm": 10,
-            "timeout_s": 240,
-            "fallback": "mock",
-            "notes": "PixVerse 对口型 pixverse-lipsync（0.12元/秒，3秒约0.36），走专属 MaaS 端点。",
+            "timeout_s": 480,
+            "fallback": "latentsync",
+            "notes": "PixVerse 对口型 pixverse-lipsync（约0.12元/秒）。需人脸视频+配音；走百炼 MaaS。",
         },
         "pixverse-lipsync": {
             "available": True,
             "cost_per_shot": 0.36,
             "rpm": 10,
-            "timeout_s": 240,
-            "fallback": "mock",
-            "notes": "PixVerse 对口型 pixverse-lipsync（0.12元/秒，3秒约0.36），走专属 MaaS 端点。",
+            "timeout_s": 480,
+            "fallback": "latentsync",
+            "notes": "PixVerse 对口型 pixverse-lipsync（约0.12元/秒）。需人脸视频+配音；走百炼 MaaS。",
         },
         "wanx": {
             "available": True,
@@ -299,7 +307,14 @@ def default_models() -> dict[str, Any]:
             "crowd": {"ladder": "L0", "provider": "l0"},
             "title": {"ladder": "L0", "provider": "l0"},
         },
-        "lip": {"provider": "musetalk", "only_kinds": ["dialogue"], "only_sizes": ["CU", "MCU", "ECU"], "fallback": "mock"},
+        "lip": {
+            "provider": "pixverse",
+            "only_kinds": ["dialogue", "reaction"],
+            "only_sizes": ["CU", "MCU", "ECU", "MS", "WS"],
+            "fallback": "latentsync",
+            "quality": "max",
+            "ensure_motion": True,
+        },
         "bgm": {"provider": "library", "duck_db": -12, "license": "user_upload"},
         "sfx": {"provider": "library"},
         "qc": {
@@ -367,8 +382,8 @@ def _coerce_providers(raw: Any) -> dict[str, dict[str, Any]]:
         available = bool(card.get("available"))
         if available and not research_complete(card):
             available = False
-        # Q0: never auto-enable unpaid commercial endpoints.
-        if pid in ("kling", "hailuo", "musetalk", "wav2lip") and not research_complete(card):
+        # Q0: never auto-enable unpaid commercial endpoints without research card.
+        if pid in ("kling", "hailuo") and not research_complete(card):
             available = False
         card["available"] = available
         out[pid] = card
@@ -386,6 +401,34 @@ def _sync_character_ref_route(image: dict[str, Any]) -> None:
         image["character_ref"] = {**cur, **env}
     elif not str(cur.get("provider") or "").strip():
         image["character_ref"] = {**env, **cur}
+
+
+def _sync_lip_route(lip: dict[str, Any]) -> None:
+    """口型默认随 .env 对齐到可用的最高画质模型。"""
+    from tools.drama_lip import _default_provider
+
+    cur = dict(lip or {})
+    written = str(cur.get("provider") or "").strip().lower()
+    # Only auto-upgrade empty / mock placeholders — keep explicit musetalk/pixverse/etc.
+    if written in ("", "mock"):
+        cur["provider"] = _default_provider()
+    if "quality" not in cur:
+        cur["quality"] = "max"
+    if "ensure_motion" not in cur:
+        cur["ensure_motion"] = True
+    if "only_kinds" not in cur:
+        cur["only_kinds"] = ["dialogue", "reaction"]
+    if "only_sizes" not in cur:
+        cur["only_sizes"] = ["CU", "MCU", "ECU", "MS", "WS"]
+    else:
+        # 升档：旧项目只开了 CU/MCU/ECU 时自动补上 MS/WS
+        sizes = [str(x).strip().upper() for x in (cur.get("only_sizes") or []) if str(x).strip()]
+        for extra in ("MS", "WS"):
+            if extra not in sizes:
+                sizes.append(extra)
+        cur["only_sizes"] = sizes or ["CU", "MCU", "ECU", "MS", "WS"]
+    lip.clear()
+    lip.update(cur)
 
 
 def normalize_models(raw: Any) -> dict[str, Any]:
@@ -412,6 +455,8 @@ def normalize_models(raw: Any) -> dict[str, Any]:
     if preset not in PRESET_IDS:
         preset = DEFAULT_PRESET
     nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
+    lip = {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})}
+    _sync_lip_route(lip)
     return {
         "currency": currency,
         "preset": preset,
@@ -419,7 +464,7 @@ def normalize_models(raw: Any) -> dict[str, Any]:
         "providers": _coerce_providers(data.get("providers")),
         "image": image,
         "motion": motion,
-        "lip": {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})},
+        "lip": lip,
         "bgm": {**base["bgm"], **(data.get("bgm") if isinstance(data.get("bgm"), dict) else {})},
         "sfx": {**base["sfx"], **(data.get("sfx") if isinstance(data.get("sfx"), dict) else {})},
         "script": {**base["script"], **(data.get("script") if isinstance(data.get("script"), dict) else {})},
@@ -726,7 +771,18 @@ def i2v_run_ladder(shot: dict[str, Any], *, slug: str | None = None, models: dic
 
 def provider_usable(models: dict[str, Any], provider_id: str) -> bool:
     card = (models.get("providers") or {}).get(provider_id) or {}
-    return bool(card.get("available")) and research_complete(card)
+    if not (bool(card.get("available")) and research_complete(card)):
+        return False
+    # Env-gated providers are not usable until the key/URL is configured.
+    from config import config
+
+    for _cap, mapping in _ENV_GATED.items():
+        attr = mapping.get(provider_id)
+        if not attr:
+            continue
+        if not str(getattr(config, attr, "") or "").strip():
+            return False
+    return True
 
 
 def resolve_provider(models: dict[str, Any], provider_id: str, *, hops: int = 0) -> str:
@@ -968,6 +1024,9 @@ _ENV_GATED: dict[str, dict[str, str]] = {
     "lip": {
         "musetalk": "LIP_API_URL",
         "wav2lip": "LIP_API_URL",
+        "latentsync": "REPLICATE_API_TOKEN",
+        "latent-sync": "REPLICATE_API_TOKEN",
+        "replicate-lip": "REPLICATE_API_TOKEN",
         "pixverse": "DASHSCOPE_MAAS_BASE_URL",
         "pixverse-lipsync": "DASHSCOPE_MAAS_BASE_URL",
     },

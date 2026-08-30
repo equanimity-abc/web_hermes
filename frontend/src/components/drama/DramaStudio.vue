@@ -515,12 +515,50 @@ function shotHasVideo(shot) {
   return Boolean(shot.files?.motion?.exists || shot.files?.clip?.exists)
 }
 
-function shotVideoPreviewUrl(shot) {
+function shotPreviewUrl(shot) {
   if (!shot) return ''
-  // 视频步看运动；避免带旧字幕遮罩的 clip
-  const url = shot.files?.motion?.url || shot.files?.scene?.url || shot.files?.clip?.url || ''
-  if (!url) return ''
-  return withBust(url)
+  // 有口型一律播 lip（全景底片已改为原构图，不再硬推近）
+  const hasLip = shotHasLip(shot)
+  const url = hasLip
+    ? shot.files?.lip?.url || shot.files?.clip?.url || shot.files?.motion?.url || shot.files?.scene?.url || ''
+    : shot.files?.motion?.url || shot.files?.scene?.url || shot.files?.clip?.url || ''
+  return url ? withBust(url) : ''
+}
+
+function shotVideoPreviewUrl(shot) {
+  // 视频页只看表演母带 motion，避免被 clip/lip 污染观感
+  if (!shot) return ''
+  const url = shot.files?.motion?.url || shot.files?.scene?.url || ''
+  return url ? withBust(url) : ''
+}
+
+function shotVoicePreviewUrl(shot) {
+  // 声音页：上一步 motion 必须可见；装配后的 clip 也应基于 motion。
+  // 若口型曾用 lip_base 偏离母带，预览退回 motion+外挂音，避免「丢运镜」。
+  if (!shot) return ''
+  if (shot.lip_base_mismatch || shot.lip_base_used) {
+    const motionFirst =
+      shot.files?.motion?.url || shot.files?.clip?.url || shot.files?.lip?.url || shot.files?.scene?.url || ''
+    return motionFirst ? withBust(motionFirst) : ''
+  }
+  const url =
+    shot.files?.clip?.url ||
+    shot.files?.lip?.url ||
+    shot.files?.motion?.url ||
+    shot.files?.scene?.url ||
+    ''
+  return url ? withBust(url) : ''
+}
+
+function shotVoiceNeedsExternalAudio(shot) {
+  if (!shot) return false
+  // 偏离母带时强制 motion + voice.mp3，保证音画都能播且保留运镜
+  if (shot.lip_base_mismatch || shot.lip_base_used) {
+    return Boolean(shotVoiceAudioUrl(shot))
+  }
+  if (shot.files?.clip?.exists) return false
+  if (shotHasLip(shot)) return false
+  return Boolean(shotVoiceAudioUrl(shot))
 }
 
 function shotVideoPreviewKind(shot) {
@@ -704,7 +742,18 @@ function shotHasVoice(shot) {
 }
 
 function shotHasLip(shot) {
-  return Boolean(shot?.files?.lip?.exists || ['mock', 'http', 'ai'].includes(shot?.lip_source))
+  const src = String(shot?.lip_source || '')
+  const real = [
+    'mock',
+    'http',
+    'ai',
+    'pixverse',
+    'pixverse-lipsync',
+    'latentsync',
+    'musetalk',
+    'wav2lip',
+  ]
+  return Boolean(shot?.files?.lip?.exists || real.includes(src))
 }
 
 function shotDialoguePreview(shot) {
@@ -766,19 +815,6 @@ function shotVoiceStatusClass(shot) {
   const dirty = shot.dirty || []
   if (dirty.includes('voice') || dirty.includes('lip')) return 'is-dirty'
   return 'is-todo'
-}
-
-function shotVoicePreviewUrl(shot) {
-  if (!shot) return ''
-  // 预览用无烧录遮罩的 motion/scene；声音走下方 audio，字幕用浮层文字
-  const url =
-    shot.files?.motion?.url ||
-    shot.files?.scene?.url ||
-    shot.files?.lip?.url ||
-    shot.files?.clip?.url ||
-    ''
-  if (!url) return ''
-  return withBust(url)
 }
 
 function shotVoicePreviewKind(shot) {
@@ -858,13 +894,28 @@ function onVoiceVideoSeeked() {
   syncVoiceAudioToVideo()
 }
 
+function onVoiceVideoPlaySafe() {
+  if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoPlay()
+}
+function onVoiceVideoPauseSafe() {
+  if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoPause()
+}
+function onVoiceVideoSeekedSafe() {
+  if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoSeeked()
+}
+function onVoiceVideoVolumeChangeSafe() {
+  if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoVolumeChange()
+}
+
 function onVoiceVideoEnded() {
+  // 不再循环重启画面；尾帧定住等音频结束（与后端 hold 策略一致）
   const video = voiceVideoRef.value
-  const audio = voiceAudioRef.value
-  if (!video || !audio) return
-  if (!audio.paused && !audio.ended && audio.currentTime < (audio.duration || 0) - 0.15) {
-    video.currentTime = 0
-    video.play().catch(() => {})
+  if (video && !Number.isNaN(video.duration) && video.duration > 0) {
+    try {
+      video.currentTime = Math.max(0, video.duration - 0.05)
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -907,35 +958,98 @@ function voiceIdLabel(shot) {
   return hit?.label || id
 }
 
-function voiceSpeakerOptions(shot) {
-  const names = new Set()
-  for (const r of shot?.角色 || []) {
-    const n = String(r || '').trim()
-    if (n) names.add(n)
-  }
-  for (const c of props.characters || []) {
-    if ((c.category || 'character') !== 'character') continue
-    const n = String(c.name || c.id || '').trim()
-    if (n) names.add(n)
-  }
-  const cur = String(props.draft?.speaker || shot?.speaker || '').trim()
-  if (cur) names.add(cur)
-  return [...names]
+function voiceLabelForId(id) {
+  const vid = String(id || '').trim()
+  if (!vid) return '—'
+  const hit = (props.voices || []).find((v) => v.id === vid)
+  return hit?.label || vid
 }
 
-function onVoiceSpeakerChange() {
-  const name = String(props.draft?.speaker || '').trim()
-  if (!name || !props.draft) return
-  const hit = (props.characters || []).find(
-    (c) => c.name === name || c.id === name || (c.aliases || []).includes(name),
+function findCharacterForSpeaker(name) {
+  const key = String(name || '').trim()
+  if (!key) return null
+  return (
+    (props.characters || []).find(
+      (c) =>
+        (c.category || 'character') === 'character' &&
+        (c.name === key || c.id === key || (c.aliases || []).includes(key)),
+    ) || null
   )
-  if (hit?.voice) props.draft.voice = hit.voice
+}
+
+/** Speakers who can talk in this shot: subtitle names + shot roles (not full cast). */
+const voiceSpeakerOptions = computed(() => {
+  const names = []
+  const seen = new Set()
+  const push = (raw) => {
+    const n = String(raw || '').trim()
+    if (!n || seen.has(n)) return
+    seen.add(n)
+    names.push(n)
+  }
+
+  for (const sp of props.selected?.voice_speakers || []) {
+    push(sp?.name)
+  }
+
+  const dialogue = String(props.draft?.字幕 || props.selected?.字幕 || props.selected?.对白 || '')
+  const quoteRe =
+    /([^:：\s「『“"（(【\[]{1,16})(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*[「『“"]([^」』”"]+)[」』”"]/g
+  let m
+  while ((m = quoteRe.exec(dialogue))) push(m[1])
+  for (const line of dialogue.split(/[\n\r]+/)) {
+    const lm = line
+      .trim()
+      .match(/^([^:：\s「『“"（(【\[]{1,16})(?:\s*[（(][^）)]{0,40}[）)])?\s*[:：]\s*(.+)$/)
+    if (lm) push(lm[1])
+  }
+
+  for (const rid of props.draft?.角色 || props.selected?.角色 || []) {
+    const hit = (props.characters || []).find((c) => c.id === rid || c.name === rid)
+    push(hit?.name || rid)
+  }
+
+  const cur = String(props.draft?.speaker || props.selected?.speaker || '').trim()
+  if (cur) push(cur)
+
+  return names
+})
+
+const selectedSpeakerVoiceLabel = computed(() => {
+  const name = String(props.draft?.speaker || '').trim()
+  const hit = findCharacterForSpeaker(name)
+  if (hit?.voice) return voiceLabelForId(hit.voice)
+  if (props.draft?.voice) return voiceLabelForId(props.draft.voice)
+  return '—'
+})
+
+function onVoiceSpeakerChange() {
+  if (!props.draft) return
+  const hit = findCharacterForSpeaker(props.draft.speaker)
+  // Keep draft.voice in sync for save, but UI never lets users edit voice.
+  props.draft.voice = hit?.voice || ''
 }
 
 function lipStatusLabel(shot) {
-  if (shotHasLip(shot)) return shot?.lip_source || '已生成'
-  if (shot?.lip?.will_run || shot?.lip?.ok) return '可生成'
-  return '暂无'
+  if (shotHasLip(shot)) {
+    const src = String(shot?.lip_source || '')
+    const map = {
+      latentsync: 'LatentSync · 高清',
+      pixverse: 'PixVerse · 已同步',
+      'pixverse-lipsync': 'PixVerse · 已同步',
+      musetalk: 'MuseTalk',
+      wav2lip: 'Wav2Lip',
+      http: '网关口型',
+      ai: 'AI 口型',
+      mock: '占位波形（非真口型）',
+    }
+    const score = shot?.lip_score?.lse_c ?? shot?.lip_score?.score
+    const base = map[src] || src || '已生成'
+    return score != null && score !== '' ? `${base} · LSE ${Number(score).toFixed?.(2) ?? score}` : base
+  }
+  if (shot?.lip_error) return `失败：${shot.lip_error}`
+  if (shot?.lip?.will_run || shot?.lip?.ok) return '可生成（真口型）'
+  return shot?.lip?.reason || '暂无'
 }
 
 function canGenerateVoiceFor(shot) {
@@ -1456,6 +1570,15 @@ const voiceStatusLabel = computed(() => {
                 </button>
                 <button
                   type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="saving || rendering || !selected?.files?.motion?.exists"
+                  :title="selected?.motion_locked ? '解锁后允许重新生成覆盖 motion' : '锁定后声音/口型不会改写表演母带'"
+                  @click="emit('toggle-lock', 'motion')"
+                >
+                  {{ selected?.motion_locked || (selected?.locked || []).includes('motion') ? '解锁运动' : '锁定运动' }}
+                </button>
+                <button
+                  type="button"
                   class="btn-primary btn-sm"
                   :disabled="rendering || !canGenerateI2v"
                   @click="onGenerateVideo"
@@ -1670,23 +1793,26 @@ const voiceStatusLabel = computed(() => {
                   <strong>说话人</strong>
                   <select v-model="draft.speaker" @change="onVoiceSpeakerChange">
                     <option value="">（未指定）</option>
-                    <option v-for="name in voiceSpeakerOptions(selected)" :key="name" :value="name">
+                    <option v-for="name in voiceSpeakerOptions" :key="name" :value="name">
                       {{ name }}
                     </option>
                   </select>
                 </label>
-                <label class="drama-voice-kv">
+                <div class="drama-voice-kv">
                   <strong>音色</strong>
-                  <select v-model="draft.voice">
-                    <option value="">（默认）</option>
-                    <option v-for="v in voices" :key="v.id" :value="v.id">
-                      {{ v.label || v.id }}
-                    </option>
-                  </select>
-                </label>
+                  <span class="drama-voice-readonly">{{ selectedSpeakerVoiceLabel }}</span>
+                </div>
+                <div v-if="(selected?.voice_turns || []).length > 1" class="drama-voice-kv">
+                  <strong>对白段</strong>
+                  <span class="drama-voice-readonly">{{ (selected.voice_turns || []).length }} 段 · 分段配音</span>
+                </div>
                 <div class="drama-voice-kv">
                   <strong>口型</strong>
                   <span>{{ lipStatusLabel(selected) }}</span>
+                </div>
+                <div v-if="selected?.lip?.provider || selected?.lip_source" class="drama-voice-kv">
+                  <strong>模型</strong>
+                  <span>{{ selected?.lip?.wanted_provider || selected?.lip?.provider || selected?.lip_source || '—' }}</span>
                 </div>
                 <div class="drama-voice-kv" :class="identityClass">
                   <strong>身份</strong>
@@ -1707,11 +1833,11 @@ const voiceStatusLabel = computed(() => {
                       :src="shotVoicePreviewUrl(selected)"
                       controls
                       playsinline
-                      @play="onVoiceVideoPlay"
-                      @pause="onVoiceVideoPause"
-                      @seeked="onVoiceVideoSeeked"
+                      @play="onVoiceVideoPlaySafe"
+                      @pause="onVoiceVideoPauseSafe"
+                      @seeked="onVoiceVideoSeekedSafe"
                       @ended="onVoiceVideoEnded"
-                      @volumechange="onVoiceVideoVolumeChange"
+                      @volumechange="onVoiceVideoVolumeChangeSafe"
                     />
                     <img
                       v-else-if="shotVoicePreviewKind(selected) === 'image'"
@@ -1720,6 +1846,9 @@ const voiceStatusLabel = computed(() => {
                       alt="镜头画面"
                     />
                     <div v-else class="drama-stage-empty">本镜尚未出图；可先在「画面 / 视频」步骤生成</div>
+                    <p v-if="selected?.lip_base_mismatch" class="drama-voice-lip-hint">
+                      本镜口型曾脱离视频页 motion；成片/预览已改回以 motion（含运镜）为母带叠加配音。请重新「生成配音」以按 motion 重做口型。
+                    </p>
                     <div
                       v-if="voiceNarrationText()"
                       class="drama-voice-sub-layer drama-voice-sub-layer--narration"
@@ -1741,7 +1870,7 @@ const voiceStatusLabel = computed(() => {
                   </div>
                 </div>
                 <audio
-                  v-if="shotVoiceAudioUrl(selected)"
+                  v-if="shotVoiceNeedsExternalAudio(selected)"
                   :key="shotVoiceAudioUrl(selected)"
                   ref="voiceAudioRef"
                   class="drama-voice-audio-hidden"
@@ -1775,7 +1904,7 @@ const voiceStatusLabel = computed(() => {
                 ref="voiceChatRef"
                 title="对话改配音"
                 :character-name="`Shot ${selected.n}`"
-                hint="用自然语言改字幕、旁白、说话人或音色；保存后可点「生成配音」生效。"
+                hint="用自然语言改字幕或旁白；保存后可点「生成配音」生效。说话人用上方下拉选择，音色只读跟随角色卡。"
                 placeholder="例如：字幕改成更狠一点，旁白删掉…"
                 disabled-placeholder="请先选择镜头"
                 pending-label="正在理解并更新…"
