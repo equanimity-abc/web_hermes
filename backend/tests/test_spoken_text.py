@@ -53,6 +53,36 @@ def test_dialogue_turns_multi_speaker_uses_distinct_voices():
     assert turns[1]["voice"] == "zh-CN-XiaoyiNeural"
 
 
+def test_spoken_text_for_shot_plain_multi_ellipsis():
+    cast = [
+        {
+            "id": "ruoxi",
+            "name": "白若曦",
+            "voice": "zh-CN-XiaoxiaoNeural",
+            "aliases": ["林晚"],
+        },
+        {
+            "id": "ruolin",
+            "name": "白若琳",
+            "voice": "zh-CN-XiaoyiNeural",
+            "aliases": ["林薇薇"],
+        },
+    ]
+    from tools.drama_video import dialogue_turns_for_shot, spoken_text_for_shot
+
+    shot = {
+        "画面": "林薇薇端着牛奶经过林晚。",
+        "字幕": "哎呀！对不起姐姐……没关系。一件衣服而已。",
+        "角色": ["林晚", "林薇薇"],
+    }
+    # spoken_text_for_shot uses empty cast — still joins via track plain path
+    assert "对不起姐姐" in spoken_text_for_shot(shot)
+    turns = dialogue_turns_for_shot(shot, cast)
+    assert len(turns) == 2
+    assert turns[0]["speaker"] == "白若琳"
+    assert turns[1]["speaker"] == "白若曦"
+
+
 def test_spoken_text_for_shot_fuzzy_speaker_name():
     shot = {
         "speaker": "林薇",

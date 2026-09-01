@@ -5,6 +5,11 @@ Pipeline:
   2. Ensure face **video** base (motion I2V → still-to-video)
   3. Cascade providers for best fidelity (never prefer mock unless allowed)
   4. Score with LSE proxy; clip encode burns subtitles afterwards
+
+Multi-speaker (DialogueTrack mode=multi / lip_strategy=per_turn):
+  Run lip **per turn** on the active speaker's face crop, then concat.
+  A single master-VO pass locks onto one face and leaves the other speaker's
+  mouth wrong — that is the global root cause for two-hander shots.
 """
 
 from __future__ import annotations
@@ -471,6 +476,505 @@ def try_generate_lip(
     return last
 
 
+def _ffmpeg_slice(
+    src: Path,
+    dest: Path,
+    *,
+    start: float,
+    end: float,
+    audio_only: bool = False,
+) -> bool:
+    from tools.drama_video import _run_ffmpeg
+
+    dur = max(0.08, float(end) - float(start))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if audio_only:
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-ss",
+                    f"{start:.3f}",
+                    "-t",
+                    f"{dur:.3f}",
+                    "-i",
+                    str(src),
+                    "-vn",
+                    "-acodec",
+                    "libmp3lame",
+                    "-q:a",
+                    "2",
+                    str(dest),
+                ],
+                timeout=120,
+            )
+        else:
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-ss",
+                    f"{start:.3f}",
+                    "-t",
+                    f"{dur:.3f}",
+                    "-i",
+                    str(src),
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(dest),
+                ],
+                timeout=120,
+            )
+    except RuntimeError:
+        return False
+    return dest.is_file() and dest.stat().st_size > 200
+
+
+def _concat_video_parts(parts: list[Path], dest: Path) -> bool:
+    from tools.drama_video import _run_ffmpeg
+
+    existing = [p for p in parts if p.is_file() and p.stat().st_size > 200]
+    if not existing:
+        return False
+    if len(existing) == 1:
+        try:
+            shutil.copy2(existing[0], dest)
+            return dest.is_file()
+        except OSError:
+            return False
+    list_file = dest.parent / f"_lip_concat_{dest.stem}.txt"
+    try:
+        lines = []
+        for p in existing:
+            # ffmpeg concat demuxer needs escaped paths on Windows
+            esc = str(p.resolve()).replace("\\", "/").replace("'", "'\\''")
+            lines.append(f"file '{esc}'")
+        list_file.write_text("\n".join(lines), encoding="utf-8")
+        _run_ffmpeg(
+            [
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(list_file),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(dest),
+            ],
+            timeout=240,
+        )
+    except (RuntimeError, OSError):
+        return False
+    finally:
+        try:
+            list_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return dest.is_file() and dest.stat().st_size > 1000
+
+
+def _sample_frame(video: Path, t: float, dest: Path) -> bool:
+    from tools.drama_video import _run_ffmpeg
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-ss",
+                f"{max(0.0, t):.3f}",
+                "-i",
+                str(video),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(dest),
+            ],
+            timeout=60,
+        )
+    except RuntimeError:
+        return False
+    return dest.is_file() and dest.stat().st_size > 100
+
+
+def _speaker_face_crop_box(
+    frame: Path,
+    slug: str,
+    character_id: str,
+    *,
+    face_ref: str = "",
+) -> tuple[float, float, float, float] | None:
+    """Return normalized crop (x,y,w,h) around the speaking character's face, or None.
+
+    Matches frame faces against the character card 定妆图 (face_ref or card.ref).
+    Works for any N speakers as long as each turn has character_id / face_ref.
+    """
+    if not frame.is_file():
+        return None
+    try:
+        from tools.drama_characters import find_character, load_characters, ref_exists, ref_rel
+        from tools.drama_qc import _arcface_embedding, _arcface_singleton, _cosine
+    except Exception:
+        return None
+
+    ref_path: Path | None = None
+    if face_ref:
+        try:
+            cand = resolve_safe(str(face_ref))
+            if cand.is_file() and cand.stat().st_size > 32:
+                ref_path = cand
+        except ValueError:
+            ref_path = None
+    if ref_path is None and character_id:
+        cards = load_characters(slug)
+        char = find_character(cards, character_id)
+        if char and ref_exists(slug, char):
+            try:
+                ref_path = resolve_safe(str(char.get("ref") or ref_rel(slug, character_id)))
+            except ValueError:
+                ref_path = None
+    if ref_path is None or not ref_path.is_file():
+        return None
+    ref_emb, method = _arcface_embedding(ref_path)
+    if ref_emb is None or method != "arcface":
+        return None
+    try:
+        import numpy as np
+        from PIL import Image
+
+        app = _arcface_singleton()
+        img = np.array(Image.open(frame).convert("RGB"))
+        h, w = img.shape[:2]
+        faces = app.get(img)
+        if not faces:
+            return None
+        best = None
+        best_score = -1.0
+        for face in faces:
+            emb = getattr(face, "normed_embedding", None) or getattr(face, "embedding", None)
+            if emb is None:
+                continue
+            score = _cosine(ref_emb, [float(x) for x in list(emb)])
+            if score > best_score:
+                best_score = score
+                best = face
+        if best is None or best_score < 0.25:
+            return None
+        bbox = getattr(best, "bbox", None)
+        if bbox is None:
+            return None
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        bw = max(x2 - x1, 1.0)
+        bh = max(y2 - y1, 1.0)
+        side = max(bw, bh) * 2.4
+        half = side / 2
+        x0 = max(0.0, cx - half)
+        y0 = max(0.0, cy - half * 0.85)
+        x1b = min(float(w), x0 + side)
+        y1b = min(float(h), y0 + side)
+        x0 = max(0.0, x1b - side)
+        y0 = max(0.0, y1b - side)
+        return (x0 / w, y0 / h, (x1b - x0) / w, (y1b - y0) / h)
+    except Exception:
+        return None
+
+
+def _resolve_turn_face(slug: str, turn: dict[str, Any]) -> tuple[str, str]:
+    """Return (character_id, face_ref) for a dialogue turn, resolving name if needed."""
+    cid = str(turn.get("character_id") or "").strip()
+    face_ref = str(turn.get("face_ref") or "").strip()
+    if cid and face_ref:
+        return cid, face_ref
+    try:
+        from tools.drama_characters import load_characters
+        from tools.drama_dialogue import resolve_speaker_binding
+    except Exception:
+        return cid, face_ref
+    cards = load_characters(slug)
+    token = cid or str(turn.get("character_name") or turn.get("speaker") or "")
+    if not token:
+        return cid, face_ref
+    bind = resolve_speaker_binding(token, cards, slug=slug)
+    return (
+        cid or str(bind.get("character_id") or ""),
+        face_ref or str(bind.get("face_ref") or ""),
+    )
+
+
+def _crop_video_box(video: Path, box: tuple[float, float, float, float], dest: Path) -> bool:
+    """Crop video to normalized box and scale back to 9:16 master size."""
+    from tools.drama_video import FPS, HEIGHT, WIDTH, _run_ffmpeg
+
+    x, y, bw, bh = box
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Use relative crop expressions
+    crop = (
+        f"crop=iw*{bw:.4f}:ih*{bh:.4f}:iw*{x:.4f}:ih*{y:.4f},"
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={WIDTH}:{HEIGHT},setsar=1,fps={FPS},format=yuv420p"
+    )
+    try:
+        _run_ffmpeg(
+            ["-y", "-i", str(video), "-vf", crop, "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(dest)],
+            timeout=180,
+        )
+    except RuntimeError:
+        return False
+    return dest.is_file() and dest.stat().st_size > 1000
+
+
+def _overlay_lip_face(
+    base_seg: Path,
+    lip_face: Path,
+    box: tuple[float, float, float, float],
+    dest: Path,
+) -> bool:
+    """Paste lip-synced face crop back onto the original segment framing."""
+    from tools.drama_video import _run_ffmpeg
+
+    x, y, bw, bh = box
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Scale lip face to the box size then overlay onto original framing
+    filt = (
+        f"[1:v][0:v]scale2ref=w=main_w*{bw:.4f}:h=main_h*{bh:.4f}[face][base];"
+        f"[base][face]overlay=x=main_w*{x:.4f}:y=main_h*{y:.4f}:shortest=1,format=yuv420p[vout]"
+    )
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(base_seg),
+                "-i",
+                str(lip_face),
+                "-filter_complex",
+                filt,
+                "-map",
+                "[vout]",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(dest),
+            ],
+            timeout=180,
+        )
+    except RuntimeError:
+        return False
+    return dest.is_file() and dest.stat().st_size > 1000
+
+
+def _timed_turns_for_lip(
+    shot: dict[str, Any], *, voice_path=None, slug: str = ""
+) -> list[dict[str, Any]]:
+    from tools.drama_dialogue import (
+        build_dialogue_track,
+        infer_turn_timings_from_voice,
+        normalize_dialogue_track,
+    )
+
+    track = normalize_dialogue_track(shot.get("dialogue_track"))
+    turns = list(track.get("turns") or [])
+    has_timings = any(float(t.get("end") or 0) > float(t.get("start") or 0) for t in turns)
+    if len(turns) >= 2 and has_timings:
+        return turns
+
+    raw = list(shot.get("voice_turns") or [])
+    if len(raw) >= 2 and any(float(r.get("end") or 0) > float(r.get("start") or 0) for r in raw):
+        return [
+            {
+                "index": i,
+                "speaker": r.get("speaker") or "",
+                "character_id": r.get("character_id") or "",
+                "character_name": r.get("character_name") or r.get("speaker") or "",
+                "start": float(r.get("start") or 0),
+                "end": float(r.get("end") or 0),
+            }
+            for i, r in enumerate(raw)
+            if isinstance(r, dict)
+        ]
+
+    # Rebuild track from script + recover timings from master voice duration
+    if len(turns) < 2:
+        slug = str(slug or shot.get("_slug") or "")
+        if slug:
+            from tools.drama_characters import load_characters
+
+            cards = load_characters(slug)
+            track = build_dialogue_track(shot, cards, slug=slug)
+            turns = list(track.get("turns") or [])
+
+    if len(turns) >= 2 and voice_path is not None:
+        from pathlib import Path
+
+        vp = Path(voice_path)
+        if vp.is_file():
+            from tools.drama_video import _probe_duration
+
+            dur = float(_probe_duration(vp) or 0)
+            if dur > 0:
+                track = infer_turn_timings_from_voice(track, dur)
+                return list(track.get("turns") or [])
+    return []
+
+
+def try_generate_lip_per_turn(
+    slug: str,
+    shot: dict[str, Any],
+    *,
+    scene: Path,
+    voice: Path,
+    video_base: Path,
+    dest: Path,
+    provider: str | None,
+) -> str:
+    """Multi-speaker lip: each DialogueTrack turn syncs the matched character face.
+
+    Works for 2, 3, or more speakers. Each turn carries character_id + face_ref from
+    the character card; ArcFace locks the crop to that 定妆图 before lip sync.
+    """
+    turns = _timed_turns_for_lip(shot, voice_path=voice, slug=slug)
+    if len(turns) < 2:
+        return "fallback"
+
+    tmp = dest.parent / f"_lip_turns_{shot.get('n') or 0}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    sources: list[str] = []
+    try:
+        for i, turn in enumerate(turns):
+            start = float(turn.get("start") or 0)
+            end = float(turn.get("end") or 0)
+            if end <= start + 0.05:
+                continue
+            seg_v = tmp / f"v{i:02d}.mp4"
+            seg_a = tmp / f"a{i:02d}.mp3"
+            seg_lip = tmp / f"lip{i:02d}.mp4"
+            if not _ffmpeg_slice(video_base, seg_v, start=start, end=end):
+                return "fallback"
+            if not _ffmpeg_slice(voice, seg_a, start=start, end=end, audio_only=True):
+                return "fallback"
+
+            lip_input = seg_v
+            box = None
+            cid = ""
+            face_ref = ""
+            cid, face_ref = _resolve_turn_face(slug, turn)
+            face_in = tmp / f"face_in{i:02d}.mp4"
+            face_out = tmp / f"face_out{i:02d}.mp4"
+            composed = tmp / f"comp{i:02d}.mp4"
+            if cid or face_ref:
+                frame = tmp / f"f{i:02d}.jpg"
+                mid = (start + end) / 2
+                if _sample_frame(video_base, mid, frame):
+                    box = _speaker_face_crop_box(frame, slug, cid, face_ref=face_ref)
+            if box and _crop_video_box(seg_v, box, face_in):
+                lip_input = face_in
+
+            turn_shot = {
+                **shot,
+                "speaker": turn.get("character_name") or turn.get("speaker") or shot.get("speaker"),
+                "n": shot.get("n"),
+            }
+            src = try_generate_lip(
+                scene,
+                seg_a,
+                face_out if lip_input is face_in else seg_lip,
+                turn_shot,
+                duration=end - start,
+                provider=provider,
+                video_base=lip_input,
+            )
+            if src in ("fallback", "", None):
+                return "fallback"
+            sources.append(str(src))
+
+            if lip_input is face_in and box:
+                lip_face = face_out if face_out.is_file() else seg_lip
+                if not _overlay_lip_face(seg_v, lip_face, box, composed):
+                    # Face paste failed — use full-frame lip on segment
+                    src2 = try_generate_lip(
+                        scene,
+                        seg_a,
+                        seg_lip,
+                        turn_shot,
+                        duration=end - start,
+                        provider=provider,
+                        video_base=seg_v,
+                    )
+                    if src2 in ("fallback", "", None) or not seg_lip.is_file():
+                        return "fallback"
+                    parts.append(seg_lip)
+                else:
+                    parts.append(composed)
+            else:
+                if not seg_lip.is_file():
+                    return "fallback"
+                parts.append(seg_lip)
+
+        if not _concat_video_parts(parts, dest):
+            return "fallback"
+        # Prefer last successful provider label; mark as per-turn
+        base = sources[-1] if sources else "latentsync"
+        return f"{base}+per_turn" if "+" not in base else base
+    finally:
+        try:
+            for p in tmp.glob("*"):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            tmp.rmdir()
+        except OSError:
+            pass
+
+
+def _ensure_dialogue_track_on_shot(slug: str, shot: dict[str, Any], voice: Path) -> None:
+    """Persist dialogue_track + voice_turns when lip runs but voice metadata was lost."""
+    from tools.drama_characters import load_characters
+    from tools.drama_dialogue import (
+        build_dialogue_track,
+        infer_turn_timings_from_voice,
+        normalize_dialogue_track,
+        track_to_voice_turns,
+    )
+
+    track = normalize_dialogue_track(shot.get("dialogue_track"))
+    turns = list(track.get("turns") or [])
+    has_timings = any(float(t.get("end") or 0) > float(t.get("start") or 0) for t in turns)
+    if len(turns) >= 2 and has_timings and shot.get("voice_turns"):
+        return
+
+    cards = load_characters(slug)
+    track = build_dialogue_track(shot, cards, slug=slug)
+    if voice.is_file() and len(track.get("turns") or []) >= 2:
+        try:
+            from tools.drama_video import _probe_duration
+
+            dur = float(_probe_duration(voice) or 0)
+            if dur > 0:
+                track = infer_turn_timings_from_voice(track, dur)
+        except Exception:
+            pass
+    shot["dialogue_track"] = track
+    shot["voice_turns"] = track_to_voice_turns(track)
+
+
 def generate_shot_lip(
     slug: str,
     episode: int,
@@ -478,6 +982,7 @@ def generate_shot_lip(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
+    from tools.drama_dialogue import normalize_dialogue_track
     from tools.drama_models import models_with_overrides, resolve_provider
 
     models = models_with_overrides(slug, shot=shot, episode=episode)
@@ -511,15 +1016,35 @@ def generate_shot_lip(
         cascade = lip_provider_cascade(wanted)
         provider = cascade[0] if cascade else provider
 
-    source = try_generate_lip(
-        scene,
-        voice,
-        dest,
-        shot,
-        duration=duration,
-        provider=provider,
-        video_base=video_base,
+    if voice.is_file():
+        _ensure_dialogue_track_on_shot(slug, shot, voice)
+    track = normalize_dialogue_track(shot.get("dialogue_track"))
+    use_per_turn = (
+        str(track.get("lip_strategy") or "") == "per_turn"
+        or str(track.get("mode") or "") == "multi"
+        or len(_timed_turns_for_lip(shot, voice_path=voice, slug=slug)) >= 2
     )
+    source = "fallback"
+    if use_per_turn and video_base and video_base.is_file() and voice.is_file():
+        source = try_generate_lip_per_turn(
+            slug,
+            shot,
+            scene=scene,
+            voice=voice,
+            video_base=video_base,
+            dest=dest,
+            provider=provider,
+        )
+    if source in ("fallback", "", None):
+        source = try_generate_lip(
+            scene,
+            voice,
+            dest,
+            shot,
+            duration=duration,
+            provider=provider,
+            video_base=video_base,
+        )
     shot["lip_source"] = source
     score = None
     if source != "fallback" and dest.is_file():
@@ -533,6 +1058,7 @@ def generate_shot_lip(
             "provider": provider,
             "score": score,
             "reason": "",
+            "lip_strategy": "per_turn" if "per_turn" in str(source) else "master",
         }
     if dest.exists():
         try:

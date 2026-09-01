@@ -36,6 +36,27 @@ REAL_LIP_SOURCES = frozenset(
 )
 
 
+def lip_source_base(source: str) -> str:
+    """Strip strategy suffixes like ``pixverse+per_turn`` → ``pixverse``."""
+    return str(source or "").strip().split("+")[0].strip().lower()
+
+
+def lip_source_is_real(source: str) -> bool:
+    """True when a lip-sync provider actually produced the lip layer."""
+    base = lip_source_base(source)
+    return bool(base) and base in REAL_LIP_SOURCES
+
+
+def lip_video_usable(shot: dict, lip_path) -> bool:
+    """Whether clip assembly should burn in the lip video (not motion-only)."""
+    from pathlib import Path
+
+    path = Path(lip_path) if lip_path is not None else None
+    if path is None or not path.is_file() or path.stat().st_size <= 500:
+        return False
+    return lip_source_is_real(str(shot.get("lip_source") or ""))
+
+
 def _ffmpeg_bin() -> str:
     return os.getenv("FFMPEG_BIN", "ffmpeg")
 

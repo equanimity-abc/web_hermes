@@ -533,31 +533,23 @@ function shotVideoPreviewUrl(shot) {
 }
 
 function shotVoicePreviewUrl(shot) {
-  // 声音页：上一步 motion 必须可见；装配后的 clip 也应基于 motion。
-  // 若口型曾用 lip_base 偏离母带，预览退回 motion+外挂音，避免「丢运镜」。
+  // 单一时钟：优先 clip（装配后的音画）；其次同源 lip；最后才 motion+外挂音
   if (!shot) return ''
-  if (shot.lip_base_mismatch || shot.lip_base_used) {
-    const motionFirst =
-      shot.files?.motion?.url || shot.files?.clip?.url || shot.files?.lip?.url || shot.files?.scene?.url || ''
-    return motionFirst ? withBust(motionFirst) : ''
+  if (shot.files?.clip?.exists && shot.files?.clip?.url) {
+    return withBust(shot.files.clip.url)
   }
-  const url =
-    shot.files?.clip?.url ||
-    shot.files?.lip?.url ||
-    shot.files?.motion?.url ||
-    shot.files?.scene?.url ||
-    ''
+  if (shotHasLip(shot) && !shot.lip_base_used && shot.files?.lip?.url) {
+    return withBust(shot.files.lip.url)
+  }
+  const url = shot.files?.motion?.url || shot.files?.scene?.url || shot.files?.lip?.url || ''
   return url ? withBust(url) : ''
 }
 
 function shotVoiceNeedsExternalAudio(shot) {
   if (!shot) return false
-  // 偏离母带时强制 motion + voice.mp3，保证音画都能播且保留运镜
-  if (shot.lip_base_mismatch || shot.lip_base_used) {
-    return Boolean(shotVoiceAudioUrl(shot))
-  }
+  // clip / 同源 lip 自带音轨，不要再挂 voice.mp3（否则前半段双轨错位）
   if (shot.files?.clip?.exists) return false
-  if (shotHasLip(shot)) return false
+  if (shotHasLip(shot) && !shot.lip_base_used) return false
   return Boolean(shotVoiceAudioUrl(shot))
 }
 
@@ -741,8 +733,12 @@ function shotHasVoice(shot) {
   return Boolean(shot?.files?.voice?.exists || shot?.voice)
 }
 
+function lipSourceBase(src) {
+  return String(src || '').trim().split('+')[0].toLowerCase()
+}
+
 function shotHasLip(shot) {
-  const src = String(shot?.lip_source || '')
+  const base = lipSourceBase(shot?.lip_source)
   const real = [
     'mock',
     'http',
@@ -753,7 +749,7 @@ function shotHasLip(shot) {
     'musetalk',
     'wav2lip',
   ]
-  return Boolean(shot?.files?.lip?.exists || real.includes(src))
+  return Boolean(shot?.files?.lip?.exists || real.includes(base))
 }
 
 function shotDialoguePreview(shot) {
@@ -857,7 +853,7 @@ function syncVoiceAudioToVideo() {
   const video = voiceVideoRef.value
   const audio = voiceAudioRef.value
   if (!video || !audio) return
-  if (Math.abs((audio.currentTime || 0) - (video.currentTime || 0)) > 0.3) {
+  if (Math.abs((audio.currentTime || 0) - (video.currentTime || 0)) > 0.12) {
     try {
       audio.currentTime = video.currentTime || 0
     } catch {
@@ -874,9 +870,33 @@ function syncVoiceVolumeFromVideo() {
   audio.volume = Number.isFinite(video.volume) ? video.volume : 1
 }
 
+function restartVoicePreviewIfNeeded() {
+  const video = voiceVideoRef.value
+  if (!video) return false
+  const dur = Number(video.duration) || 0
+  const atEnd = Boolean(video.ended) || (dur > 0 && video.currentTime >= dur - 0.08)
+  if (!atEnd) return false
+  try {
+    video.currentTime = 0
+  } catch {
+    /* ignore */
+  }
+  const audio = voiceAudioRef.value
+  if (audio && shotVoiceNeedsExternalAudio(props.selected)) {
+    try {
+      audio.currentTime = 0
+    } catch {
+      /* ignore */
+    }
+  }
+  return true
+}
+
 function onVoiceVideoPlay() {
+  const video = voiceVideoRef.value
   const audio = voiceAudioRef.value
   if (!audio) return
+  if (video) video.muted = true
   syncVoiceVolumeFromVideo()
   syncVoiceAudioToVideo()
   audio.play().catch(() => {})
@@ -885,9 +905,10 @@ function onVoiceVideoPlay() {
 function onVoiceVideoPause() {
   const video = voiceVideoRef.value
   const audio = voiceAudioRef.value
-  // 画面播完循环等配音时，不要把声音一并停掉
-  if (video && video.ended && audio && !audio.ended) return
-  audio?.pause()
+  if (!audio) return
+  // 仅当用户暂停（非「画面先结束、音频还在」）时同步停音频
+  if (video && video.ended && !audio.ended) return
+  audio.pause()
 }
 
 function onVoiceVideoSeeked() {
@@ -895,28 +916,31 @@ function onVoiceVideoSeeked() {
 }
 
 function onVoiceVideoPlaySafe() {
-  if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoPlay()
+  const video = voiceVideoRef.value
+  const external = shotVoiceNeedsExternalAudio(props.selected)
+  restartVoicePreviewIfNeeded()
+  if (video) video.muted = Boolean(external)
+  if (external) onVoiceVideoPlay()
 }
+
 function onVoiceVideoPauseSafe() {
   if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoPause()
 }
+
 function onVoiceVideoSeekedSafe() {
   if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoSeeked()
 }
+
 function onVoiceVideoVolumeChangeSafe() {
   if (shotVoiceNeedsExternalAudio(props.selected)) onVoiceVideoVolumeChange()
 }
 
 function onVoiceVideoEnded() {
-  // 不再循环重启画面；尾帧定住等音频结束（与后端 hold 策略一致）
-  const video = voiceVideoRef.value
-  if (video && !Number.isNaN(video.duration) && video.duration > 0) {
-    try {
-      video.currentTime = Math.max(0, video.duration - 0.05)
-    } catch {
-      /* ignore */
-    }
-  }
+  // 不要把 currentTime 钉在末尾，否则再次点播放会立刻 ended / 无法重播
+  const audio = voiceAudioRef.value
+  if (!shotVoiceNeedsExternalAudio(props.selected)) return
+  // 画面短于配音：保持尾帧，让外挂音频继续；二者都结束则自然停
+  if (audio && !audio.ended && !audio.paused) return
 }
 
 function onVoiceVideoVolumeChange() {
@@ -927,13 +951,14 @@ function onVoiceAudioPlay() {
   const video = voiceVideoRef.value
   const audio = voiceAudioRef.value
   if (!video || !audio) return
-  if (Math.abs((video.currentTime || 0) - (audio.currentTime || 0)) > 0.3) {
+  if (Math.abs((video.currentTime || 0) - (audio.currentTime || 0)) > 0.12) {
     try {
       video.currentTime = audio.currentTime || 0
     } catch {
       /* ignore */
     }
   }
+  video.muted = true
   video.play().catch(() => {})
 }
 
@@ -977,19 +1002,39 @@ function findCharacterForSpeaker(name) {
   )
 }
 
-/** Speakers who can talk in this shot: subtitle names + shot roles (not full cast). */
+/** Canonical character card name only — never alias / id. */
+function canonicalSpeakerName(raw) {
+  const key = String(raw || '').trim()
+  if (!key) return ''
+  const hit = findCharacterForSpeaker(key)
+  if (hit?.name) return hit.name
+  // Hide bare ids like ruoxi when unresolved
+  if (/^[a-z][a-z0-9_]{0,31}$/.test(key)) return ''
+  return key
+}
+
+/**
+ * Speakers who can talk in this shot — display **角色卡名称** only.
+ * Aliases (林晚/林薇薇) and ids are resolved, never shown.
+ */
 const voiceSpeakerOptions = computed(() => {
   const names = []
   const seen = new Set()
   const push = (raw) => {
-    const n = String(raw || '').trim()
+    const n = canonicalSpeakerName(raw)
     if (!n || seen.has(n)) return
     seen.add(n)
     names.push(n)
   }
 
   for (const sp of props.selected?.voice_speakers || []) {
-    push(sp?.name)
+    push(sp?.name || sp?.character_name)
+  }
+  for (const b of props.selected?.dialogue_track?.bindings || []) {
+    push(b?.character_name || b?.speaker)
+  }
+  for (const t of props.selected?.dialogue_track?.turns || props.selected?.voice_turns || []) {
+    push(t?.character_name || t?.speaker)
   }
 
   const dialogue = String(props.draft?.字幕 || props.selected?.字幕 || props.selected?.对白 || '')
@@ -1005,34 +1050,81 @@ const voiceSpeakerOptions = computed(() => {
   }
 
   for (const rid of props.draft?.角色 || props.selected?.角色 || []) {
-    const hit = (props.characters || []).find((c) => c.id === rid || c.name === rid)
-    push(hit?.name || rid)
+    push(rid)
   }
 
-  const cur = String(props.draft?.speaker || props.selected?.speaker || '').trim()
-  if (cur) push(cur)
+  push(props.selected?.dialogue_track?.primary_speaker)
+  push(props.selected?.speaker)
 
   return names
 })
 
+/** Inspect-only: browsing speaker↔voice must not dirty the save button. */
+const voiceInspectSpeaker = ref('')
+
+watch(
+  () => [props.selectedN, props.selected?.speaker, props.selected?.dialogue_track?.primary_speaker, voiceSpeakerOptions.value.join('|')],
+  () => {
+    const opts = voiceSpeakerOptions.value
+    const preferred = canonicalSpeakerName(
+      props.selected?.dialogue_track?.primary_speaker || props.selected?.speaker || '',
+    )
+    if (preferred && opts.includes(preferred)) {
+      voiceInspectSpeaker.value = preferred
+    } else if (opts.length) {
+      voiceInspectSpeaker.value = opts[0]
+    } else {
+      voiceInspectSpeaker.value = preferred || ''
+    }
+  },
+  { immediate: true },
+)
+
 const selectedSpeakerVoiceLabel = computed(() => {
-  const name = String(props.draft?.speaker || '').trim()
+  const name = String(voiceInspectSpeaker.value || '').trim()
   const hit = findCharacterForSpeaker(name)
   if (hit?.voice) return voiceLabelForId(hit.voice)
-  if (props.draft?.voice) return voiceLabelForId(props.draft.voice)
+  const bind = (props.selected?.dialogue_track?.bindings || []).find(
+    (b) => (b.character_name || b.speaker) === name,
+  )
+  if (bind?.voice_label) return bind.voice_label
+  if (bind?.voice) return voiceLabelForId(bind.voice)
+  const sp = (props.selected?.voice_speakers || []).find((s) => s.name === name)
+  if (sp?.voice_label) return sp.voice_label
   return '—'
 })
 
-function onVoiceSpeakerChange() {
-  if (!props.draft) return
-  const hit = findCharacterForSpeaker(props.draft.speaker)
-  // Keep draft.voice in sync for save, but UI never lets users edit voice.
-  props.draft.voice = hit?.voice || ''
-}
+/** Reusable DialogueTrack from API (bindings + timed turns); multi is the common case. */
+const dialogueTrack = computed(() => props.selected?.dialogue_track || null)
+const dialogueTrackMode = computed(() => String(dialogueTrack.value?.mode || '').toLowerCase())
+const dialogueTrackBindings = computed(() => {
+  const rows = dialogueTrack.value?.bindings
+  if (Array.isArray(rows) && rows.length) {
+    return rows.map((b) => ({
+      ...b,
+      speaker: canonicalSpeakerName(b.character_name || b.speaker) || b.character_name || b.speaker,
+    }))
+  }
+  return (props.selected?.voice_speakers || []).map((sp) => ({
+    speaker: canonicalSpeakerName(sp?.name) || sp?.name || '',
+    voice: sp?.voice || '',
+    voice_label: sp?.voice_label || '',
+  }))
+})
+const dialogueTrackTurns = computed(() => {
+  const turns = dialogueTrack.value?.turns
+  if (Array.isArray(turns) && turns.length) {
+    return turns.map((t) => ({
+      ...t,
+      speaker: canonicalSpeakerName(t.character_name || t.speaker) || t.character_name || t.speaker,
+    }))
+  }
+  return props.selected?.voice_turns || []
+})
 
 function lipStatusLabel(shot) {
   if (shotHasLip(shot)) {
-    const src = String(shot?.lip_source || '')
+    const src = lipSourceBase(shot?.lip_source)
     const map = {
       latentsync: 'LatentSync · 高清',
       pixverse: 'PixVerse · 已同步',
@@ -1791,7 +1883,7 @@ const voiceStatusLabel = computed(() => {
               <div class="drama-voice-meta-row">
                 <label class="drama-voice-kv">
                   <strong>说话人</strong>
-                  <select v-model="draft.speaker" @change="onVoiceSpeakerChange">
+                  <select v-model="voiceInspectSpeaker" title="仅查看绑定音色，不会修改分镜">
                     <option value="">（未指定）</option>
                     <option v-for="name in voiceSpeakerOptions" :key="name" :value="name">
                       {{ name }}
@@ -1802,9 +1894,11 @@ const voiceStatusLabel = computed(() => {
                   <strong>音色</strong>
                   <span class="drama-voice-readonly">{{ selectedSpeakerVoiceLabel }}</span>
                 </div>
-                <div v-if="(selected?.voice_turns || []).length > 1" class="drama-voice-kv">
-                  <strong>对白段</strong>
-                  <span class="drama-voice-readonly">{{ (selected.voice_turns || []).length }} 段 · 分段配音</span>
+                <div v-if="dialogueTrackMode === 'multi'" class="drama-voice-kv">
+                  <strong>对白轨</strong>
+                  <span class="drama-voice-readonly"
+                    >多人 · {{ dialogueTrackTurns.length }} 段 · 主轨口型</span
+                  >
                 </div>
                 <div class="drama-voice-kv">
                   <strong>口型</strong>
@@ -1818,6 +1912,33 @@ const voiceStatusLabel = computed(() => {
                   <strong>身份</strong>
                   <span>{{ identityLabel }}</span>
                 </div>
+              </div>
+              <div v-if="dialogueTrackMode === 'multi'" class="drama-dialogue-track">
+                <div class="drama-dialogue-bindings">
+                  <span
+                    v-for="b in dialogueTrackBindings"
+                    :key="b.speaker + b.voice"
+                    class="drama-dialogue-binding"
+                    :title="b.face_ready ? '已匹配定妆脸' : '未找到定妆图，口型可能锁错脸'"
+                  >
+                    <strong>{{ b.speaker || '（未命名）' }}</strong>
+                    <span>{{ b.voice_label || b.voice || '—' }}</span>
+                    <em class="drama-dialogue-face" :class="b.face_ready ? 'is-ready' : 'is-missing'">
+                      {{ b.face_ready ? '脸✓' : '脸?' }}
+                    </em>
+                  </span>
+                </div>
+                <ol class="drama-dialogue-turns">
+                  <li v-for="(t, i) in dialogueTrackTurns" :key="i" class="drama-dialogue-turn">
+                    <span class="drama-dialogue-turn-meta">
+                      <strong>{{ t.speaker || '—' }}</strong>
+                      <em v-if="t.end > t.start"
+                        >{{ Number(t.start).toFixed(1) }}–{{ Number(t.end).toFixed(1) }}s</em
+                      >
+                    </span>
+                    <span class="drama-dialogue-turn-text">{{ t.text }}</span>
+                  </li>
+                </ol>
               </div>
             </div>
 
@@ -1847,7 +1968,7 @@ const voiceStatusLabel = computed(() => {
                     />
                     <div v-else class="drama-stage-empty">本镜尚未出图；可先在「画面 / 视频」步骤生成</div>
                     <p v-if="selected?.lip_base_mismatch" class="drama-voice-lip-hint">
-                      本镜口型曾脱离视频页 motion；成片/预览已改回以 motion（含运镜）为母带叠加配音。请重新「生成配音」以按 motion 重做口型。
+                      本镜旧口型曾脱离 motion。请重新「生成配音」（会按 motion 重做口型并重装 clip），否则前半段容易音画错位。
                     </p>
                     <div
                       v-if="voiceNarrationText()"

@@ -24,6 +24,7 @@ DEFAULT_VOICES: tuple[tuple[str, str], ...] = (
     ("zh-CN-YunxiaNeural", "云夏 · 男少年"),
     ("zh-CN-XiaoxiaoNeural", "晓晓 · 女"),
     ("zh-CN-XiaoyiNeural", "晓伊 · 女"),
+    # Xiaohan/Xiaozhen 在部分地区 edge-tts 会 NoAudioReceived，保留条目但合成时会回退
     ("zh-CN-XiaohanNeural", "晓涵 · 女"),
     ("zh-CN-XiaozhenNeural", "晓甄 · 女"),
 )
@@ -31,6 +32,30 @@ DEFAULT_VOICES: tuple[tuple[str, str], ...] = (
 VOICES = DEFAULT_VOICES
 VOICE_IDS = tuple(v[0] for v in DEFAULT_VOICES)
 DEFAULT_VOICE = "zh-CN-YunxiNeural"
+# edge-tts voices that currently return NoAudioReceived in some regions
+UNRELIABLE_EDGE_VOICES = frozenset(
+    {
+        "zh-CN-XiaohanNeural",
+        "zh-CN-XiaozhenNeural",
+    }
+)
+FEMALE_VOICE_FALLBACK = "zh-CN-XiaoyiNeural"
+MALE_VOICE_FALLBACK = "zh-CN-YunxiNeural"
+
+
+def safe_tts_voice(voice: str | None, *, prefer_female: bool | None = None) -> str:
+    """Map broken / empty voice ids to a working edge-tts voice."""
+    vid = str(voice or "").strip()
+    if vid and vid not in UNRELIABLE_EDGE_VOICES:
+        return vid
+    if prefer_female is True:
+        return FEMALE_VOICE_FALLBACK
+    if prefer_female is False:
+        return MALE_VOICE_FALLBACK
+    # Heuristic: Xia* were female catalog entries
+    if vid.startswith("zh-CN-Xiao") or vid.startswith("zh-CN-Xia"):
+        return FEMALE_VOICE_FALLBACK
+    return DEFAULT_VOICE if DEFAULT_VOICE not in UNRELIABLE_EDGE_VOICES else FEMALE_VOICE_FALLBACK
 
 
 def _parse_voice_rows(raw: Any) -> list[tuple[str, str]]:

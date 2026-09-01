@@ -188,6 +188,13 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
 
         pub["voice_speakers"] = shot_voice_speakers(shot, cards, slug=slug)
         pub["voice_turns"] = list(shot.get("voice_turns") or [])
+        from tools.drama_dialogue import build_dialogue_track, normalize_dialogue_track
+
+        stored_track = normalize_dialogue_track(shot.get("dialogue_track"))
+        if stored_track.get("turns"):
+            pub["dialogue_track"] = stored_track
+        else:
+            pub["dialogue_track"] = build_dialogue_track(shot, cards, slug=slug)
         pub["lip_base_used"] = bool(shot.get("lip_base_used"))
         pub["motion_locked"] = "motion" in (shot.get("locked") or []) or "shot" in (shot.get("locked") or [])
         # Mismatch: lip was built from still lip_base while video-page motion exists

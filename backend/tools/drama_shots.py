@@ -476,6 +476,13 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "i2v_deferred": bool(raw.get("i2v_deferred")),
         "lip_source": str(raw.get("lip_source") or ""),
         "lip_score": raw.get("lip_score") if isinstance(raw.get("lip_score"), dict) else None,
+        "lip_base_used": bool(raw.get("lip_base_used")),
+        "voice_turns": list(raw.get("voice_turns") or [])
+        if isinstance(raw.get("voice_turns"), list)
+        else [],
+        "dialogue_track": raw.get("dialogue_track")
+        if isinstance(raw.get("dialogue_track"), dict)
+        else None,
         "keys": _normalize_shot_keys(slug, episode, raw),
         "identity": raw.get("identity") if isinstance(raw.get("identity"), dict) else None,
         "identity_hint": str(raw.get("identity_hint") or ""),
@@ -1217,6 +1224,9 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "lip_score": shot.get("lip_score") or None,
         "lip_base_used": bool(shot.get("lip_base_used")),
         "voice_turns": list(shot.get("voice_turns") or []),
+        "dialogue_track": shot.get("dialogue_track")
+        if isinstance(shot.get("dialogue_track"), dict)
+        else None,
         "keys": list(shot.get("keys") or []),
         "identity": shot.get("identity") if isinstance(shot.get("identity"), dict) else None,
         "identity_hint": shot.get("identity_hint") or "",

@@ -22,8 +22,16 @@ from tools.drama_characters import (
     load_characters,
     normalize_roles,
     primary_voice,
-    public_voices,
     resolve_shot_characters,
+)
+from tools.drama_dialogue import (
+    apply_turn_timings,
+    build_dialogue_track,
+    normalize_dialogue_track,
+    parse_dialogue_segments,
+    speakers_match as _speaker_names_match,
+    spoken_text_from_track,
+    track_to_voice_turns,
 )
 from tools.drama_shots import (
     CANDIDATE_COUNT,
@@ -123,18 +131,6 @@ _SPEAKER_PREFIX = re.compile(
     r"\s*[:：]\s*"
 )
 _STAGE_PAREN = re.compile(r"[（(][^）)]{0,24}[）)]")
-# 林晚（低声）: “……”
-_NAMED_QUOTE = re.compile(
-    r"(?P<name>[^:：\s「『“\"（(【\[]{1,16})"
-    r"(?:\s*[（(][^）)]{0,40}[）)])?"
-    r"\s*[:：]\s*[「『“\"](?P<text>[^」』”\"]+)[」』”\"]"
-)
-# 林晚: 没关系。 / 林晚（低声）: 没关系。
-_NAMED_LINE = re.compile(
-    r"^(?P<name>[^:：\s「『“\"（(【\[]{1,16})"
-    r"(?:\s*[（(][^）)]{0,40}[）)])?"
-    r"\s*[:：]\s*(?P<text>.+?)\s*$"
-)
 
 _FONT_CANDIDATES = [
     Path(r"C:\Windows\Fonts\msyh.ttc"),
@@ -377,61 +373,6 @@ def spoken_text(dialogue: str, subtitle: str = "") -> str:
     return ""
 
 
-def _join_spoken(parts: list[str]) -> str:
-    out = ""
-    for p in parts:
-        p = (p or "").strip()
-        if not p:
-            continue
-        if not out:
-            out = p
-            continue
-        if out[-1] not in "。！？!?…":
-            out += "。"
-        out += p
-    return out
-
-
-def _speaker_names_match(a: str, b: str) -> bool:
-    x = re.sub(r"[\s【】\[\]]+", "", str(a or "").strip())
-    y = re.sub(r"[\s【】\[\]]+", "", str(b or "").strip())
-    if not x or not y:
-        return False
-    if x == y:
-        return True
-    # 林薇 ↔ 林薇薇
-    return x.startswith(y) or y.startswith(x)
-
-
-def parse_dialogue_segments(dialogue: str) -> list[tuple[str, str]]:
-    """Return [(speaker_name, spoken_line), ...] from script-style 对白."""
-    text = (dialogue or "").strip()
-    if not text:
-        return []
-    segs = [(m.group("name").strip(), m.group("text").strip()) for m in _NAMED_QUOTE.finditer(text)]
-    segs = [(n, t) for n, t in segs if n and t]
-    if segs:
-        return segs
-    # Line-based: 林若曦: 你好。\n林慧兰: 你是谁？
-    line_segs: list[tuple[str, str]] = []
-    for raw_line in re.split(r"[\n\r]+", text):
-        line = raw_line.strip()
-        if not line:
-            continue
-        m = _NAMED_LINE.match(line)
-        if not m:
-            continue
-        name = m.group("name").strip()
-        spoken = m.group("text").strip().strip("「『“”」』\"'")
-        spoken = _STAGE_PAREN.sub("", spoken).strip()
-        if name and spoken:
-            line_segs.append((name, spoken))
-    if line_segs:
-        return line_segs
-    plain = spoken_text(text)
-    return [("", plain)] if plain else []
-
-
 def voice_id_for_speaker(
     speaker: str,
     cast: list[dict[str, Any]],
@@ -462,26 +403,8 @@ def voice_id_for_speaker(
 
 
 def spoken_text_for_shot(shot: dict[str, Any]) -> str:
-    """TTS / caption text. Multi-named dialogue: join all lines; else prefer speaker."""
-    dialogue = str(shot.get("字幕") or shot.get("对白") or "")
-    speaker = str(shot.get("speaker") or "").strip()
-    segs = parse_dialogue_segments(dialogue)
-    if not segs:
-        return ""
-    named = [(n, t) for n, t in segs if n]
-    # Two+ named speakers in one shot → speak every turn (各自音色由 turns 处理)
-    if len({n for n, _ in named}) >= 2:
-        return _join_spoken([t for _, t in named])
-    if speaker:
-        matched = [t for n, t in segs if n and _speaker_names_match(n, speaker)]
-        if matched:
-            return _join_spoken(matched)
-    if len(segs) == 1:
-        return segs[0][1]
-    if segs[0][0]:
-        first = segs[0][0]
-        return _join_spoken([t for n, t in segs if n == first])
-    return _join_spoken([t for _, t in segs])
+    """TTS / caption text via DialogueTrack (multi joins all turns; single one turn)."""
+    return spoken_text_from_track(build_dialogue_track(shot, [], slug=None))
 
 
 def voice_id_for_shot(shot: dict[str, Any], cast: list[dict[str, Any]], *, slug: str | None = None) -> str:
@@ -502,43 +425,23 @@ def dialogue_turns_for_shot(
     slug: str | None = None,
 ) -> list[dict[str, str]]:
     """
-    Build ordered TTS turns for a shot.
+    Build ordered TTS turns for a shot via DialogueTrack.
 
     Multi-speaker 字幕 (two+ named lines) → one turn per line with that role's voice.
-    Otherwise → single turn using spoken_text_for_shot + voice_id_for_shot.
+    Otherwise → single turn using spoken text + voice_id_for_shot.
     """
-    dialogue = str(shot.get("字幕") or shot.get("对白") or "")
-    segs = parse_dialogue_segments(dialogue)
-    named = [(n, t) for n, t in segs if n and t]
-    distinct = []
-    seen_names: set[str] = set()
-    for n, _ in named:
-        key = re.sub(r"[\s【】\[\]]+", "", n)
-        if key in seen_names:
-            continue
-        seen_names.add(key)
-        distinct.append(n)
-
-    fallback = voice_id_for_shot(shot, cast, slug=slug)
-    if len(distinct) >= 2:
-        turns: list[dict[str, str]] = []
-        for name, text in named:
-            turns.append(
-                {
-                    "speaker": name,
-                    "text": text,
-                    "voice": voice_id_for_speaker(name, cast, slug=slug, fallback=fallback),
-                }
-            )
-        return turns
-
-    speech = spoken_text_for_shot(shot)
-    if not speech:
-        return []
-    speaker = str(shot.get("speaker") or "").strip()
-    if not speaker and named:
-        speaker = named[0][0]
-    return [{"speaker": speaker, "text": speech, "voice": fallback}]
+    track = build_dialogue_track(shot, cast, slug=slug)
+    return [
+        {
+            "speaker": str(t.get("speaker") or ""),
+            "text": str(t.get("text") or ""),
+            "voice": str(t.get("voice") or ""),
+            "character_id": str(t.get("character_id") or ""),
+            "voice_label": str(t.get("voice_label") or ""),
+        }
+        for t in (track.get("turns") or [])
+        if str(t.get("text") or "").strip()
+    ]
 
 
 def shot_voice_speakers(
@@ -547,23 +450,25 @@ def shot_voice_speakers(
     *,
     slug: str | None = None,
 ) -> list[dict[str, str]]:
-    """Unique speakers in this shot with bound voice ids (for UI display)."""
-    turns = dialogue_turns_for_shot(shot, cast, slug=slug)
-    labels = {row["id"]: row["label"] for row in public_voices(slug)}
+    """Unique speakers in this shot — **canonical character names** only."""
+    stored = normalize_dialogue_track(shot.get("dialogue_track"))
+    bindings = list(stored.get("bindings") or [])
+    if not bindings:
+        bindings = list(build_dialogue_track(shot, cast, slug=slug).get("bindings") or [])
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for turn in turns:
-        name = str(turn.get("speaker") or "").strip() or "（未命名）"
-        key = re.sub(r"[\s【】\[\]]+", "", name)
-        if key in seen:
+    for row in bindings:
+        name = str(row.get("character_name") or row.get("speaker") or "").strip()
+        if not name or name in seen:
             continue
-        seen.add(key)
-        vid = str(turn.get("voice") or "").strip()
+        seen.add(name)
+        vid = str(row.get("voice") or "").strip()
         out.append(
             {
                 "name": name,
                 "voice": vid,
-                "voice_label": labels.get(vid) or vid or "—",
+                "voice_label": str(row.get("voice_label") or "") or vid or "—",
+                "character_id": str(row.get("character_id") or ""),
             }
         )
     return out
@@ -1002,6 +907,7 @@ def generate_shot_candidates(
     locked = set(shot.get("locked") or [])
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
+    # Full project cards for alias → name/voice/face match (N speakers)
     shot["camera"] = shot.get("camera") or _camera_style(shot)
     shot["_episode"] = episode
     prompt = _scene_prompt(title, shot, cast, slug=slug)
@@ -1256,7 +1162,12 @@ def _get_tts_loop() -> Any:
 
 
 def _tts_to_file(text: str, dest: Path, *, voice: str | None = None) -> bool:
-    """Synthesize speech. Returns False if skipped / failed."""
+    """Synthesize speech. Returns False if skipped / failed.
+
+    Unreliable edge voices (e.g. Xiaohan NoAudioReceived) auto-fallback.
+    """
+    from tools.drama_characters import safe_tts_voice
+
     spoken = (text or "").strip()
     if not spoken:
         return False
@@ -1271,16 +1182,34 @@ def _tts_to_file(text: str, dest: Path, *, voice: str | None = None) -> bool:
     except OSError:
         return False
 
-    async def _go() -> None:
-        communicate = edge_tts.Communicate(spoken, voice or _tts_voice())
+    voices_to_try = []
+    primary = safe_tts_voice(voice)
+    voices_to_try.append(primary)
+    raw = str(voice or "").strip()
+    if raw and raw != primary:
+        voices_to_try.append(raw)
+    fb = safe_tts_voice(None, prefer_female=True)
+    if fb not in voices_to_try:
+        voices_to_try.append(fb)
+
+    async def _go(vid: str) -> None:
+        communicate = edge_tts.Communicate(spoken, vid)
         await communicate.save(str(dest))
 
-    try:
-        fut = asyncio.run_coroutine_threadsafe(_go(), _get_tts_loop())
-        fut.result(timeout=90)
-    except Exception:
-        return False
-    return dest.is_file() and dest.stat().st_size > 0
+    for vid in voices_to_try:
+        try:
+            if dest.exists():
+                dest.unlink()
+        except OSError:
+            pass
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_go(vid), _get_tts_loop())
+            fut.result(timeout=90)
+        except Exception:
+            continue
+        if dest.is_file() and dest.stat().st_size > 0:
+            return True
+    return False
 
 
 def _concat_audio_files(parts: list[Path], dest: Path) -> bool:
@@ -1321,18 +1250,19 @@ def _synthesize_shot_voice(
     voice_path: Path,
     *,
     slug: str,
-) -> tuple[bool, str, list[dict[str, Any]]]:
+) -> tuple[bool, str, list[dict[str, Any]], dict[str, Any]]:
     """
-    TTS for a shot. Multi-speaker dialogue → each turn with its own voice, then concat.
-    Returns (ok, primary_voice_id, timed_turns).
+    TTS via DialogueTrack. Multi → per-turn voice then concat to master VO.
+    Returns (ok, primary_voice_id, timed_turns, dialogue_track).
     """
     from tools.drama_models import load_models
     from tools.drama_retry import retry_call
     from tools.providers import registry
 
-    turns = dialogue_turns_for_shot(shot, cast, slug=slug)
+    track = build_dialogue_track(shot, cast, slug=slug)
+    turns = [t for t in (track.get("turns") or []) if str(t.get("text") or "").strip()]
     if not turns:
-        return False, "", []
+        return False, "", [], track
 
     tts_cfg = (load_models(slug) or {}).get("tts") or {}
     tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
@@ -1347,7 +1277,7 @@ def _synthesize_shot_voice(
                 tts_provider,
                 turns[0]["text"],
                 voice_path,
-                voice=turns[0]["voice"] or primary,
+                voice=turns[0].get("voice") or primary,
             )
         )
         dur = float(_probe_duration(voice_path) or 0) if ok else 0.0
@@ -1360,7 +1290,8 @@ def _synthesize_shot_voice(
                 "end": round(dur, 3),
             }
         ]
-        return ok, primary, timed
+        track = apply_turn_timings(track, timed)
+        return ok, primary, track_to_voice_turns(track), track
 
     tmp_dir = voice_path.parent / f"_tts_turns_{shot.get('n') or 0}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -1380,7 +1311,7 @@ def _synthesize_shot_voice(
                 )
             )
             if not ok:
-                return False, primary, []
+                return False, primary, [], track
             parts.append(part)
             seg = float(_probe_duration(part) or 0)
             timed.append(
@@ -1394,8 +1325,9 @@ def _synthesize_shot_voice(
             )
             cursor += max(seg, 0.0)
         if not _concat_audio_files(parts, voice_path):
-            return False, primary, []
-        return True, primary, timed
+            return False, primary, [], track
+        track = apply_turn_timings(track, timed)
+        return True, primary, track_to_voice_turns(track), track
     finally:
         for p in parts:
             try:
@@ -1450,14 +1382,9 @@ def _encode_clip(
     """
     lip_rel = (shot.get("assets") or {}).get("lip") or ""
     lip_path = resolve_safe(lip_rel) if lip_rel else None
-    from tools.providers.lip_providers import REAL_LIP_SOURCES
+    from tools.providers.lip_providers import lip_video_usable
 
-    lip_ok = (
-        str(shot.get("lip_source") or "") in REAL_LIP_SOURCES
-        and lip_path is not None
-        and lip_path.is_file()
-        and lip_path.stat().st_size > 500
-    )
+    lip_ok = lip_video_usable(shot, lip_path)
     # Divergent lip_base must not replace video-page motion in the final picture.
     lip_divergent = bool(shot.get("lip_base_used"))
 
@@ -1590,16 +1517,18 @@ def _encode_clip_from_motion(
     frames = max(int(round(target * FPS)), 1)
     motion_dur = _probe_duration(motion) if motion.is_file() else 0.0
     hold = max(0.0, target - motion_dur) if motion_dur > 0.05 else 0.0
+    # Reset PTS so video and voice share t=0 (avoids first-half mouth/audio drift).
     if hold > 0.05:
         vchain = (
-            f"[0:v]tpad=stop_mode=clone:stop_duration={hold:.3f},"
+            f"[0:v]setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={hold:.3f},"
             f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS}[v]"
+            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
         )
     else:
         vchain = (
-            f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS}[v]"
+            f"[0:v]setpts=PTS-STARTPTS,"
+            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
         )
     vf = f"{vchain};[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
     args = ["-y", "-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
@@ -1607,7 +1536,8 @@ def _encode_clip_from_motion(
         args += ["-i", str(audio)]
         af = (
             f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-            f"apad=whole_dur={target:.3f},atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+            f"asetpts=PTS-STARTPTS,apad=whole_dur={target:.3f},atrim=0:{target:.3f},"
+            f"asetpts=PTS-STARTPTS[aout]"
         )
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
@@ -1867,6 +1797,7 @@ def render_shot_layers(
     used_ai = False
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
+    # Full project cards for alias → name/voice/face match (N speakers)
 
     if "scene" in wanted:
         generated = generate_shot_candidates(slug, episode, shot, title=title)
@@ -1897,26 +1828,35 @@ def render_shot_layers(
 
     duration = float(shot.get("duration") or 5)
     if "voice" in wanted:
-        turns = dialogue_turns_for_shot(shot, cast, slug=slug)
-        speech = " ".join(t.get("text") or "" for t in turns).strip()
+        # Full character cards → alias/id resolve to name+voice+face for any N
+        track_plan = build_dialogue_track(shot, cards, slug=slug)
+        turns = list(track_plan.get("turns") or [])
+        speech = spoken_text_from_track(track_plan)
         if turns:
-            has_audio, voice_sel, timed_turns = _synthesize_shot_voice(shot, cast, voice, slug=slug)
+            has_audio, voice_sel, timed_turns, dialogue_track = _synthesize_shot_voice(
+                shot, cards, voice, slug=slug
+            )
         else:
-            has_audio, voice_sel, timed_turns = False, "", []
+            has_audio, voice_sel, timed_turns, dialogue_track = False, "", [], track_plan
         if has_audio:
             used_tts = True
             shot["voice_turns"] = timed_turns
-            if len(turns) == 1 and not str(shot.get("voice") or "").strip():
+            shot["dialogue_track"] = dialogue_track
+            if track_plan.get("mode") == "single" and not str(shot.get("voice") or "").strip():
                 shot["voice"] = voice_sel
-            elif len(turns) >= 2:
-                # Multi-speaker: keep per-character voices; don't pin one shot.voice
+            elif track_plan.get("mode") == "multi":
+                # Multi-speaker: keep per-character bindings; don't pin one shot.voice
                 shot["voice"] = ""
+            # Stale lip from lip_base would desync mouths vs new VO — rebuild lip this pass
+            if shot.get("lip_base_used") and "lip" not in locked and not do_lip:
+                do_lip = True
         elif voice.exists():
             try:
                 voice.unlink()
             except OSError:
                 pass
             shot["voice_turns"] = []
+            shot["dialogue_track"] = track_plan
         if speech and not has_audio:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "voice", "reason": "TTS 失败，本镜无声"})
         rebuilt.append("voice")
@@ -1925,6 +1865,8 @@ def render_shot_layers(
         from tools.drama_lip import generate_shot_lip
 
         lip_info = generate_shot_lip(slug, episode, shot)
+        if not shot.get("lip_base_used"):
+            shot["lip_base_used"] = False
         if lip_info.get("tried") and str(lip_info.get("lip_source") or "") == "fallback":
             degrades.append(
                 {
