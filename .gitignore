@@ -52,6 +52,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
+.deps_ok
 
 # 包管理
 *.egg-info/

@@ -8,3 +8,13 @@ python-multipart>=0.0.9,<1
 pillow>=10.4.0
 edge-tts>=7.0.0
 pytest>=8.0.0
+
+# --- 多人场景口型（drama_lip）：运行时必需 ---
+# _overlay_lip_mouth / _crop_video_box 依赖 cv2 + numpy 做 Poisson 口型合成与方形裁剪。
+numpy>=1.26
+opencv-python>=4.9
+
+# --- 可选（生产推荐）：ArcFace 身份锁，解决口型错位 ---
+# insightface 会一并拉取 onnx / scipy / scikit-image 等；onnxruntime 用于推理。
+insightface>=0.7.3
+onnxruntime>=1.17

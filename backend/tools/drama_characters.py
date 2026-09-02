@@ -24,6 +24,9 @@ DEFAULT_VOICES: tuple[tuple[str, str], ...] = (
     ("zh-CN-YunxiaNeural", "云夏 · 男少年"),
     ("zh-CN-XiaoxiaoNeural", "晓晓 · 女"),
     ("zh-CN-XiaoyiNeural", "晓伊 · 女"),
+    ("zh-CN-XiaoxuanNeural", "晓萱 · 女"),
+    ("zh-CN-XiaomengNeural", "晓梦 · 女"),
+    ("zh-CN-XiaoruiNeural", "晓睿 · 女"),
     # Xiaohan/Xiaozhen 在部分地区 edge-tts 会 NoAudioReceived，保留条目但合成时会回退
     ("zh-CN-XiaohanNeural", "晓涵 · 女"),
     ("zh-CN-XiaozhenNeural", "晓甄 · 女"),
@@ -318,7 +321,14 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     allowed = voice_ids_for(slug)
     voice = str(raw.get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
     if voice not in allowed:
-        voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
+        # Never silently map a female Xia* voice onto the male default.
+        rescued = safe_tts_voice(voice)
+        if rescued in allowed:
+            voice = rescued
+        elif any(x in voice for x in ("Xiao", "Xia")) and FEMALE_VOICE_FALLBACK in allowed:
+            voice = FEMALE_VOICE_FALLBACK
+        else:
+            voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
     ref = str(raw.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     chosen_ref = str(raw.get("chosen_ref") or "").strip()
     candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)

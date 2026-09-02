@@ -15,8 +15,8 @@ from urllib.parse import quote
 from tools.workspace import resolve_safe
 
 LICENSE_USER = "user_upload"
-DEFAULT_DUCK_DB = -12.0
-DEFAULT_BGM_VOLUME = 0.22
+DEFAULT_DUCK_DB = -8.0
+DEFAULT_BGM_VOLUME = 0.5
 DEFAULT_FADE_IN = 0.35
 DEFAULT_FADE_OUT = 0.7
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
@@ -151,32 +151,45 @@ def save_mix(slug: str, episode: int, mix: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_catalog(slug: str) -> dict[str, Any]:
+    from tools.drama_bgm_catalog import load_shared_catalog
+
+    shared = load_shared_catalog()
     path = resolve_safe(catalog_rel(slug))
-    if not path.is_file():
-        return {"tracks": []}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"tracks": []}
-    tracks = raw.get("tracks") if isinstance(raw, dict) else []
-    out: list[dict[str, Any]] = []
-    if isinstance(tracks, list):
-        for item in tracks:
-            if not isinstance(item, dict):
-                continue
-            tid = str(item.get("id") or "").strip()
-            if not tid:
-                continue
-            out.append(
-                {
-                    "id": tid,
-                    "title": str(item.get("title") or tid),
-                    "path": str(item.get("path") or "").replace("\\", "/"),
-                    "license": str(item.get("license") or f"catalog:{tid}"),
-                    "notes": str(item.get("notes") or ""),
-                }
-            )
-    return {"tracks": out}
+    project: list[dict[str, Any]] = []
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        tracks = raw.get("tracks") if isinstance(raw, dict) else []
+        if isinstance(tracks, list):
+            for item in tracks:
+                if not isinstance(item, dict):
+                    continue
+                tid = str(item.get("id") or "").strip()
+                if not tid:
+                    continue
+                path_rel = str(item.get("path") or "").replace("\\", "/")
+                project.append(
+                    {
+                        "id": tid,
+                        "title": str(item.get("title") or tid),
+                        "mood": str(item.get("mood") or ""),
+                        "notes": str(item.get("notes") or ""),
+                        "path": path_rel,
+                        "license": str(item.get("license") or f"catalog:{tid}"),
+                        "preview_url": (
+                            f"/api/workspace/file?path={quote(path_rel, safe='/')}" if path_rel else ""
+                        ),
+                    }
+                )
+    # Project entries override shared tracks with the same id.
+    by_id = {t["id"]: t for t in shared}
+    for row in project:
+        by_id[row["id"]] = row
+    merged = list(by_id.values())
+    merged.sort(key=lambda t: (str(t.get("mood") or ""), str(t.get("title") or t.get("id") or "")))
+    return {"tracks": merged}
 
 
 def has_bgm(mix: dict[str, Any]) -> bool:
@@ -330,6 +343,28 @@ def _copy_stem(stem: Path, dest: Path) -> str:
         return "copy-file"
 
 
+def _replace_robust(src: Path, dest: Path, *, retries: int = 12, delay: float = 0.5) -> None:
+    """Atomically replace dest with src, retrying on transient Windows file locks.
+
+    The previous mix may still be streaming in the browser (``FileResponse`` holds
+    the file open), which makes ``os.replace`` fail with WinError 5. Retry with
+    backoff instead of failing the whole export — the handle is released as soon
+    as streaming ends.
+    """
+    import time
+
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            src.replace(dest)
+            return
+        except (PermissionError, OSError) as e:
+            last = e
+            time.sleep(delay * (1 + attempt))
+    if last is not None:
+        raise ValueError(f"输出文件被占用，无法覆盖（可能正在浏览器中播放）：{dest.name}") from last
+
+
 def mix_assembled(
     slug: str,
     episode: int,
@@ -363,7 +398,7 @@ def mix_assembled(
         fade_bits += f",afade=t=out:st={fade_out_start:.3f}:d={min(fade_out, dur):.2f}"
 
     duck_db = float(bgm.get("duck_db") if bgm.get("duck_db") is not None else DEFAULT_DUCK_DB)
-    ratio = max(2.0, 1.0 + abs(duck_db) / 2.0)
+    ratio = max(1.5, 1.0 + abs(duck_db) / 4.0)
     duck = (
         f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
         f"atrim=start={start:.3f},asetpts=PTS-STARTPTS,"
@@ -434,7 +469,7 @@ def mix_assembled(
                 timeout=180,
             )
             mode = "amix"
-        tmp.replace(dest)
+        _replace_robust(tmp, dest)
         return mode
     except Exception:
         if tmp.exists():

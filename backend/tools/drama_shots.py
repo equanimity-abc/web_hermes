@@ -477,6 +477,11 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "lip_source": str(raw.get("lip_source") or ""),
         "lip_score": raw.get("lip_score") if isinstance(raw.get("lip_score"), dict) else None,
         "lip_base_used": bool(raw.get("lip_base_used")),
+        "lip_layout_source": str(raw.get("lip_layout_source") or ""),
+        "lip_warnings": list(raw.get("lip_warnings") or [])
+        if isinstance(raw.get("lip_warnings"), list)
+        else [],
+        "lip_degraded": bool(raw.get("lip_degraded")),
         "voice_turns": list(raw.get("voice_turns") or [])
         if isinstance(raw.get("voice_turns"), list)
         else [],

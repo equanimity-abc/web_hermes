@@ -65,3 +65,50 @@ def test_timed_turns_recover_from_script_when_metadata_lost(monkeypatch, tmp_pat
     assert len(turns) >= 2
     assert turns[0]["end"] > turns[0]["start"]
     assert turns[1]["end"] > turns[1]["start"]
+
+
+def test_square_box_is_pixel_square():
+    """Crop/paste geometry must stay pixel-square so the mouth never squashes."""
+    from tools.drama_lip import _square_box
+
+    x, y, bw, bh = _square_box(1080, 1920, (0.08, 0.10, 0.34, 0.30))
+    assert abs((bw * 1080) - (bh * 1920)) < 1.0
+    assert 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0
+
+
+def test_explicit_layout_director_override():
+    """Director can pin cast→side deterministically via shot.lip_layout."""
+    from tools.drama_lip import _explicit_layout
+
+    shot = {"lip_layout": {"left": "ruolin", "right": "ruoxi"}}
+    turns = [{"character_id": "ruolin"}, {"character_id": "ruoxi"}]
+    layout = _explicit_layout("demo", shot, turns, ["ruolin", "ruoxi"], 1080, 1920)
+    assert layout["ruolin"][0] < 0.3
+    assert layout["ruoxi"][0] > 0.4
+
+
+def test_explicit_layout_numeric_box():
+    """Director can pin exact normalized boxes per character."""
+    from tools.drama_lip import _coerce_box, _explicit_layout
+
+    assert _coerce_box([0.1, 0.2, 0.3, 0.4], 1080, 1920) == (0.1, 0.2, 0.3, 0.4)
+    shot = {"lip_layout": {"ruolin": [0.05, 0.1, 0.3, 0.3]}}
+    layout = _explicit_layout("demo", shot, [], ["ruolin", "ruoxi"], 1080, 1920)
+    assert layout["ruolin"] == (0.05, 0.1, 0.3, 0.3)
+
+
+def test_lip_degradation_notice_is_recorded():
+    """Degradation must never be silent — warnings + source land on the shot."""
+    from tools.drama_lip import _lip_warn, _set_layout_source
+
+    shot = {}
+    _set_layout_source(shot, "color")
+    _lip_warn(shot, "多人口型：ArcFace 身份锁不可用，已降级为颜色启发式定位")
+    assert shot["lip_layout_source"] == "color"
+    assert shot["lip_degraded"] is True
+    assert shot["lip_warnings"] == ["多人口型：ArcFace 身份锁不可用，已降级为颜色启发式定位"]
+
+    # dedup
+    _lip_warn(shot, "多人口型：ArcFace 身份锁不可用，已降级为颜色启发式定位")
+    assert len(shot["lip_warnings"]) == 1
+

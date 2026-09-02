@@ -329,11 +329,22 @@ const refPreviewUrl = computed(() => {
 })
 const mix = computed(() => props.episode?.mix || null)
 const bgmPreviewUrl = computed(() => {
-  const url = mix.value?.file?.url || ''
-  if (!url) return ''
-  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+  const mounted = mix.value?.file?.url || ''
+  if (mounted) return `${mounted}${mounted.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+  const id = String(props.mixDraft?.catalog_id || '').trim()
+  if (id) {
+    const hit = catalogTracks.value.find((t) => String(t.id) === id)
+    const preview = hit?.preview_url || ''
+    if (preview) return `${preview}${preview.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+  }
+  return ''
 })
 const catalogTracks = computed(() => mix.value?.catalog || [])
+const selectedCatalogTrack = computed(() => {
+  const id = String(props.mixDraft?.catalog_id || '').trim()
+  if (!id) return null
+  return catalogTracks.value.find((t) => String(t.id) === id) || null
+})
 const assembleMeta = computed(() => {
   const shotList = props.shots || []
   const items = props.timelineItems || []
@@ -1094,35 +1105,10 @@ const selectedSpeakerVoiceLabel = computed(() => {
   return '—'
 })
 
-/** Reusable DialogueTrack from API (bindings + timed turns); multi is the common case. */
-const dialogueTrack = computed(() => props.selected?.dialogue_track || null)
-const dialogueTrackMode = computed(() => String(dialogueTrack.value?.mode || '').toLowerCase())
-const dialogueTrackBindings = computed(() => {
-  const rows = dialogueTrack.value?.bindings
-  if (Array.isArray(rows) && rows.length) {
-    return rows.map((b) => ({
-      ...b,
-      speaker: canonicalSpeakerName(b.character_name || b.speaker) || b.character_name || b.speaker,
-    }))
-  }
-  return (props.selected?.voice_speakers || []).map((sp) => ({
-    speaker: canonicalSpeakerName(sp?.name) || sp?.name || '',
-    voice: sp?.voice || '',
-    voice_label: sp?.voice_label || '',
-  }))
-})
-const dialogueTrackTurns = computed(() => {
-  const turns = dialogueTrack.value?.turns
-  if (Array.isArray(turns) && turns.length) {
-    return turns.map((t) => ({
-      ...t,
-      speaker: canonicalSpeakerName(t.character_name || t.speaker) || t.character_name || t.speaker,
-    }))
-  }
-  return props.selected?.voice_turns || []
-})
-
 function lipStatusLabel(shot) {
+  const warnings = Array.isArray(shot?.lip_warnings) ? shot.lip_warnings : []
+  const degraded = Boolean(shot?.lip_degraded || warnings.length)
+  let label
   if (shotHasLip(shot)) {
     const src = lipSourceBase(shot?.lip_source)
     const map = {
@@ -1137,11 +1123,24 @@ function lipStatusLabel(shot) {
     }
     const score = shot?.lip_score?.lse_c ?? shot?.lip_score?.score
     const base = map[src] || src || '已生成'
-    return score != null && score !== '' ? `${base} · LSE ${Number(score).toFixed?.(2) ?? score}` : base
+    label = score != null && score !== '' ? `${base} · LSE ${Number(score).toFixed?.(2) ?? score}` : base
+  } else if (shot?.lip_error) {
+    label = `失败：${shot.lip_error}`
+  } else if (shot?.lip?.will_run || shot?.lip?.ok) {
+    label = '可生成（真口型）'
+  } else {
+    label = shot?.lip?.reason || '暂无'
   }
-  if (shot?.lip_error) return `失败：${shot.lip_error}`
-  if (shot?.lip?.will_run || shot?.lip?.ok) return '可生成（真口型）'
-  return shot?.lip?.reason || '暂无'
+  const srcTag = { director: '导演锁定', arcface: '身份锁', color: '颜色启发式', none: '未锁定' }[
+    shot?.lip_layout_source
+  ]
+  if (srcTag) label += ` · ${srcTag}`
+  if (degraded) label += ' ⚠️ 降级'
+  return label
+}
+
+function lipWarnings(shot) {
+  return Array.isArray(shot?.lip_warnings) ? shot.lip_warnings : []
 }
 
 function canGenerateVoiceFor(shot) {
@@ -1260,6 +1259,22 @@ const voiceStatusLabel = computed(() => {
           </button>
         </template>
         <template v-else-if="stage === 'assemble'">
+          <button
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="saving || !mixDirty"
+            @click="emit('save-mix')"
+          >
+            {{ saving ? '保存中…' : mixDirty ? '保存' : '已保存' }}
+          </button>
+          <button
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="rendering || saving || mixUnlicensed || !mix?.has_bgm"
+            @click="emit('apply-mix')"
+          >
+            {{ rendering ? '混音中…' : '应用混音' }}
+          </button>
           <button
             type="button"
             class="btn-primary btn-sm"
@@ -1894,51 +1909,18 @@ const voiceStatusLabel = computed(() => {
                   <strong>音色</strong>
                   <span class="drama-voice-readonly">{{ selectedSpeakerVoiceLabel }}</span>
                 </div>
-                <div v-if="dialogueTrackMode === 'multi'" class="drama-voice-kv">
-                  <strong>对白轨</strong>
-                  <span class="drama-voice-readonly"
-                    >多人 · {{ dialogueTrackTurns.length }} 段 · 主轨口型</span
-                  >
-                </div>
                 <div class="drama-voice-kv">
                   <strong>口型</strong>
-                  <span>{{ lipStatusLabel(selected) }}</span>
+                  <span class="drama-voice-readonly">{{ lipStatusLabel(selected) }}</span>
                 </div>
-                <div v-if="selected?.lip?.provider || selected?.lip_source" class="drama-voice-kv">
+                <div class="drama-voice-kv">
                   <strong>模型</strong>
-                  <span>{{ selected?.lip?.wanted_provider || selected?.lip?.provider || selected?.lip_source || '—' }}</span>
+                  <span class="drama-voice-readonly">{{ selected?.lip?.wanted_provider || selected?.lip?.provider || selected?.lip_source || '—' }}</span>
                 </div>
                 <div class="drama-voice-kv" :class="identityClass">
                   <strong>身份</strong>
-                  <span>{{ identityLabel }}</span>
+                  <span class="drama-voice-readonly">{{ identityLabel }}</span>
                 </div>
-              </div>
-              <div v-if="dialogueTrackMode === 'multi'" class="drama-dialogue-track">
-                <div class="drama-dialogue-bindings">
-                  <span
-                    v-for="b in dialogueTrackBindings"
-                    :key="b.speaker + b.voice"
-                    class="drama-dialogue-binding"
-                    :title="b.face_ready ? '已匹配定妆脸' : '未找到定妆图，口型可能锁错脸'"
-                  >
-                    <strong>{{ b.speaker || '（未命名）' }}</strong>
-                    <span>{{ b.voice_label || b.voice || '—' }}</span>
-                    <em class="drama-dialogue-face" :class="b.face_ready ? 'is-ready' : 'is-missing'">
-                      {{ b.face_ready ? '脸✓' : '脸?' }}
-                    </em>
-                  </span>
-                </div>
-                <ol class="drama-dialogue-turns">
-                  <li v-for="(t, i) in dialogueTrackTurns" :key="i" class="drama-dialogue-turn">
-                    <span class="drama-dialogue-turn-meta">
-                      <strong>{{ t.speaker || '—' }}</strong>
-                      <em v-if="t.end > t.start"
-                        >{{ Number(t.start).toFixed(1) }}–{{ Number(t.end).toFixed(1) }}s</em
-                      >
-                    </span>
-                    <span class="drama-dialogue-turn-text">{{ t.text }}</span>
-                  </li>
-                </ol>
               </div>
             </div>
 
@@ -2100,13 +2082,16 @@ const voiceStatusLabel = computed(() => {
             </div>
 
             <aside class="drama-assemble-side">
+              <p class="drama-assemble-side-lead">
+                配乐只在整集导出时混入，不会烧进各镜 clip。换曲后点「应用混音」即可试听，无需重渲分镜。
+              </p>
               <div class="drama-assemble-toolbar">
-                <label class="drama-assemble-inline">
+                <label class="drama-assemble-inline drama-assemble-inline--catalog">
                   <span>曲库</span>
                   <select v-model="mixDraft.catalog_id" @change="onCatalogChange">
-                    <option value="">上传曲</option>
+                    <option value="">— 自选 / 上传 —</option>
                     <option v-for="t in catalogTracks" :key="t.id" :value="t.id">
-                      {{ t.title || t.id }}
+                      {{ t.title }}{{ t.mood ? ` · ${t.mood}` : '' }}
                     </option>
                   </select>
                 </label>
@@ -2138,33 +2123,15 @@ const voiceStatusLabel = computed(() => {
                   <input v-model.number="mixDraft.duck_db" type="range" min="-24" max="0" step="0.5" />
                   <em>{{ Number(mixDraft.duck_db ?? -12).toFixed(1) }}</em>
                 </label>
-                <button
-                  type="button"
-                  class="btn-ghost btn-sm"
-                  :disabled="saving || !mixDirty"
-                  @click="emit('save-mix')"
-                >
-                  {{ saving ? '保存中…' : mixDirty ? '保存' : '已保存' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn-ghost btn-sm"
-                  :disabled="rendering || saving || mixUnlicensed || !mix?.has_bgm"
-                  @click="emit('apply-mix')"
-                >
-                  {{ rendering ? '混音中…' : '应用混音' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn-primary btn-sm"
-                  :disabled="rendering || saving || mixUnlicensed"
-                  @click="emit('export-timeline')"
-                >
-                  {{ rendering ? '导出中…' : assembleMeta.exported ? '重新导出' : '导出整集' }}
-                </button>
                 <input ref="bgmInput" class="drama-file" type="file" accept="audio/*" @change="onBgmFile" />
               </div>
+              <p v-if="selectedCatalogTrack?.notes" class="drama-assemble-track-hint">
+                {{ selectedCatalogTrack.notes }}
+              </p>
               <audio v-if="bgmPreviewUrl" class="drama-audio drama-assemble-audio" :src="bgmPreviewUrl" controls />
+              <p v-else-if="!catalogTracks.length" class="drama-empty-hint">
+                曲库加载中或为空；也可点「上传」使用自有 BGM。
+              </p>
               <p v-if="mixUnlicensed" class="drama-empty-hint drama-warn">
                 {{ mix?.license?.reason || '无版权曲子禁止导出' }}
               </p>

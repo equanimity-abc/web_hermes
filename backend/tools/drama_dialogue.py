@@ -201,19 +201,41 @@ def _shot_role_tokens(shot: dict[str, Any]) -> list[str]:
     return [str(r).strip() for r in roles if str(r).strip()]
 
 
-def _char_mention_pos(text: str, char: dict[str, Any]) -> int:
+KINSHIP_ALIAS_BLOCKLIST = frozenset(
+    {
+        "姐姐",
+        "妹妹",
+        "哥哥",
+        "弟弟",
+        "妈妈",
+        "爸爸",
+        "母亲",
+        "父亲",
+        "阿姨",
+        "叔叔",
+    }
+)
+
+
+def _usable_alias_tokens(char: dict[str, Any]) -> list[str]:
+    """Aliases safe for in-text mention matching (exclude kinship words)."""
     names = [str(char.get("name") or "")]
     aliases = char.get("aliases") or []
     if isinstance(aliases, list):
-        names.extend(str(a) for a in aliases)
+        for a in aliases:
+            s = str(a or "").strip()
+            if not s or s in KINSHIP_ALIAS_BLOCKLIST:
+                continue
+            names.append(s)
     cid = str(char.get("id") or "")
     if cid:
         names.append(cid)
+    return [n for n in names if n]
+
+
+def _char_mention_pos(text: str, char: dict[str, Any]) -> int:
     best = 10**9
-    for n in names:
-        n = str(n or "").strip()
-        if not n:
-            continue
+    for n in _usable_alias_tokens(char):
         i = text.find(n)
         if i >= 0:
             best = min(best, i)

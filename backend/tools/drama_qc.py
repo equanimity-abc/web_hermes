@@ -129,14 +129,37 @@ _arcface_app: Any = None
 _arcface_lock = threading.Lock()
 
 
+def _arcface_ready() -> bool:
+    """True only when the buffalo_l pack is already downloaded + extracted.
+
+    insightface's ``FaceAnalysis(...)`` triggers a blocking download when the model
+    is missing, which can hang the request path for minutes. Pre-check the cache so
+    a missing model degrades gracefully instead of freezing generation.
+    """
+    try:
+        root = Path.home() / ".insightface" / "models" / "buffalo_l"
+        return (
+            root.is_dir()
+            and (root / "det_10g.onnx").is_file()
+            and (root / "w600k_r50.onnx").is_file()
+        )
+    except Exception:
+        return False
+
+
 def _arcface_singleton() -> Any:
-    """Lazy singleton so consecutive shots don't rebuild the model (P1-8)."""
+    """Lazy singleton so consecutive shots don't rebuild the model (P1-8).
+
+    Returns None (never hangs) when the model pack is not yet cached — callers
+    already treat a missing model as a graceful degradation, not a blocker.
+    """
     global _arcface_app
-    app = _arcface_app
-    if app is not None:
-        return app
+    if _arcface_app is not None:
+        return _arcface_app
     with _arcface_lock:
         if _arcface_app is None:
+            if not _arcface_ready():
+                return None
             from insightface.app import FaceAnalysis  # type: ignore
 
             _arcface_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
