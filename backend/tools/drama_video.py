@@ -1771,8 +1771,13 @@ def render_shot_layers(
     layers: list[str],
     *,
     title: str,
+    candidate_count: int | None = None,
 ) -> dict[str, Any]:
-    """Rebuild selected layers for one shot. Unspecified layers are reused on disk."""
+    """Rebuild selected layers for one shot. Unspecified layers are reused on disk.
+
+    candidate_count: scene wall size. Autopilot passes 1 (single plate, no 4-up wall);
+    workbench fine-tune keeps default CANDIDATE_COUNT (4).
+    """
     if not ffmpeg_available():
         raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
 
@@ -1800,12 +1805,16 @@ def render_shot_layers(
     # Full project cards for alias → name/voice/face match (N speakers)
 
     if "scene" in wanted:
-        generated = generate_shot_candidates(slug, episode, shot, title=title)
+        wall_n = CANDIDATE_COUNT if candidate_count is None else max(1, min(int(candidate_count), 4))
+        generated = generate_shot_candidates(slug, episode, shot, title=title, count=wall_n)
         used_ai = any(item.get("source") == "ai" for item in generated)
         if not used_ai:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})
-        if not _path_for(shot, "scene").is_file() and generated:
-            apply_candidate_to_scene(shot, generated[0])
+        # Autopilot (count=1): always stamp the single plate onto scene unless locked.
+        # Fine-tune wall (count>1): only seed scene.png when missing.
+        if generated and "scene" not in locked:
+            if wall_n <= 1 or not _path_for(shot, "scene").is_file():
+                apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
         # R4: auto identity hard gate. Failed identity marks scene/motion/clip
         # dirty so retry (重抽) is the natural next step.

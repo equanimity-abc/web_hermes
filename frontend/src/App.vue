@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
+import SettingsModal from '@/components/layout/SettingsModal.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
 import DramaJobBar from '@/components/drama/DramaJobBar.vue'
@@ -14,6 +15,7 @@ import { useClipboardToast } from '@/composables/useClipboardToast'
 
 const chatViewRef = ref(null)
 const view = ref('chat')
+const settingsOpen = ref(false)
 const {
   projects: dramaProjects,
   slug: dramaSlug,
@@ -108,8 +110,11 @@ const {
   config: dramaConfig,
   presets: dramaPresets,
   currentPreset: dramaCurrentPreset,
+  modelCatalog: dramaModelCatalog,
   degradedProviders: dramaDegradedProviders,
   applyProjectPreset,
+  applyStageModel,
+  stageModelSelection,
   selectedConfigNode: dramaSelectedConfigNode,
   configNodeDraft: dramaConfigNodeDraft,
   configNodeList: dramaConfigNodeList,
@@ -205,6 +210,10 @@ function newChat() {
 
 async function switchSession(sessionId) {
   view.value = 'chat'
+  // Mid-generate: reloading from disk would wipe live tool/status UI (session not flushed yet).
+  if (sessionId === currentSessionId.value && isLoading.value) {
+    return
+  }
   setCurrentSessionId(sessionId)
   try {
     const list = await loadSessionMessages(sessionId)
@@ -243,10 +252,27 @@ function setView(next) {
   view.value = next
 }
 
+function onSettingsSaved() {
+  showToast('API Key 已保存')
+  settingsOpen.value = false
+}
+
 async function openDramaProject(slug) {
   view.value = 'drama'
   try {
     await openProject(slug)
+  } catch (e) {
+    console.error('打开漫剧项目失败:', e)
+    showToast(e.message || '打开项目失败')
+  }
+}
+
+async function openDramaFromChat({ slug, episode } = {}) {
+  if (!slug) return
+  view.value = 'drama'
+  try {
+    await openProject(slug)
+    if (episode != null) await openEpisode(Number(episode))
   } catch (e) {
     console.error('打开漫剧项目失败:', e)
     showToast(e.message || '打开项目失败')
@@ -297,10 +323,17 @@ onMounted(() => {
       @set-view="setView"
       @select-project="openDramaProject"
       @delete-project="deleteDramaProject"
+      @open-settings="settingsOpen = true"
+    />
+
+    <SettingsModal
+      :open="settingsOpen"
+      @close="settingsOpen = false"
+      @saved="onSettingsSaved"
     />
 
     <ChatView
-      v-if="view === 'chat'"
+      v-show="view === 'chat'"
       ref="chatViewRef"
       v-model="userInput"
       :messages="messages"
@@ -313,10 +346,11 @@ onMounted(() => {
       @regenerate="regenerateResponse"
       @like="toggleLike"
       @dislike="toggleDislike"
+      @open-drama="openDramaFromChat"
     />
 
     <DramaStudio
-      v-else
+      v-show="view === 'drama'"
       :project="dramaProject"
       :episode="dramaEpisode"
       :episode-n="dramaEpisodeN"
@@ -359,6 +393,8 @@ onMounted(() => {
       :mix-unlicensed="dramaMixUnlicensed"
       :presets="dramaPresets"
       :current-preset="dramaCurrentPreset"
+      :model-catalog="dramaModelCatalog"
+      :stage-model-selection="stageModelSelection"
       :degraded-providers="dramaDegradedProviders"
       :config-node-list="dramaConfigNodeList"
       :selected-config-node="dramaSelectedConfigNode"
@@ -376,6 +412,7 @@ onMounted(() => {
       :rejecting-all="dramaRejectingAll"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
+      @apply-stage-model="({ node, key }) => applyStageModel(node, key)"
       @select-config-node="selectConfigNode"
       @save-config-node="saveConfigNode"
       @toggle-shot-selected="toggleShotSelected"

@@ -7,7 +7,7 @@ defineProps({
   messages: { type: Array, required: true },
 })
 
-const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama'])
 
 const containerRef = ref(null)
 
@@ -57,6 +57,7 @@ defineExpose({ scrollToBottom, containerRef })
       @regenerate="emit('regenerate', $event)"
       @like="emit('like', $event)"
       @dislike="emit('dislike', $event)"
+      @open-drama="emit('open-drama', $event)"
     />
   </div>
 </template>

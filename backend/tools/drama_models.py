@@ -50,9 +50,9 @@ Q6_MAX_LADDER = "L4"
 EXPENSIVE_I2V = frozenset({"kling", "hailuo"})
 MAX_EXPENSIVE_I2V = 2
 CURRENCY = "CNY"
-PRESET_IDS = ("cheap", "balanced", "pro")
-# 默认走顶级配置（pro）；未配置商用 API 时由 provider_health 诚实降级到免费后端。
-DEFAULT_PRESET = "pro"
+PRESET_IDS = ("cheap", "balanced", "pro", "ark")
+# 默认走火山方舟（ark）；未配置 ARK_API_KEY 时由 provider_health / resolve_provider 诚实降级。
+DEFAULT_PRESET = "ark"
 
 # Nodes that can be individually configured (mirrors drama_config.NODE_KEYS).
 NODE_KEYS = (
@@ -187,6 +187,45 @@ def default_providers() -> dict[str, dict[str, Any]]:
         },
         "kling": {
             "available": False,
+            "cost_per_shot": 0.8,
+            "rpm": 10,
+            "timeout_s": 300,
+            "fallback": "mock",
+            "notes": "可灵图生/视频（DashScope MaaS）。",
+        },
+        "ark": {
+            "available": True,
+            "cost_per_shot": 0.4,
+            "rpm": 20,
+            "timeout_s": 300,
+            "fallback": "mock",
+            "notes": "火山方舟：Seedream 生图 / Seedance 视频 / Seed Audio 配音（需 ARK_API_KEY）。",
+        },
+        "seedream": {
+            "available": True,
+            "cost_per_shot": 0.4,
+            "rpm": 20,
+            "timeout_s": 180,
+            "fallback": "mock",
+            "notes": "火山方舟 Seedream 生图别名。",
+        },
+        "seedance": {
+            "available": True,
+            "cost_per_shot": 0.6,
+            "rpm": 10,
+            "timeout_s": 420,
+            "fallback": "l0",
+            "notes": "火山方舟 Seedance 图生视频别名。",
+        },
+        "seed-audio": {
+            "available": True,
+            "cost_per_shot": 0.05,
+            "rpm": 60,
+            "timeout_s": 60,
+            "fallback": "edge-tts",
+            "notes": "火山方舟 Seed Audio 配音别名。",
+        },
+        "http": {
             "cost_per_shot": 2.5,
             "rpm": 10,
             "timeout_s": 180,
@@ -329,21 +368,20 @@ def default_models() -> dict[str, Any]:
         },
         "preset": DEFAULT_PRESET,
         "nodes": {},
-        "script": {"provider": "deepseek", "model": "deepseek-v4-flash", "refine_model": "deepseek-reasoner"},
+        "script": {
+            "provider": "ark",
+            "model": "doubao-seed-character-260628",
+            "refine_model": "doubao-seed-character-260628",
+            "alternatives": ["ark", "deepseek", "kimi"],
+        },
         "tts": {
-            "provider": "edge-tts",
+            "provider": "seed-audio",
+            "model": "doubao-seed-audio-1-0",
             "voices": [
+                {"id": "zh_female_vv_uranus_bigtts", "label": "方舟女声"},
+                {"id": "zh_male_M392_conversation_wvae_bigtts", "label": "方舟男声"},
                 {"id": "zh-CN-YunxiNeural", "label": "云希 · 男"},
-                {"id": "zh-CN-YunyangNeural", "label": "云扬 · 男旁白"},
-                {"id": "zh-CN-YunjianNeural", "label": "云健 · 男"},
-                {"id": "zh-CN-YunxiaNeural", "label": "云夏 · 男少年"},
                 {"id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女"},
-                {"id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 女"},
-                {"id": "zh-CN-XiaoxuanNeural", "label": "晓萱 · 女"},
-                {"id": "zh-CN-XiaomengNeural", "label": "晓梦 · 女"},
-                {"id": "zh-CN-XiaoruiNeural", "label": "晓睿 · 女"},
-                {"id": "zh-CN-XiaohanNeural", "label": "晓涵 · 女"},
-                {"id": "zh-CN-XiaozhenNeural", "label": "晓甄 · 女"},
             ],
         },
         "subtitle": {"style": "static"},
@@ -661,10 +699,10 @@ def load_models(slug: str) -> dict[str, Any]:
 
 
 def _bake_top_preset(doc: dict[str, Any]) -> None:
-    """将默认顶级预设（pro）的节点配置烘焙进全新模型文档。
+    """将默认预设（ark）的节点配置烘焙进全新模型文档。
 
-    手动切换预设的入口已从工作台移除；新建项目一律使用顶级模型，
-    未配置商用 API 时由 provider_health 诚实降级到免费后端。
+    工作台各步骤可单独改模型；新建项目默认火山方舟，
+    未配置 ARK_API_KEY 时由 provider_health / resolve_provider 诚实降级。
     """
     try:
         from tools.drama_config import load_preset
@@ -1007,6 +1045,9 @@ _ENV_GATED: dict[str, dict[str, str]] = {
         "dashscope": "DASHSCOPE_API_KEY",
         "kling": "DASHSCOPE_MAAS_BASE_URL",
         "kling-image": "DASHSCOPE_MAAS_BASE_URL",
+        "ark": "ARK_API_KEY",
+        "seedream": "ARK_API_KEY",
+        "doubao-image": "ARK_API_KEY",
     },
     "i2v": {
         "kling": "I2V_API_URL",
@@ -1015,6 +1056,9 @@ _ENV_GATED: dict[str, dict[str, str]] = {
         "dashscope-i2v": "DASHSCOPE_API_KEY",
         "kling-video": "DASHSCOPE_MAAS_BASE_URL",
         "kling-maas": "DASHSCOPE_MAAS_BASE_URL",
+        "ark": "ARK_API_KEY",
+        "seedance": "ARK_API_KEY",
+        "doubao-video": "ARK_API_KEY",
     },
     "tts": {
         "volcano": "TTS_API_URL",
@@ -1023,6 +1067,9 @@ _ENV_GATED: dict[str, dict[str, str]] = {
         "dashscope-tts": "DASHSCOPE_API_KEY",
         "cosyvoice": "DASHSCOPE_API_KEY",
         "qwen-tts": "DASHSCOPE_API_KEY",
+        "ark": "ARK_API_KEY",
+        "seed-audio": "ARK_API_KEY",
+        "doubao-audio": "ARK_API_KEY",
     },
     "lip": {
         "musetalk": "LIP_API_URL",

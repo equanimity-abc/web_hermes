@@ -261,7 +261,8 @@ export function useDramaStudio() {
     if (saved.length !== cur.length) return true
     return saved.some((n, i) => n !== cur[i])
   })
-  const currentPreset = computed(() => config.value?.preset || 'balanced')
+  const currentPreset = computed(() => config.value?.preset || 'ark')
+  const modelCatalog = computed(() => config.value?.catalog || {})
   const providerHealth = computed(() => config.value?.health || null)
   const degradedProviders = computed(() =>
     (providerHealth.value?.items || []).filter(
@@ -307,12 +308,12 @@ export function useDramaStudio() {
       id: '',
       name: '',
       look: '',
-      voice: 'zh-CN-YunxiNeural',
+      voice: 'zh_female_vv_uranus_bigtts',
       aliases: '',
       colors: '',
       ref_size: 1024,
-      ref_image_provider: 'kling-image',
-      ref_image_model: 'kling/kling-v3-omni-image-generation',
+      ref_image_provider: 'seedream',
+      ref_image_model: 'doubao-seedream-5-0-pro-260628',
       category: 'character',
     }
   }
@@ -428,13 +429,13 @@ export function useDramaStudio() {
   }
 
   function fillCharDraft(char) {
-    const refProvider = String(char?.ref_image_provider || 'kling-image')
-    const refModel = String(char?.ref_image_model || 'kling/kling-v3-omni-image-generation')
+    const refProvider = String(char?.ref_image_provider || 'seedream')
+    const refModel = String(char?.ref_image_model || 'doubao-seedream-5-0-pro-260628')
     charDraft.value = {
       id: char?.id || '',
       name: char?.name || '',
       look: char?.look || '',
-      voice: char?.voice || 'zh-CN-YunxiNeural',
+      voice: char?.voice || 'zh_female_vv_uranus_bigtts',
       aliases: (char?.aliases || []).join('、'),
       colors: char?.colors || '',
       ref_size: [640, 1024, 1980].includes(Number(char?.ref_size)) ? Number(char.ref_size) : 1024,
@@ -511,6 +512,126 @@ export function useDramaStudio() {
       await loadConfig()
       selectConfigNode(selectedConfigNode.value, true)
       notice.value = `已保存节点 ${selectedConfigNode.value}`
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
+    }
+  }
+
+  function _optionKey(provider, model) {
+    return `${provider || ''}|${model || ''}`
+  }
+
+  function stageModelSelection(nodeId) {
+    const nodes = config.value?.nodes || {}
+    const catalog = modelCatalog.value?.[nodeId] || []
+    if (nodeId === 'script') {
+      const n = nodes.script || {}
+      return _optionKey(n.provider || 'ark', n.model || 'doubao-seed-character-260628')
+    }
+    if (nodeId === 'image') {
+      const image = nodes.image || {}
+      const sample = image.dialogue || image.establishing || image.character_ref || {}
+      return _optionKey(sample.provider || 'seedream', sample.model || 'doubao-seedream-5-0-pro-260628')
+    }
+    if (nodeId === 'character_ref') {
+      const cref = (nodes.image || {}).character_ref || {}
+      return _optionKey(cref.provider || 'seedream', cref.model || 'doubao-seedream-5-0-pro-260628')
+    }
+    if (nodeId === 'motion') {
+      const motion = nodes.motion || {}
+      const sample = motion.action || motion.dialogue || motion.reaction || {}
+      return _optionKey(sample.provider || 'seedance', sample.model || 'doubao-seedance-2-5-260628')
+    }
+    if (nodeId === 'tts') {
+      const n = nodes.tts || {}
+      return _optionKey(n.provider || 'seed-audio', n.model || 'doubao-seed-audio-1-0')
+    }
+    if (nodeId === 'lip') {
+      const n = nodes.lip || {}
+      return _optionKey(n.provider || 'pixverse', n.model || '')
+    }
+    const hit = catalog[0]
+    return hit ? _optionKey(hit.provider, hit.model) : ''
+  }
+
+  async function applyStageModel(nodeId, optionKey) {
+    if (!slug.value || !nodeId || !optionKey) return
+    const [provider, model = ''] = String(optionKey).split('|')
+    if (!provider) return
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      let value
+      const nodes = config.value?.nodes || {}
+      if (nodeId === 'script') {
+        value = {
+          ...(nodes.script || {}),
+          provider,
+          model,
+          refine_model: model,
+          alternatives: ['ark', 'deepseek', 'kimi'],
+        }
+        await dramaApi.putNodeConfig(slug.value, 'script', value)
+      } else if (nodeId === 'image' || nodeId === 'character_ref') {
+        const image = { ...(nodes.image || {}) }
+        const kinds =
+          nodeId === 'character_ref'
+            ? ['character_ref']
+            : [
+                'establishing',
+                'insert',
+                'dialogue',
+                'reaction',
+                'action',
+                'crowd',
+                'title',
+                'character_ref',
+              ]
+        for (const kind of kinds) {
+          const cur = { ...(image[kind] || {}) }
+          cur.provider = provider
+          if (model) cur.model = model
+          image[kind] = cur
+        }
+        await dramaApi.putNodeConfig(slug.value, 'image', image)
+        if (nodeId === 'character_ref' || nodeId === 'image') {
+          charDraft.value.ref_image_provider = provider
+          charDraft.value.ref_image_model = model || charDraft.value.ref_image_model
+        }
+      } else if (nodeId === 'motion') {
+        const motion = { ...(nodes.motion || {}) }
+        for (const kind of Object.keys(motion)) {
+          const cur = { ...(motion[kind] || {}) }
+          if (provider === 'l0') {
+            motion[kind] = { ...cur, ladder: 'L0', provider: 'l0', fallback: 'L0' }
+            continue
+          }
+          // Keep establishing/insert on L0 unless user explicitly picks L0 above.
+          if (String(cur.ladder || '') === 'L0' && ['establishing', 'insert', 'crowd', 'title'].includes(kind)) {
+            continue
+          }
+          motion[kind] = {
+            ...cur,
+            provider,
+            ...(model ? { model } : {}),
+            fallback: cur.fallback || 'L0',
+          }
+        }
+        await dramaApi.putNodeConfig(slug.value, 'motion', motion)
+      } else if (nodeId === 'tts') {
+        value = { ...(nodes.tts || {}), provider, ...(model ? { model } : {}) }
+        await dramaApi.putNodeConfig(slug.value, 'tts', value)
+      } else if (nodeId === 'lip') {
+        value = { ...(nodes.lip || {}), provider, enabled: provider !== 'mock' }
+        await dramaApi.putNodeConfig(slug.value, 'lip', value)
+      } else {
+        return
+      }
+      await loadConfig()
+      notice.value = `已切换${nodeId}模型`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
@@ -2324,11 +2445,14 @@ export function useDramaStudio() {
     config,
     presets,
     currentPreset,
+    modelCatalog,
     providerHealth,
     degradedProviders,
     selectedConfigNode,
     configNodeDraft,
     configNodeList,
+    stageModelSelection,
+    applyStageModel,
     selectedShotIds,
     batchField,
     batchValue,

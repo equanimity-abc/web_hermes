@@ -45,11 +45,13 @@ const props = defineProps({
   mixDirty: { type: Boolean, default: false },
   mixUnlicensed: { type: Boolean, default: false },
   presets: { type: Array, default: () => [] },
-  currentPreset: { type: String, default: 'balanced' },
+  currentPreset: { type: String, default: 'ark' },
+  modelCatalog: { type: Object, default: () => ({}) },
   degradedProviders: { type: Array, default: () => [] },
   configNodeList: { type: Array, default: () => [] },
   selectedConfigNode: { type: String, default: 'script' },
   configNodeDraft: { type: String, default: '' },
+  stageModelSelection: { type: Function, default: null },
   selectedShotIds: { type: Array, default: () => [] },
   snapshots: { type: Array, default: () => [] },
   snapshotsOpen: { type: Boolean, default: false },
@@ -123,6 +125,7 @@ const emit = defineEmits([
   'apply-mix',
   'clear-bgm',
   'apply-preset',
+  'apply-stage-model',
   'select-config-node',
   'save-config-node',
   'toggle-shot-selected',
@@ -174,14 +177,15 @@ const CAST_REF_SIZES = [
   { value: 1980, hint: '1980×1980' },
 ]
 const CAST_REF_MODELS = [
+  { provider: 'seedream', model: 'doubao-seedream-5-0-pro-260628', label: '方舟 · Seedream 5.0 Pro' },
   { provider: 'kling-image', model: 'kling/kling-v3-omni-image-generation', label: '可灵 · Kling V3 Omni' },
   { provider: 'wanx', model: 'qwen-image-plus', label: '百炼 · Qwen-Image-Plus' },
 ]
 
 const charRefModelKey = computed({
   get() {
-    const p = props.charDraft.ref_image_provider || 'kling-image'
-    const m = props.charDraft.ref_image_model || 'kling/kling-v3-omni-image-generation'
+    const p = props.charDraft.ref_image_provider || 'seedream'
+    const m = props.charDraft.ref_image_model || 'doubao-seedream-5-0-pro-260628'
     return `${p}|${m}`
   },
   set(v) {
@@ -194,6 +198,23 @@ const charRefModelKey = computed({
   },
 })
 
+function catalogOptions(nodeId) {
+  if (nodeId === 'character_ref') return props.modelCatalog?.image || CAST_REF_MODELS
+  return props.modelCatalog?.[nodeId] || []
+}
+
+function currentModelKey(nodeId) {
+  if (typeof props.stageModelSelection === 'function') {
+    return props.stageModelSelection(nodeId)
+  }
+  return ''
+}
+
+function onStageModelChange(nodeId, event) {
+  const key = event?.target?.value
+  if (!key) return
+  emit('apply-stage-model', { node: nodeId, key })
+}
 const castAssets = computed(() =>
   (props.characters || []).filter((c) => (c.category || 'character') === castCategory.value),
 )
@@ -1199,7 +1220,7 @@ const voiceStatusLabel = computed(() => {
         <div class="drama-top-title">
           <h1>{{ project?.project?.title || '漫剧工作台' }}</h1>
         </div>
-        <div v-if="episodes.length" class="drama-ep-select">
+        <div v-if="episodes.length > 1" class="drama-ep-select">
           <label class="drama-ep-label">
             <span class="drama-ep-label-text">集数</span>
             <select class="drama-ep-dropdown" :value="episodeN" @change="onEpisodeChange">
@@ -1290,6 +1311,24 @@ const voiceStatusLabel = computed(() => {
     <div v-if="project" class="drama-flow">
       <!-- ============ 阶段 1：剧本 ============ -->
       <section v-if="stage === 'script'" class="drama-stage-panel drama-script-stage">
+        <div class="drama-model-bar">
+          <label class="drama-model-bar-label">本步模型</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('script')"
+            :disabled="saving"
+            @change="onStageModelChange('script', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('script')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="drama-model-bar-hint">默认方舟；可改 DeepSeek / Kimi</span>
+        </div>
         <div class="drama-panel-body drama-script-panels">
           <div class="drama-script-panel drama-script-panel--generate">
             <div class="drama-script-panel-inner">
@@ -1320,7 +1359,7 @@ const voiceStatusLabel = computed(() => {
                 :value="scriptDraft"
                 spellcheck="false"
                 rows="16"
-                placeholder="# EP01 标题&#10;- 时长: 45s&#10;## 分镜&#10;### Shot 1 (0-3s)"
+                placeholder="# 标题&#10;- 时长: 60s&#10;## 分镜&#10;### Shot 1 (0-3s)"
                 @input="emit('update:scriptDraft', $event.target.value)"
               />
               <div class="drama-script-panel-actions">
@@ -1340,6 +1379,24 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 2：定妆资产 ============ -->
       <section v-else-if="stage === 'cast'" class="drama-stage-panel drama-cast-stage">
+        <div class="drama-model-bar">
+          <label class="drama-model-bar-label">定妆生图</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('character_ref')"
+            :disabled="saving"
+            @change="onStageModelChange('character_ref', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('character_ref')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="drama-model-bar-hint">默认 Seedream；单卡仍可在下方单独覆盖</span>
+        </div>
         <div class="drama-panel-body drama-cast-layout">
           <div class="drama-cast-sidebar">
             <div class="drama-cast-tabs">
@@ -1512,6 +1569,24 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 3：画面（可分镜出图） ============ -->
       <section v-else-if="stage === 'scene'" class="drama-stage-panel drama-scene-stage">
+        <div class="drama-model-bar">
+          <label class="drama-model-bar-label">本步模型</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('image')"
+            :disabled="saving"
+            @change="onStageModelChange('image', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('image')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="drama-model-bar-hint">默认 Seedream，作用于全部分镜出图</span>
+        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">
@@ -1633,6 +1708,24 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 4：视频 ============ -->
       <section v-else-if="stage === 'video'" class="drama-stage-panel drama-video-stage">
+        <div class="drama-model-bar">
+          <label class="drama-model-bar-label">本步模型</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('motion')"
+            :disabled="saving"
+            @change="onStageModelChange('motion', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('motion')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="drama-model-bar-hint">默认 Seedance（图生视频）</span>
+        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">
@@ -1821,6 +1914,39 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 5：声音 ============ -->
       <section v-else-if="stage === 'voice'" class="drama-stage-panel drama-voice-stage">
+        <div class="drama-model-bar">
+          <label class="drama-model-bar-label">配音</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('tts')"
+            :disabled="saving"
+            @change="onStageModelChange('tts', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('tts')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <label class="drama-model-bar-label">口型</label>
+          <select
+            class="drama-model-select"
+            :value="currentModelKey('lip')"
+            :disabled="saving"
+            @change="onStageModelChange('lip', $event)"
+          >
+            <option
+              v-for="opt in catalogOptions('lip')"
+              :key="`${opt.provider}|${opt.model}`"
+              :value="`${opt.provider}|${opt.model}`"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="drama-model-bar-hint">默认 Seed Audio + PixVerse</span>
+        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">

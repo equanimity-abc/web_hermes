@@ -171,3 +171,21 @@ backend/data/sessions/*.json
 !backend/data/sessions/.gitkeep
 backend/data/workspace/**
 !backend/data/workspace/.gitkeep
+backend/data/secrets.json
+backend/data/secrets.tmp
+
+
+
+# 自动检测文本文件并保持LF
+* text=auto
+
+# 明确指定特定文件类型使用LF
+*.py text eol=lf
+*.sh text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+
+# 二进制文件不要转换
+*.png binary
+*.jpg binary
+*.ico binary

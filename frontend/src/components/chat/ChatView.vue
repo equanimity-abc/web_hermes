@@ -20,6 +20,7 @@ const emit = defineEmits([
   'regenerate',
   'like',
   'dislike',
+  'open-drama',
 ])
 
 const welcomeRef = ref(null)
@@ -79,6 +80,7 @@ defineExpose({ focusComposer, scrollToBottom })
         @regenerate="emit('regenerate', $event)"
         @like="emit('like', $event)"
         @dislike="emit('dislike', $event)"
+        @open-drama="emit('open-drama', $event)"
       />
 
       <div class="input-area">

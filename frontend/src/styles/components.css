@@ -123,8 +123,31 @@
 }
 
 .sidebar-footer {
-  padding: 8px 12px;
+  padding: 8px 12px 12px;
   border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-settings:hover {
+  color: var(--color-text);
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
 }
 
 .sidebar-user {
@@ -403,6 +426,67 @@
   opacity: 1;
 }
 
+.chat-media-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.drama-video-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+  max-width: 360px;
+}
+
+.drama-video-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.drama-video-card-head strong {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.drama-video-card-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.drama-video-card-player {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  border-radius: 10px;
+  background: #111;
+}
+
+.drama-video-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.drama-video-card-open {
+  flex-shrink: 0;
+}
+
+.drama-video-card-link {
+  font-size: 12px;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.drama-video-card-link:hover {
+  text-decoration: underline;
+}
+
 /* Composer (conversation) */
 .input-area {
   padding: 0 48px 24px;
@@ -646,6 +730,155 @@
 
 .approval-btn.approve:hover:not(:disabled) {
   background: var(--color-primary-hover);
+}
+
+/* API settings modal */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.settings-modal {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  padding: 20px 22px 18px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.settings-close {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.settings-close:hover {
+  color: var(--color-text);
+}
+
+.settings-desc,
+.settings-note {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.settings-desc code,
+.settings-note code {
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.settings-loading {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 12px 0 8px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-badge {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  background: var(--color-border-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.settings-badge.on {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.settings-hint,
+.settings-masked {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.settings-input {
+  margin-top: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.settings-error {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--color-danger);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 /* Toast */

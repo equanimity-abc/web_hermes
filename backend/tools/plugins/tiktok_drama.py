@@ -31,35 +31,37 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 - 人设少而尖：2–4 个角色，各有一句口头禅或视觉锚点。
 
 ## 工作流
+0. **create_from_premise（一句话全自动，默认推荐）** premise=故事梗概 → 自动解析「几集 / 每集几秒」→ 立项 + bible + outline + **按集拆分剧本** + **逐集 HQ 成片导出**（返回 play_url + episodes[]）；定妆每人 1 张并锁定；分镜只出 1 张画面（候选墙留给工作台微调）
 1. tiktok_drama action=init 建项目（slug + title + logline）
 2. save_bible 写入人设 bible.md
 3. save_outline 写入系列大纲 outline.md
 4. save_episode 按集写入 episodes/epNN.md
 5. parse_shots 解析分镜并写入 videos/epNN/shots.json（分镜真相源）
-6. render_episode 按镜生成 clip，再拼接竖屏 mp4
-7. 改某一镜用 rerender_shot；layers=scene|overlay|voice|clip|assemble 只重做指定层
-8. lock_shot 锁住 scene 后，改台词只换声和字幕，不会覆盖画面
-9. lock_shot 锁住 shot（整镜）后，save_episode 改剧本不会覆盖该镜
-10. get / list 回看进度；成片 videos/epNN.mp4
-11. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）
-12. save_character 写角色卡（外形 look + 音色 voice）；工作台可上传并锁定妆图
-13. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
-14. 锁参考图后无法覆盖已锁定的定妆 png
-15. 每镜 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）
-16. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
-17. poll_job 查询后台渲染任务进度（render_episode / rerender_dirty 返回 job_id）
-18. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
-19. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
-20. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；失败回退闭口静图）
-21. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
-22. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
-23. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
-24. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过；响度不达标只重 mix；人在工作台点通过或退回单镜
-25. apply_style 为本集切换风格包（一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）
+6. **produce_episode** 已有剧本时一键 HQ：pro 预设 → 补角色/单张锁定妆 → 逐镜单图 scene+配音+口型+I2V → 曲库 BGM → **导出 epNN.mp4**
+7. render_episode 仅批量出 scene/overlay/voice/clip（不含 I2V/口型/导出），适合半成品迭代
+8. 改某一镜用 rerender_shot；layers=scene|overlay|voice|clip|assemble 只重做指定层
+9. lock_shot 锁住 scene 后，改台词只换声和字幕，不会覆盖画面
+10. lock_shot 锁住 shot（整镜）后，save_episode 改剧本不会覆盖该镜
+11. get / list 回看进度；成片 videos/epNN.mp4
+12. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）
+13. save_character 写角色卡（外形 look + 音色 voice）；produce_episode 会按分镜 `- 角色:` 自动补卡
+14. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
+15. 锁参考图后无法覆盖已锁定的定妆 png
+16. 微调时才用 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）；全自动禁止刷候选墙
+17. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
+18. poll_job 查询后台任务（produce_episode / render_episode / rerender_dirty）
+19. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
+20. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
+21. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；失败回退闭口静图）
+22. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
+23. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
+24. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
+25. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过；响度不达标只重 mix；人在工作台点通过或退回单镜
+26. apply_style 为本集切换风格包（一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
-- 时长: 45s
+- 时长: 60s
 - 钩子: （前3秒）
 - 悬念: （结尾）
 
@@ -309,9 +311,9 @@ def _action_save_episode(args: dict) -> str:
         return _err("content 不能为空")
     title = str(args.get("title") or f"第{n}集").strip()
     try:
-        seconds = int(args.get("seconds") or 45)
+        seconds = int(args.get("seconds") or 60)
     except (TypeError, ValueError):
-        seconds = 45
+        seconds = 60
     seconds = max(15, min(seconds, 90))
 
     ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
@@ -700,7 +702,7 @@ def _action_poll_job(args: dict) -> str:
     except DramaNotFound:
         return _err("任务不存在", job_id=job_id)
     payload = {"action": "poll_job", **job}
-    if job.get("status") == "done" and job.get("kind") == "render_episode":
+    if job.get("status") == "done" and job.get("kind") in ("render_episode", "produce_episode"):
         project = _load_project(str(job.get("slug") or ""))
         result = job.get("result") or {}
         if project and result.get("path"):
@@ -963,6 +965,175 @@ def _action_generate_keys(args: dict) -> str:
     )
 
 
+def _action_create_from_premise(args: dict) -> str:
+    from tools.drama_studio import create_from_premise
+
+    premise = str(args.get("premise") or args.get("logline") or "").strip()
+    if not premise:
+        return _err("需要 premise（一句话故事梗概）")
+    slug = _slug(str(args.get("slug") or "")) or ""
+    title = str(args.get("title") or "").strip()
+    try:
+        n = int(args.get("episode") or 1)
+    except (TypeError, ValueError):
+        return _err("episode 须为整数")
+    episode_count = args.get("episode_count")
+    if episode_count is not None and str(episode_count).strip() != "":
+        try:
+            episode_count = int(episode_count)
+        except (TypeError, ValueError):
+            return _err("episode_count 须为整数")
+    else:
+        episode_count = None
+    seconds = args.get("seconds")
+    if seconds is not None and str(seconds).strip() != "":
+        try:
+            seconds = int(seconds)
+        except (TypeError, ValueError):
+            return _err("seconds 须为整数")
+    else:
+        seconds = None
+    background = False  # 聊天默认同步等到 play_url，前端一直等待成片
+    force = bool(args.get("force"))
+    overwrite = bool(args.get("overwrite"))
+    style_id = str(args.get("style_id") or "").strip()
+    catalog_bgm = str(args.get("catalog_bgm") or "").strip()
+    try:
+        result = create_from_premise(
+            premise,
+            slug=slug or "",
+            title=title,
+            episode=n,
+            episode_count=episode_count,
+            seconds=seconds,
+            overwrite=overwrite,
+            background=background,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm,
+        )
+    except Exception as e:
+        return _err(str(e))
+
+    if result.get("job_id"):
+        return _ok(
+            action="create_from_premise",
+            slug=result.get("slug"),
+            title=result.get("title"),
+            episode=result.get("episode"),
+            series=result.get("series"),
+            job_id=result.get("job_id"),
+            status=result.get("status"),
+            shots=result.get("shots"),
+            scripts=result.get("scripts"),
+            hint=result.get("hint"),
+        )
+
+    project = _load_project(str(result.get("slug") or ""))
+    for ep in result.get("episodes") or []:
+        if project and ep.get("play_url"):
+            _record_video(
+                project,
+                {
+                    "slug": result.get("slug"),
+                    "episode": ep.get("episode"),
+                    "path": ep.get("path"),
+                    "play_url": ep.get("play_url"),
+                    "shots": ep.get("shots") or 0,
+                    "bytes": ep.get("bytes") or 0,
+                },
+            )
+    if project and result.get("play_url") and not (result.get("episodes") or []):
+        _record_video(
+            project,
+            {
+                "slug": result.get("slug"),
+                "episode": result.get("episode") or n,
+                "path": result.get("path") or result.get("video_path"),
+                "play_url": result.get("play_url"),
+                "shots": result.get("count") or 0,
+                "bytes": result.get("bytes") or 0,
+                "shots_json": result.get("shots_json"),
+            },
+        )
+    return _ok(
+        action="create_from_premise",
+        slug=result.get("slug"),
+        title=(result.get("create") or {}).get("title") or result.get("title"),
+        episode=result.get("episode") or n,
+        series=result.get("series"),
+        episodes=result.get("episodes"),
+        assemble=result.get("assemble"),
+        mix=result.get("mix_mode"),
+        play_url=result.get("play_url"),
+        create=result.get("create"),
+        produce=result.get("produce"),
+        hint=result.get("hint") or "一句话已按集数/时长拆分并导出成片",
+    )
+
+
+def _action_produce_episode(args: dict) -> str:
+    from tools.drama_studio import produce_episode
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    project = _load_project(slug)
+    if not project:
+        return _err("项目不存在，请先 init", slug=slug)
+    background = False  # 同步等到整集导出，聊天界面保持等待
+    force = bool(args.get("force"))
+    style_id = str(args.get("style_id") or "").strip()
+    catalog_bgm = str(args.get("catalog_bgm") or "").strip()
+    if background:
+        job = produce_episode(
+            slug,
+            n,
+            background=True,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm,
+        )
+        return _ok(
+            action="produce_episode",
+            slug=slug,
+            episode=n,
+            job_id=job["job_id"],
+            status=job["status"],
+            hint="HQ 全自动流水线已提交后台；可用 poll_job 查进度，完成后 result 含 play_url。",
+        )
+    result = produce_episode(
+        slug,
+        n,
+        background=False,
+        force=force,
+        style_id=style_id,
+        catalog_bgm=catalog_bgm,
+    )
+    _record_video(
+        project,
+        {
+            "slug": result.get("slug") or slug,
+            "episode": result.get("episode") or n,
+            "path": result.get("path") or result.get("video_path") or f"dramas/{slug}/videos/ep{n:02d}.mp4",
+            "play_url": result.get("play_url"),
+            "shots": result.get("count") or 0,
+            "bytes": result.get("bytes") or 0,
+            "shots_json": result.get("shots_json"),
+        },
+    )
+    return _ok(
+        action="produce_episode",
+        slug=slug,
+        episode=n,
+        assemble=result.get("assemble"),
+        mix=result.get("mix_mode"),
+        play_url=result.get("play_url"),
+        produce=result.get("produce"),
+        hint="HQ 全自动流水线已完成；聊天里会展示成片预览，不满意再进工作台微调。",
+    )
+
+
 def _action_export_timeline(args: dict) -> str:
     from tools.drama_studio import export_episode
 
@@ -1034,6 +1205,8 @@ def _tiktok_drama(args: dict) -> str:
         "save_episode": _action_save_episode,
         "refine_script": _action_refine_script,
         "parse_shots": _action_parse_shots,
+        "create_from_premise": _action_create_from_premise,
+        "produce_episode": _action_produce_episode,
         "render_episode": _action_render_episode,
         "rerender_shot": _action_rerender_shot,
         "lock_shot": _action_lock_shot,
@@ -1078,7 +1251,9 @@ def register_tiktok_drama() -> None:
             "抖音竖屏漫剧项目工具。action: "
             "guide（规范与剧本格式）、init（建项目）、list、get、"
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、refine_script（按项目 script 节点精修剧本草稿）、"
-            "parse_shots（解析并落盘 shots.json）、render_episode（按镜出 clip 再拼接）、"
+            "parse_shots（解析并落盘 shots.json）、create_from_premise（一句话梗概→立项+人设+大纲+剧本+HQ 成片，默认推荐）、"
+            "produce_episode（已有剧本时 HQ 全自动：角色/定妆/逐镜 scene+配音+口型+I2V+BGM+导出 mp4）、"
+            "render_episode（按镜出 clip，不含 I2V/口型/导出）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
 "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
             "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
@@ -1090,7 +1265,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -1101,6 +1276,8 @@ def register_tiktok_drama() -> None:
                         "save_episode",
                         "refine_script",
                         "parse_shots",
+                        "create_from_premise",
+                        "produce_episode",
                         "render_episode",
                         "rerender_shot",
                         "lock_shot",
@@ -1132,15 +1309,27 @@ def register_tiktok_drama() -> None:
                 },
                 "logline": {
                     "type": "string",
-                    "description": "init 用的一句话故事",
+                    "description": "init 用的一句话故事；create_from_premise 也可用 logline 代替 premise",
+                },
+                "premise": {
+                    "type": "string",
+                    "description": "create_from_premise：故事梗概（必填）。自动解析「几集/每集几秒」，按集生成剧本并 HQ 出片；也可用 episode_count/seconds 覆盖",
+                },
+                "episode_count": {
+                    "type": "integer",
+                    "description": "仅当用户明确说了总集数时才传（1–20）。用户没说集数时禁止传此字段，系统默认 1 集；不要自行脑补多集",
                 },
                 "overwrite": {
                     "type": "boolean",
-                    "description": "init 时是否覆盖已有 project.json",
+                    "description": "init / create_from_premise 时是否覆盖已有 project.json",
                 },
                 "episode": {
                     "type": "integer",
-                    "description": "集数 1–99，get / save_episode / parse_shots / render_episode / rerender_shot / rerender_dirty 使用",
+                    "description": "集号 1–99；produce_episode/get/save_episode 等使用。create_from_premise 解析到多集时会生成全部集",
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "已废弃：create_from_premise / produce_episode 始终同步等待 play_url，忽略此字段",
                 },
                 "shot": {
                     "type": "integer",
@@ -1192,7 +1381,7 @@ def register_tiktok_drama() -> None:
                 },
                 "seconds": {
                     "type": "integer",
-                    "description": "save_episode 预估时长（15–90，默认 45）",
+                    "description": "每集目标时长秒（15–90）。save_episode 预估时长；create_from_premise 可覆盖梗概解析（未指定时默认 60）",
                 },
                 "content": {
                     "type": "string",
@@ -1276,32 +1465,19 @@ def register_tiktok_drama() -> None:
         handler=_tiktok_drama,
     )
     add_plugin_prompt_hint(
-        "抖音漫剧请调用 tiktok_drama：先 guide 看规范，再 init 建项目，"
-        "save_bible / save_outline / save_episode 落盘到 workspace/dramas/{slug}/。"
-        "写完分集后先 parse_shots 落盘 shots.json，再 render_episode。"
-        "只改某一镜请用 rerender_shot；layers 可指定 scene/overlay/voice/clip。"
-        "锁住的层用 lock_shot，禁止覆盖。例如锁 scene 后改对白只重配音和字幕；"
-        "锁 shot（整镜）后改剧本不会覆盖该镜。脏镜一键重渲用 rerender_dirty。"
-        "角色用 save_character 写外形和音色；分镜 `- 角色:` 选人后出图/配音都会跟角色卡。"
-        "只要用户要求「建角色卡 / save_character / 把主角落地成角色卡 / 继续 建角色」，"
-        "必须立即逐角色调用 save_character 真实落盘，禁止只复述 bible 或反问是否继续；"
-        "调用后把每个角色的 id/name/look 和 play_url 回给用户。"
-        "只要用户要求「出定妆图 / generate_character_ref / 生成定妆参考图 / 审图」，"
-        "建卡后必须立即对每个角色调用 generate_character_ref 生成并回预览链接，"
-        "禁止在卡建好后反问「是否需要生成定妆图」；只有出图本身失败才说明原因。"
-        "定妆图可用 generate_character_ref 按 look 走项目出图路由生成（不自动锁，人在工作台满意后再锁）；专业级需切 pro 预设并配置 CONSISTENT_IMAGE_URL。"
-        "每镜候选墙用 generate_candidates，点选用 choose_candidate（只换画面不重配音）。"
-        "对已锁画面试 I2V 用 generate_i2v（I2V_PROVIDER=mock 可本地验收）。"
-        "render_episode / rerender_dirty / generate_i2v / generate_lip / generate_keys / export 都是后台任务，"
-        "返回 job_id 后即完成你的职责，立即用最终答复收尾并附上已有预览链接；"
-        "禁止在工具循环里反复 poll_job 等待完成（会让轮次耗尽）。进度交给工作台底部任务条，或让用户稍后手动问一次。"
-        "分镜分类用 classify_shots（定场 L0 / 对话 L1）；锁 kind 后不会被覆盖。"
-        "导演覆盖用 suggest_coverage（钩子/景别/最多2条反应镜），只建议不改镜；人在工作台采纳或锁定。"
-        "单人 action 稀疏关键帧用 generate_keys（3–5 姿态补间，改姿态不重配音；多角色同框会拒绝）。"
-        "整集验收用 qc_episode（身份/口型/闪烁/响度）；skipped 不得记为通过；响度不达标只重 mix。"
-        "风格包用 apply_style（一集一个；古风对话后新镜走角色模型，定场仍便宜，不重渲已有 clip）。"
-        "回复里用返回的 play_url 做成 markdown 链接，"
-        "例如 [预览第1集](/api/workspace/file?path=dramas/slug/videos/ep01.mp4)。"
+        "抖音漫剧默认走「一句话全自动」：用户只要给一句梗概（例如「帮我做一部《大闹天宫》漫剧，共3集每集60秒」），"
+        "立即调用 tiktok_drama action=create_from_premise，premise=该梗概。"
+        "集数规则：用户明确说了「共N集/做成N集」才按 N 集；**没说集数就不要传 episode_count，系统默认单集 60 秒**，禁止自行脑补多集，回复里也不要强调「第1集/共1集」。"
+        "时长：用户说了每集多少秒则按其解析；可选用 seconds 覆盖。多集时按集拆分并返回 episodes[]；单集只返回一支成片预览；"
+        "定妆图每人只生成 1 张并默认锁定；分镜画面全自动时也只出 1 张（不刷 4 张候选墙）。"
+        "候选墙（每镜 2–4 张）仅在用户进入工作台微调时用 generate_candidates，禁止在全自动流程里调用。"
+        "禁止拆成 init/save_bible/save_episode/parse_shots/produce_episode 多步让用户确认，"
+        "除非用户明确只要剧本不要成片，或已有项目只要重渲。"
+        "已有剧本项目要出片用 produce_episode（同样单图+锁定妆+自动导出）。"
+        "小改单镜后用 export_timeline。"
+        "create_from_premise / produce_episode 必须同步跑完全程（禁止 background=true），"
+        "直到返回 play_url 再结束本轮；前端会一直等待成片出现在对话框。"
+        "回复里务必带上 play_url（多集时说明各集），聊天会自动嵌入成片预览，并提示可去漫剧工作台微调。"
     )
 
 

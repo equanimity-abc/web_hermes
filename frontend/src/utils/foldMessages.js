@@ -2,6 +2,8 @@
  * Fold raw OpenAI-style session messages into UI messages.
  * Attaches toolCalls onto the final assistant text turn.
  */
+import { enrichMessageWithDramaMedia } from '@/utils/dramaChatMedia'
+
 export function foldMessagesForUi(rawMessages = []) {
   const out = []
   let pendingTools = []
@@ -50,16 +52,35 @@ export function foldMessagesForUi(rawMessages = []) {
     if (m.role === 'assistant') {
       const content = String(m.content || '')
       if (!content.trim() && pendingTools.length === 0) continue
-      out.push({
+      const msg = {
         role: 'assistant',
         content,
         toolCalls: pendingTools.length ? pendingTools : undefined,
         isStreaming: false,
         liked: !!m.liked,
         disliked: !!m.disliked,
-      })
+      }
+      enrichMessageWithDramaMedia(msg)
+      out.push(msg)
       pendingTools = []
     }
+  }
+
+  // Incomplete turn: tool_calls already persisted but final assistant text not yet.
+  if (pendingTools.length) {
+    for (const t of pendingTools) {
+      if (!t.result) t.status = 'running'
+    }
+    const running = pendingTools.some((t) => t.status === 'running')
+    const msg = {
+      role: 'assistant',
+      content: '',
+      toolCalls: pendingTools,
+      isStreaming: running,
+      status: running ? '成片生成中，请稍候…完成后会自动出现在对话里' : '',
+    }
+    enrichMessageWithDramaMedia(msg)
+    out.push(msg)
   }
 
   return out

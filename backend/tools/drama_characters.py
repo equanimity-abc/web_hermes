@@ -115,6 +115,7 @@ CHAR_CANDIDATE_MAX = 4
 REF_SIZE_OPTIONS = (640, 1024, 1980)
 DEFAULT_REF_SIZE = 1024
 REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = (
+    {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "label": "方舟 · Seedream 5.0 Pro"},
     {"provider": "kling-image", "model": "kling/kling-v3-omni-image-generation", "label": "可灵 · Kling V3 Omni"},
     {"provider": "wanx", "model": "qwen-image-plus", "label": "百炼 · Qwen-Image-Plus"},
 )
@@ -125,16 +126,16 @@ def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, s
     from tools.drama_styles import default_character_ref_image_route
 
     default = default_character_ref_image_route()
-    provider = str(raw_provider or default.get("provider") or "kling-image").strip().lower()
-    model = str(raw_model or default.get("model") or "kling/kling-v3-omni-image-generation").strip()
+    provider = str(raw_provider or default.get("provider") or "seedream").strip().lower()
+    model = str(raw_model or default.get("model") or "doubao-seedream-5-0-pro-260628").strip()
     for opt in REF_IMAGE_OPTIONS:
         if provider == opt["provider"] and model == opt["model"]:
             return provider, model
     for opt in REF_IMAGE_OPTIONS:
         if provider == opt["provider"]:
             return opt["provider"], opt["model"]
-    return str(default.get("provider") or "kling-image"), str(
-        default.get("model") or "kling/kling-v3-omni-image-generation"
+    return str(default.get("provider") or "seedream"), str(
+        default.get("model") or "doubao-seedream-5-0-pro-260628"
     )
 
 

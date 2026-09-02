@@ -53,6 +53,40 @@ def write_memory(content: str, *, append: bool = False) -> str:
     return text
 
 
+def scrub_memory_terms(*terms: str) -> str:
+    """Drop MEMORY.md lines that mention any term (e.g. deleted project slug/title).
+
+    Preference lines without those terms are kept. Empty result clears the file.
+    """
+    needles = [str(t).strip().lower() for t in terms if str(t or "").strip()]
+    body = read_memory()
+    if not body or not needles:
+        return body
+
+    kept: list[str] = []
+    for line in body.splitlines():
+        low = line.lower()
+        if any(n in low for n in needles):
+            continue
+        kept.append(line)
+
+    # Collapse runs of blank lines left by removals.
+    cleaned: list[str] = []
+    blank = False
+    for line in kept:
+        if not line.strip():
+            if blank:
+                continue
+            blank = True
+            cleaned.append("")
+        else:
+            blank = False
+            cleaned.append(line)
+
+    text = "\n".join(cleaned).strip()
+    return write_memory(text + ("\n" if text else ""), append=False)
+
+
 def memory_block_for_prompt() -> str:
     """Snippet injected into system prompts."""
     body = read_memory().strip()

@@ -19,10 +19,10 @@ from typing import Any, Callable
 from tools.workspace import resolve_safe, workspace_root
 
 TERMINAL = frozenset({"done", "error", "cancelled"})
-KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "i2v_shot", "lip_shot", "keys_shot"})
+KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "produce_episode", "i2v_shot", "lip_shot", "keys_shot"})
 # 镜头级任务可同集并行；整集级任务独占。
 SHOT_KINDS = frozenset({"i2v_shot", "lip_shot", "keys_shot", "rerender_shot"})
-EXCLUSIVE_KINDS = frozenset({"rerender_dirty", "export", "render_episode"})
+EXCLUSIVE_KINDS = frozenset({"rerender_dirty", "export", "render_episode", "produce_episode"})
 
 
 class JobCancelled(Exception):
@@ -331,6 +331,8 @@ class DramaQueue:
             return self._run_rerender_shot(job)
         if job.kind == "export":
             return self._run_export(job)
+        if job.kind == "produce_episode":
+            return self._run_produce_episode(job)
         if job.kind == "i2v_shot":
             return self._run_i2v_shot(job)
         if job.kind == "lip_shot":
@@ -432,6 +434,46 @@ class DramaQueue:
         job.check_cancel()
         result = export_episode(job.slug, job.episode, background=False)
         self._progress(job, message="导出完成", current=1, total=1)
+        return result
+
+    def _run_produce_episode(self, job: DramaJob) -> dict[str, Any]:
+        from tools.drama_produce import produce_episode_hq
+        from tools.drama_studio import load_project, save_project
+
+        params = job.params or {}
+        force = bool(params.get("force"))
+        style_id = str(params.get("style_id") or "")
+        catalog_bgm = str(params.get("catalog_bgm") or "rebirth_resolve")
+
+        def on_progress(**fields: Any) -> None:
+            self._progress(job, **fields)
+
+        result = produce_episode_hq(
+            job.slug,
+            job.episode,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm,
+            cancel_check=job.check_cancel,
+            on_progress=on_progress,
+        )
+        project = load_project(job.slug)
+        if project:
+            videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != job.episode]
+            videos.append(
+                {
+                    "n": job.episode,
+                    "path": result.get("path") or result.get("video_path"),
+                    "play_url": result.get("play_url"),
+                    "shots": result.get("count") or result.get("shots"),
+                    "bytes": result.get("bytes") or 0,
+                    "shots_json": result.get("shots_json"),
+                }
+            )
+            videos.sort(key=lambda v: int(v.get("n") or 0))
+            project["videos"] = videos
+            save_project(job.slug, project)
+        self._progress(job, message="HQ 成片完成", stage="done")
         return result
 
     def _run_i2v_shot(self, job: DramaJob) -> dict[str, Any]:

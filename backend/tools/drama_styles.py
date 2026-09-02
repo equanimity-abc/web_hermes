@@ -166,9 +166,17 @@ def image_route(slug: str, shot: dict[str, Any], *, episode: int | None = None, 
 
 
 def default_character_ref_image_route() -> dict[str, Any]:
-    """定妆图出图路由：默认可灵；仅有百炼 Key 且无 MaaS 时回退 qwen-image-plus。"""
+    """定妆图出图路由：优先火山方舟 Seedream；否则可灵 / 百炼。"""
     from config import config
 
+    ark = (getattr(config, "ARK_API_KEY", "") or "").strip()
+    if ark:
+        return {
+            "provider": "seedream",
+            "model": getattr(config, "ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
+            or "doubao-seedream-5-0-pro-260628",
+            "cost_per_shot": 0.4,
+        }
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
     maas = (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip()
     if maas and key:
@@ -184,9 +192,9 @@ def default_character_ref_image_route() -> dict[str, Any]:
             "cost_per_shot": 0.5,
         }
     return {
-        "provider": "kling-image",
-        "model": "kling/kling-v3-omni-image-generation",
-        "cost_per_shot": 0.5,
+        "provider": "seedream",
+        "model": "doubao-seedream-5-0-pro-260628",
+        "cost_per_shot": 0.4,
     }
 
 

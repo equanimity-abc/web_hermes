@@ -1583,6 +1583,47 @@
   flex-direction: column;
   min-height: 0;
 }
+
+.drama-model-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-muted);
+  flex-shrink: 0;
+}
+
+.drama-model-bar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.drama-model-select {
+  min-width: 180px;
+  max-width: 280px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.drama-model-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.drama-model-bar-hint {
+  font-size: 12px;
+  color: var(--color-text-faint);
+}
+
 .drama-panel-body {
   flex: 1;
   min-height: 0;
@@ -2150,7 +2191,7 @@
 
 .drama-cast-fields-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 12px;
 }
@@ -2161,6 +2202,14 @@
 
 .drama-cast-fields-row .drama-field {
   margin: 0;
+  min-width: 0;
+}
+
+.drama-cast-fields-row .drama-field input,
+.drama-cast-fields-row .drama-field select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .drama-cast-main {

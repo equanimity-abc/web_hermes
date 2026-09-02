@@ -6,6 +6,7 @@ import {
   streamChat,
   uploadWorkspaceFile,
 } from '@/api/chat'
+import { attachDramaMedia, awaitPendingDramaVideos, enrichMessageWithDramaMedia, extractDramaVideoFromToolResult } from '@/utils/dramaChatMedia'
 
 /**
  * Conversation messages + streaming send loop (P4/P5: cancel + approval).
@@ -192,6 +193,10 @@ export function useChat(deps) {
               result: '',
               status: 'running',
             })
+            if (String(evt.name || '') === 'tiktok_drama') {
+              last.status = '成片流水线运行中，完成后会自动显示视频…'
+              statusText.value = last.status
+            }
             nextTick(() => scrollToBottom())
           },
           onApproval(evt) {
@@ -224,6 +229,10 @@ export function useChat(deps) {
               try {
                 const parsed = JSON.parse(hit.result)
                 if (parsed && parsed.error) hit.status = 'error'
+                else {
+                  const media = extractDramaVideoFromToolResult(hit.result)
+                  if (media) attachDramaMedia(last, media)
+                }
               } catch {
                 /* ignore */
               }
@@ -268,6 +277,40 @@ export function useChat(deps) {
         terminal = 'error'
       }
     } finally {
+      // 成片未就绪时继续等待，不要提前结束 loading
+      if (terminal !== 'cancelled') {
+        const last = lastAssistant()
+        if (last) {
+          try {
+            enrichMessageWithDramaMedia(last)
+            const hasVideo = (last.media || []).some((m) => m?.url)
+            const hadDramaTool = (last.toolCalls || []).some(
+              (t) => String(t.name || '') === 'tiktok_drama',
+            )
+            if (hadDramaTool && !hasVideo) {
+              last.status = '成片生成中，请稍候…完成后会自动出现在对话里'
+              statusText.value = last.status
+              await awaitPendingDramaVideos(last, {
+                signal: abortController?.signal,
+                onStatus: (text) => {
+                  statusText.value = text || ''
+                  last.status = text || ''
+                  nextTick(() => scrollToBottom())
+                },
+              })
+            }
+            enrichMessageWithDramaMedia(last)
+            if ((last.media || []).some((m) => m?.url)) {
+              last.status = ''
+              nextTick(() => scrollToBottom())
+            }
+          } catch (e) {
+            if (e?.name !== 'AbortError') {
+              console.error('await drama video failed:', e)
+            }
+          }
+        }
+      }
       finishAssistant({ cancelled: terminal === 'cancelled' })
       isLoading.value = false
       statusText.value = ''

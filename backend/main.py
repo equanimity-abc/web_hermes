@@ -17,10 +17,14 @@ from agent import agent, messages_for_api
 from agent.compressor import maybe_compress
 from agent.memory_store import memory_path, read_memory, write_memory
 from config import config
+from secrets_store import apply_secrets_to_config, public_secrets_status, save_secrets
 from session_store import SessionStore, refresh_system_prompt
 from stream_manager import BusyError, streams
 from drama_routes import router as drama_router
 from tools.workspace import resolve_safe, save_upload, workspace_root
+
+# UI / secrets.json overrides applied before serving requests
+apply_secrets_to_config()
 
 app = FastAPI(title="Agent Chat API", version="0.6.0")
 app.include_router(drama_router)
@@ -405,6 +409,26 @@ async def memory_put(req: MemoryWriteRequest):
         "path": str(memory_path()),
         "chars": len(stored),
     }
+
+
+class SecretsWriteRequest(BaseModel):
+    """Partial update; omit keys to leave unchanged; empty string clears secrets.json entry."""
+
+    DEEPSEEK_API_KEY: str | None = None
+    KIMI_API_KEY: str | None = None
+    ARK_API_KEY: str | None = None
+    DASHSCOPE_API_KEY: str | None = None
+
+
+@app.get("/api/settings/keys")
+async def settings_keys_get():
+    return public_secrets_status()
+
+
+@app.put("/api/settings/keys")
+async def settings_keys_put(req: SecretsWriteRequest):
+    patch = req.model_dump(exclude_unset=True)
+    return save_secrets(patch)
 
 
 @app.get("/api/workspace")

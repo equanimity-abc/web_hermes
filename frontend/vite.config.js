@@ -15,6 +15,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // 全自动成片可达数十分钟，避免代理提前断开 SSE / 工具调用
+        timeout: 0,
+        proxyTimeout: 0,
       },
     },
   },

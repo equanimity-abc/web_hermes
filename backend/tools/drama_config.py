@@ -43,6 +43,71 @@ NODE_KEYS = (
 
 _PRESET_DIR = Path(__file__).resolve().parent.parent / "data" / "presets"
 
+# Workbench dropdown options per production stage / node.
+MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
+    "script": [
+        {
+            "provider": "ark",
+            "model": "doubao-seed-character-260628",
+            "label": "方舟 · Seed Character",
+        },
+        {"provider": "ark", "model": "glm-5-2-260617", "label": "方舟 · GLM-5.2"},
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "label": "DeepSeek · v4-pro"},
+        {"provider": "kimi", "model": "kimi-k3", "label": "Kimi · k3"},
+    ],
+    "image": [
+        {
+            "provider": "seedream",
+            "model": "doubao-seedream-5-0-pro-260628",
+            "label": "方舟 · Seedream 5.0 Pro",
+        },
+        {"provider": "wanx", "model": "qwen-image-plus", "label": "百炼 · Qwen-Image-Plus"},
+        {
+            "provider": "kling-image",
+            "model": "kling/kling-v3-omni-image-generation",
+            "label": "可灵 · Kling V3 Omni",
+        },
+        {"provider": "flux", "model": "flux", "label": "Flux（免费）"},
+    ],
+    "motion": [
+        {
+            "provider": "seedance",
+            "model": "doubao-seedance-2-5-260628",
+            "label": "方舟 · Seedance 2.5",
+        },
+        {"provider": "wanx-video", "model": "wanx2.1-i2v-turbo", "label": "百炼 · 万相 I2V"},
+        {
+            "provider": "kling-video",
+            "model": "kling/kling-v3-video-generation",
+            "label": "可灵 · 视频",
+        },
+        {"provider": "l0", "model": "", "label": "本地运镜 L0"},
+    ],
+    "tts": [
+        {
+            "provider": "seed-audio",
+            "model": "doubao-seed-audio-1-0",
+            "label": "方舟 · Seed Audio",
+        },
+        {
+            "provider": "cosyvoice",
+            "model": "qwen-audio-3.0-tts-plus",
+            "label": "百炼 · CosyVoice",
+        },
+        {"provider": "edge-tts", "model": "", "label": "Edge TTS（免费）"},
+    ],
+    "lip": [
+        {"provider": "pixverse", "model": "", "label": "PixVerse 对口型"},
+        {"provider": "latentsync", "model": "", "label": "LatentSync"},
+        {"provider": "musetalk", "model": "", "label": "MuseTalk"},
+        {"provider": "mock", "model": "", "label": "Mock（占位）"},
+    ],
+}
+
+
+def model_catalog() -> dict[str, list[dict[str, str]]]:
+    return {k: [dict(x) for x in v] for k, v in MODEL_CATALOG.items()}
+
 
 def _preset_path(preset_id: str) -> Path:
     return _PRESET_DIR / f"{preset_id}.json"
@@ -123,6 +188,7 @@ def get_config(slug: str) -> dict[str, Any]:
         "nodes": {node: doc.get(node) for node in NODE_KEYS if node in doc},
         "models": normalize_models(doc),
         "health": provider_health(doc),
+        "catalog": model_catalog(),
     }
 
 

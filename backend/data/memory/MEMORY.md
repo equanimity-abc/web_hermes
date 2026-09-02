@@ -1,10 +1,4 @@
 - 用户喜欢简体中文
 - 项目名 my_tiktok_video
-- 项目《大闹天宫》AI漫剧：slug=havoc-in-heaven，共60集每集60秒，9:16竖屏
-- 已建角色卡：wukong(孙悟空,zh-CN-YunxiNeural)、yudi(玉帝,zh-CN-YunjianNeural)、taibai(太白金星,zh-CN-YunyangNeural)、erlang(二郎神,zh-CN-YunxiNeural)、rulai(如来,zh-CN-YunxiNeural)
-- 已建60集四幕大纲 outline.md
-- 已完成前3集剧本并解析分镜：EP01《石猴出世》、EP02《猴王初立》、EP03《出海寻仙》（各7镜）
-- 前3集已提交后台渲染（job: 8453d501394f / 7b48e8635458 / 4e0d005f9c48）
-- 用户要求：视频质量高、动作连贯、角色统一、口型与语义一致；后期会微调
-- 工作策略：先做前3集验收，效果通过后再做后续57集
+- 用户要求制作《大闹天宫》AI漫剧：3集每集60秒、9:16竖屏，全流程自动化
 - 当前为 mock 出图 provider（本地验收环境）

@@ -38,4 +38,10 @@ def test_preset_nodes_are_valid():
             assert node in NODE_KEYS or node == "providers", f"{pid}: bad node {node}"
         # image/motion must cover every shot kind.
         for map_name in ("image", "motion"):
-            assert set(models.get(map_name, {}).keys()) == set(SHOT_KINDS), f"{pid}: {map_name} incomplete"
+            keys = set(models.get(map_name, {}).keys())
+            assert set(SHOT_KINDS) <= keys, f"{pid}: {map_name} incomplete"
+            extra = keys - set(SHOT_KINDS)
+            if map_name == "image":
+                assert extra <= {"character_ref"}, f"{pid}: unexpected image keys {extra}"
+            else:
+                assert not extra, f"{pid}: unexpected motion keys {extra}"

@@ -1,18 +1,11 @@
-"""Script node helpers (P2-11).
-
-The `script` node in models.json (provider / model / refine_model) was stored
-but never consumed. This module reads the three-layer effective config and
-exposes draft / refine shortcuts — so the drama plugin and future skills can
-produce a flash draft then reasoner-refine it, without the core loop knowing
-anything about per-project script routing.
-"""
+"""Script node helpers — draft/refine via Ark / DeepSeek / Kimi."""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
-from llm_client import llm_client
+from llm_client import llm_client, script_provider_chain
 
 
 def script_node_config(slug: str) -> dict[str, Any]:
@@ -24,10 +17,19 @@ def script_node_config(slug: str) -> dict[str, Any]:
     except Exception:
         models = load_models(slug)
     cfg = (models or {}).get("script") if isinstance((models or {}).get("script"), dict) else {}
+    provider = str(cfg.get("provider") or "ark").strip().lower() or "ark"
+    if provider == "moonshot":
+        provider = "kimi"
+    if provider in ("volcengine", "doubao", "火山"):
+        provider = "ark"
+    alts = cfg.get("alternatives")
+    if not isinstance(alts, list) or not alts:
+        alts = ["ark", "deepseek", "kimi"]
     return {
-        "provider": str(cfg.get("provider") or "deepseek").strip() or "deepseek",
+        "provider": provider,
         "model": str(cfg.get("model") or "").strip(),
         "refine_model": str(cfg.get("refine_model") or "").strip(),
+        "alternatives": [str(a).strip().lower() for a in alts if str(a).strip()],
     }
 
 
@@ -38,17 +40,26 @@ async def draft_text(
     system: str = "你是专业漫剧编剧，输出简体中文。",
     temperature: float = 0.7,
 ) -> str:
-    """Draft a piece of text using the project's `script.model` (default fallback)."""
+    """Draft using project script provider; failover across ark / deepseek / kimi."""
     cfg = script_node_config(slug)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
+    chain = script_provider_chain(cfg["provider"], cfg["alternatives"])
+    preferred = chain[0]
+    if preferred["provider"] == cfg["provider"] and cfg["model"]:
+        model = cfg["model"]
+    else:
+        model = preferred["model"]
     return await llm_client.chat(
         messages,
         temperature=temperature,
         max_tokens=4096,
-        model=cfg["model"] or None,
+        model=model,
+        provider=preferred["provider"],
+        alternatives=True,
+        alternative_providers=cfg["alternatives"],
     )
 
 
@@ -58,20 +69,19 @@ async def refine_text(
     *,
     instruction: str = "精修改写，保留原意并提升剧本表达。",
 ) -> str:
-    """Refine a draft using the project's `script.refine_model` (fallback: default)."""
     cfg = script_node_config(slug)
     return await llm_client.refine(
         draft,
         instruction=instruction,
-        model=cfg["refine_model"] or None,
+        model=cfg["refine_model"] or cfg["model"] or None,
+        provider=cfg["provider"],
+        alternative_providers=cfg["alternatives"],
     )
 
 
 def draft_text_sync(slug: str, prompt: str, *, system: str = "你是专业漫剧编剧，输出简体中文。") -> str:
-    """Synchronous wrapper for plugin dispatch (blocking tool call)."""
     return asyncio.run(draft_text(slug, prompt, system=system))
 
 
 def refine_text_sync(slug: str, draft: str, *, instruction: str = "精修改写，保留原意并提升剧本表达。") -> str:
-    """Synchronous wrapper for plugin dispatch (blocking tool call)."""
     return asyncio.run(refine_text(slug, draft, instruction=instruction))

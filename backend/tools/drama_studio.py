@@ -328,7 +328,8 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
 def remove_project(slug: str) -> dict[str, Any]:
     """Delete a whole drama project directory and its queue records (fail closed)."""
     slug = parse_slug(slug)
-    load_project(slug)
+    project = load_project(slug)
+    title = str((project or {}).get("title") or "").strip()
     from tools.drama_queue import drama_jobs
 
     jobs_removed = drama_jobs.remove_slug(slug)
@@ -340,11 +341,22 @@ def remove_project(slug: str) -> dict[str, Any]:
     if target.exists():
         shutil.rmtree(target)
 
+    memory_scrubbed = False
+    try:
+        from agent.memory_store import scrub_memory_terms
+
+        scrub_memory_terms(slug, title)
+        memory_scrubbed = True
+    except Exception:
+        # Deleting disk project must succeed even if MEMORY.md is locked/corrupt.
+        memory_scrubbed = False
+
     return {
         "ok": True,
         "slug": slug,
         "path": _rel(slug),
         "jobs_removed": jobs_removed,
+        "memory_scrubbed": memory_scrubbed,
     }
 
 
@@ -1019,6 +1031,87 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
     return ep
 
 
+def produce_episode(
+    slug: str,
+    episode: int,
+    *,
+    background: bool = False,
+    force: bool = False,
+    style_id: str = "",
+    catalog_bgm: str = "",
+) -> dict[str, Any]:
+    """One-shot HQ pipeline: cast → scene/voice/lip → I2V → BGM → export mp4."""
+    slug = parse_slug(slug)
+    n = parse_episode(episode)
+    _ensure_shots_doc(slug, n)
+    params: dict[str, Any] = {"force": force}
+    if style_id:
+        params["style_id"] = style_id
+    if catalog_bgm:
+        params["catalog_bgm"] = catalog_bgm
+    if background:
+        return enqueue_job(slug, n, "produce_episode", params=params)
+    from tools.drama_produce import produce_episode_hq
+
+    _assert_budget(slug, n)
+    result = produce_episode_hq(
+        slug,
+        n,
+        force=force,
+        style_id=style_id,
+        catalog_bgm=catalog_bgm or "rebirth_resolve",
+    )
+    project = load_project(slug)
+    if project:
+        videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != n]
+        videos.append(
+            {
+                "n": n,
+                "path": result.get("path") or result.get("video_path"),
+                "play_url": result.get("play_url"),
+                "shots": result.get("count") or result.get("shots"),
+                "bytes": result.get("bytes") or 0,
+                "shots_json": result.get("shots_json"),
+            }
+        )
+        videos.sort(key=lambda v: int(v.get("n") or 0))
+        project["videos"] = videos
+        save_project(slug, project)
+    return result
+
+
+def create_from_premise(
+    premise: str,
+    *,
+    slug: str = "",
+    title: str = "",
+    episode: int = 1,
+    episode_count: int | None = None,
+    seconds: int | None = None,
+    overwrite: bool = False,
+    background: bool = False,
+    force: bool = False,
+    style_id: str = "",
+    catalog_bgm: str = "",
+) -> dict[str, Any]:
+    """One sentence → bible/outline/episode(s) + HQ produce."""
+    from tools.drama_produce import create_from_premise as _create
+
+    return _create(
+        premise,
+        slug=slug,
+        title=title,
+        episode=episode,
+        episode_count=episode_count,
+        seconds=seconds,
+        overwrite=overwrite,
+        background=background,
+        force=force,
+        style_id=style_id,
+        catalog_bgm=catalog_bgm or "rebirth_resolve",
+    )
+
+
 def get_mix(slug: str, episode: int) -> dict[str, Any]:
     from tools.drama_audio import public_mix
 
@@ -1122,7 +1215,11 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     text = str(content or "")
     if not text.strip():
         raise DramaBadRequest("剧本不能为空")
+    from tools.drama_produce import extract_single_episode_markdown
     from tools.drama_video import parse_episode_markdown, sync_shots_doc
+
+    # Guard: never let a multi-episode dump inflate one shots.json.
+    text = extract_single_episode_markdown(text, n)
 
     project = load_project(slug)
     existing = load_doc(slug, n)
@@ -1130,23 +1227,33 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     parsed = parse_episode_markdown(text)
     if not parsed.get("shots"):
         raise DramaBadRequest("剧本里没有分镜（需要 ### Shot N (0-3s) 格式）")
-    ep_title = str(title or parsed.get("title") or f"第{n}集").strip()
+    ep_title = str(title or parsed.get("title") or "").strip()
+    if not ep_title or ep_title in ("标题", f"EP{n:02d}", f"EP{n:02d} 标题"):
+        series = project.get("series") if isinstance(project.get("series"), dict) else {}
+        multi = bool(series.get("count_explicit") and int(series.get("episode_count") or 1) > 1)
+        ep_title = str(project.get("title") or "").strip() or (f"第{n}集" if multi else "正片")
     ep_rel = _rel(slug, "episodes", f"ep{n:02d}.md")
     _write_text(ep_rel, text.rstrip() + "\n")
 
     episodes = [e for e in (project.get("episodes") or []) if int(e.get("n") or 0) != n]
     meta = parsed.get("meta") or {}
-    seconds = 45
+    seconds = 60
     raw_sec = str(meta.get("时长") or "")
     digits = "".join(ch for ch in raw_sec if ch.isdigit() or ch == ".")
     if digits:
         try:
             seconds = max(1, int(round(float(digits))))
         except ValueError:
-            seconds = 45
+            seconds = 60
     old_ep = next((e for e in (project.get("episodes") or []) if int(e.get("n") or 0) == n), {})
     if old_ep.get("seconds") and not digits:
-        seconds = int(old_ep.get("seconds") or 45)
+        seconds = int(old_ep.get("seconds") or 60)
+    series = project.get("series") if isinstance(project.get("series"), dict) else {}
+    if series.get("seconds_per_episode") and not digits:
+        try:
+            seconds = int(series.get("seconds_per_episode"))
+        except (TypeError, ValueError):
+            pass
     episodes.append({"n": n, "title": ep_title, "seconds": seconds, "path": ep_rel})
     episodes.sort(key=lambda e: int(e.get("n") or 0))
     project["episodes"] = episodes
@@ -1179,25 +1286,72 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     return payload
 
 
-def generate_episode_script(slug: str, episode: int, premise: str) -> dict[str, Any]:
+def generate_episode_script(
+    slug: str,
+    episode: int,
+    premise: str,
+    *,
+    target_seconds: int | None = None,
+    episode_count: int | None = None,
+) -> dict[str, Any]:
     """一句话 → 完整剧本 + 分镜表，然后落盘为分集剧本。
 
     用 script 节点模型生成 Markdown，再复用 save_script 同步 shots.json。
+    Hard constraints: single episode only, target duration from user/series plan.
     """
+    import re
+
     slug = parse_slug(slug)
     n = parse_episode(episode)
     text = str(premise or "").strip()
     if not text:
         raise DramaBadRequest("请先给一句故事梗概")
-    load_project(slug)
+    project = load_project(slug)
 
+    from tools.drama_produce import (
+        apply_target_duration_meta,
+        extract_single_episode_markdown,
+        parse_series_spec,
+        shot_range_for_seconds,
+    )
     from tools.drama_script import draft_text_sync
+    from tools.drama_video import parse_episode_markdown
+
+    series = project.get("series") if isinstance(project.get("series"), dict) else {}
+    spec = parse_series_spec(
+        text,
+        episode_count=episode_count
+        if episode_count is not None
+        else series.get("episode_count"),
+        seconds=target_seconds
+        if target_seconds is not None
+        else series.get("seconds_per_episode"),
+    )
+    ep_total = int(spec["episode_count"])
+    ep_sec = int(spec["seconds_per_episode"])
+    shot_lo, shot_hi = shot_range_for_seconds(ep_sec)
+    multi = bool(spec.get("count_explicit") and ep_total > 1)
+
+    series_rule = (
+        f"这是第 {n} 集（共 {ep_total} 集）；"
+        if multi
+        else f"这是一支约 {ep_sec} 秒的单集短片；不要写「第几集/共几集/EP02」；"
+    )
+    user_series = (
+        f"请只编写第 {n} 集（共 {ep_total} 集），目标时长 {ep_sec} 秒。"
+        "若梗概提到多集，其它集剧情只能作为本集悬念 foreshadow，禁止直接写成多集剧本。"
+        if multi
+        else f"请编写单集剧本，目标时长 {ep_sec} 秒。不要规划或输出其它集。"
+    )
+
+    # File format still uses EP{n:02d} header for the workbench path; keep it internal.
+    title_line = f"# EP{n:02d} 标题" if multi else "# 标题"
 
     system = (
-        "你是专业竖屏漫剧编剧。根据用户的一句话梗概，直接写出完整的分集剧本 "
-        "Markdown，严格使用以下格式，不要输出任何多余说明：\n\n"
-        "# EP{n:02d} 标题\n"
-        "- 时长: 45s\n"
+        "你是专业竖屏漫剧编剧。只写【一支】完整短片剧本 Markdown，"
+        "严格使用以下格式，不要输出任何多余说明，禁止写多集：\n\n"
+        f"{title_line}\n"
+        f"- 时长: {ep_sec}s\n"
         "- 钩子: 一句话吸引人的开头\n"
         "- 悬念: 结尾留一个反转或悬念\n\n"
         "## 分镜\n"
@@ -1208,14 +1362,42 @@ def generate_episode_script(slug: str, episode: int, premise: str) -> dict[str, 
         "- 角色: 出场角色\n\n"
         "### Shot 2 (3-6s)\n"
         "……\n\n"
-        "要求：4–8 个镜头；剧情紧凑、有钩子和反转；画面与台词要具体可拍。"
-    ).format(n=n)
+        f"硬性要求：{series_rule}"
+        f"整集总时长必须约 {ep_sec} 秒（允许 ±5 秒）；"
+        f"镜头数 {shot_lo}–{shot_hi} 个；"
+        "时间轴必须从 0s 连续排到目标时长（如 0-3s、3-8s…）；"
+        "剧情紧凑、有钩子和反转；画面与台词要具体可拍。"
+    )
 
-    draft = draft_text_sync(slug, f"故事梗概：{text}", system=system)
+    user_prompt = f"系列故事梗概：{text}\n{user_series}"
+
+    draft = draft_text_sync(slug, user_prompt, system=system)
     if not str(draft or "").strip():
         raise DramaBadRequest("剧本生成失败（模型无返回），请重试")
 
-    return save_script(slug, n, str(draft).strip())
+    cleaned = apply_target_duration_meta(
+        extract_single_episode_markdown(str(draft).strip(), n),
+        ep_sec,
+    )
+
+    parsed = parse_episode_markdown(cleaned)
+    shot_n = len(parsed.get("shots") or [])
+    ep_headers = re.findall(r"^#\s*EP\s*\d+", cleaned, flags=re.M)
+    if shot_n > shot_hi + 3 or len(ep_headers) > 1:
+        draft2 = draft_text_sync(
+            slug,
+            user_prompt
+            + f"\n上次稿不合格（镜头数={shot_n}）。请重写：仅 EP{n:02d}，"
+            f"{shot_lo}-{shot_hi} 镜，总时长 {ep_sec}s。",
+            system=system,
+        )
+        if str(draft2 or "").strip():
+            cleaned = apply_target_duration_meta(
+                extract_single_episode_markdown(str(draft2).strip(), n),
+                ep_sec,
+            )
+
+    return save_script(slug, n, cleaned)
 
 
 def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
@@ -1244,7 +1426,7 @@ def enqueue_job(
     slug = parse_slug(slug)
     n = parse_episode(episode)
     _ensure_shots_doc(slug, n)
-    if str(kind or "").strip() in ("render_episode", "rerender_dirty"):
+    if str(kind or "").strip() in ("render_episode", "rerender_dirty", "produce_episode"):
         _assert_budget(slug, n)
     from tools.drama_queue import drama_jobs
 
@@ -1943,11 +2125,15 @@ def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     return enrich_character(slug, rec)
 
 
-def generate_character_ref(slug: str, cid: str) -> dict[str, Any]:
-    """文生图生成定妆参考图，直接写入 ref。"""
+def generate_character_ref(slug: str, cid: str, *, lock: bool = False) -> dict[str, Any]:
+    """文生图生成定妆参考图，直接写入 ref（单张，无候选墙）。
+
+    Autopilot passes lock=True so the plate is frozen for identity consistency.
+    Workbench fine-tune keeps lock=False until the user clicks 锁定.
+    """
     load_project(slug)
     slug = parse_slug(slug)
-    from tools.drama_characters import find_character, load_characters, ref_exists, upsert_character
+    from tools.drama_characters import find_character, load_characters, ref_exists, set_ref_locked, upsert_character
 
     rec = find_character(load_characters(slug), cid)
     if rec is None:
@@ -1963,6 +2149,11 @@ def generate_character_ref(slug: str, cid: str) -> dict[str, Any]:
     if not rel:
         raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常），可改用手动上传")
     upsert_character(slug, {"id": cid, "ref": rel})
+    if lock:
+        try:
+            set_ref_locked(slug, cid, True)
+        except Exception:
+            pass
     return enrich_character(slug, find_character(load_characters(slug), cid) or rec)
 
 

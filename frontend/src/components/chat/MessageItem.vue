@@ -2,13 +2,14 @@
 import { computed } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import ToolCard from './ToolCard.vue'
+import DramaVideoCard from './DramaVideoCard.vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
   index: { type: Number, required: true },
 })
 
-const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama'])
 
 const htmlContent = computed(() => {
   const html = renderMarkdown(props.message.content)
@@ -19,13 +20,15 @@ const htmlContent = computed(() => {
 })
 
 const toolCalls = computed(() => props.message.toolCalls || [])
-const showStatusOnly = computed(
-  () =>
-    props.message.isStreaming &&
-    !props.message.content &&
-    props.message.status &&
-    toolCalls.value.length === 0,
+const mediaItems = computed(() => props.message.media || [])
+const showStatus = computed(
+  () => Boolean(props.message.isStreaming && props.message.status),
 )
+const showMarkdown = computed(() => {
+  if (props.message.content) return true
+  // Keep a streaming cursor when there is no status line yet.
+  return Boolean(props.message.isStreaming && !showStatus.value)
+})
 </script>
 
 <template>
@@ -73,13 +76,22 @@ const showStatusOnly = computed(
             <ToolCard v-for="(tool, i) in toolCalls" :key="tool.id || i" :tool="tool" />
           </div>
 
-          <div v-if="showStatusOnly" class="stream-status">
+          <div v-if="mediaItems.length" class="chat-media-cards">
+            <DramaVideoCard
+              v-for="(item, i) in mediaItems"
+              :key="item.url || i"
+              :item="item"
+              @open-drama="emit('open-drama', $event)"
+            />
+          </div>
+
+          <div v-if="showStatus" class="stream-status">
             {{ message.status }}
             <span class="typing-cursor">▊</span>
           </div>
 
           <div
-            v-else-if="message.content || message.isStreaming"
+            v-else-if="showMarkdown"
             class="markdown-body"
             :class="message.isStreaming ? 'streaming-text' : 'ai-text'"
             v-html="htmlContent"

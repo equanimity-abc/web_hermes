@@ -1,0 +1,45 @@
+{
+  "id": "ark",
+  "title": "火山方舟",
+  "tag": "方舟",
+  "description": "默认档：剧本可用 Seed Character / GLM-5.2（也可切 DeepSeek、Kimi）；出图 Seedream、视频 Seedance、配音 Seed Audio。各步骤可在工作台单独改模型。",
+  "models": {
+    "script": {
+      "provider": "ark",
+      "model": "doubao-seed-character-260628",
+      "refine_model": "doubao-seed-character-260628",
+      "alternatives": ["ark", "deepseek", "kimi"]
+    },
+    "image": {
+      "establishing": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "insert": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "dialogue": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "reaction": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "action": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "crowd": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "title": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.3 },
+      "character_ref": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 }
+    },
+    "motion": {
+      "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
+      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
+      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
+      "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
+      "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
+    },
+    "lip": { "provider": "pixverse", "enabled": true },
+    "tts": {
+      "provider": "seed-audio",
+      "model": "doubao-seed-audio-1-0",
+      "voices": [
+        { "id": "zh_female_vv_uranus_bigtts", "label": "方舟女声" },
+        { "id": "zh_male_M392_conversation_wvae_bigtts", "label": "方舟男声" },
+        { "id": "zh-CN-YunxiNeural", "label": "云希 · 男（Edge）" },
+        { "id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女（Edge）" }
+      ]
+    },
+    "subtitle": { "style": "static" }
+  }
+}
