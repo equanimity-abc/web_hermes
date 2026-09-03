@@ -367,6 +367,7 @@ def default_models() -> dict[str, Any]:
             "lse_d_max": 0.9,
         },
         "preset": DEFAULT_PRESET,
+        "quality_profile": "studio",
         "nodes": {},
         "script": {
             "provider": "ark",
@@ -495,12 +496,16 @@ def normalize_models(raw: Any) -> dict[str, Any]:
     preset = str(data.get("preset") or DEFAULT_PRESET).strip().lower()
     if preset not in PRESET_IDS:
         preset = DEFAULT_PRESET
+    quality_profile = str(
+        data.get("quality_profile") or base.get("quality_profile") or "studio"
+    ).strip().lower() or "studio"
     nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
     lip = {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})}
     _sync_lip_route(lip)
     return {
         "currency": currency,
         "preset": preset,
+        "quality_profile": quality_profile,
         "nodes": nodes,
         "providers": _coerce_providers(data.get("providers")),
         "image": image,

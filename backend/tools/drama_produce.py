@@ -280,7 +280,7 @@ def apply_target_duration_meta(text: str, seconds: int) -> str:
 
 
 def ensure_hq_preset(slug: str) -> str:
-    """Apply default (ark) preset when project is not already on it."""
+    """Apply default (ark) preset when project is not already on it (profile=studio)."""
     doc = load_models(slug)
     preset = str(doc.get("preset") or "").strip().lower()
     if preset == DEFAULT_PRESET:
@@ -534,6 +534,7 @@ def produce_episode_hq(
     Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
     """
     from tools.drama_parallel import ProgressClock, parallel_map, shot_concurrency
+    from tools.drama_profiles import assert_profile_allows_studio_gates, resolve_quality_profile, research_backlog
     from tools.drama_quality import assert_studio_providers
     from tools.drama_shots import load_doc
     from tools.drama_studio import classify_shots, export_episode, get_episode
@@ -542,8 +543,10 @@ def produce_episode_hq(
     n = int(episode)
     clock = ProgressClock()
     preset = ensure_hq_preset(slug)
+    profile = resolve_quality_profile(slug)
+    assert_profile_allows_studio_gates(profile)
     clock.start("preset")
-    _progress(on_progress, stage="preset", message=f"质量预设 {preset}")
+    _progress(on_progress, stage="preset", message=f"质量预设 {preset} · profile={profile}")
     assert_studio_providers(slug)
     clock.end("preset")
 
@@ -592,6 +595,8 @@ def produce_episode_hq(
     total = len(shots)
     stages: dict[str, Any] = {
         "preset": preset,
+        "quality_profile": profile,
+        "research": research_backlog(),
         "characters_created": created_chars,
         "refs_generated": ref_chars,
         "embeddings": emb_cids,
