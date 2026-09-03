@@ -1922,6 +1922,11 @@ def generate_shot_lip(
     # 合成带来的画面跳动；代价是可能只动一张脸（已记录告警告知导演）。
     if len(_timed_turns_for_lip(shot, voice_path=voice, slug=slug)) >= 2:
         _lip_warn(shot, "多人口型：采用整镜全帧对口型（未按说话人拆分，可能只动一张脸）")
+    try:
+        from tools.drama_parallel import acquire_lane
+        acquire_lane("lip")
+    except Exception:
+        pass
     source = try_generate_lip(
         scene,
         voice,

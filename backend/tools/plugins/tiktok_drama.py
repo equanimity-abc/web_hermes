@@ -993,7 +993,7 @@ def _action_create_from_premise(args: dict) -> str:
             return _err("seconds 须为整数")
     else:
         seconds = None
-    background = False  # 聊天默认同步等到 play_url，前端一直等待成片
+    background = True  # Phase B：聊天默认异步返回 job_id，用 poll_job / 工作台看进度
     force = bool(args.get("force"))
     overwrite = bool(args.get("overwrite"))
     style_id = str(args.get("style_id") or "").strip()
@@ -1081,7 +1081,7 @@ def _action_produce_episode(args: dict) -> str:
     project = _load_project(slug)
     if not project:
         return _err("项目不存在，请先 init", slug=slug)
-    background = False  # 同步等到整集导出，聊天界面保持等待
+    background = True  # Phase B：异步提交 HQ 流水线，返回 job_id
     force = bool(args.get("force"))
     style_id = str(args.get("style_id") or "").strip()
     catalog_bgm = str(args.get("catalog_bgm") or "").strip()
@@ -1101,7 +1101,7 @@ def _action_produce_episode(args: dict) -> str:
                 episode=n,
                 job_id=job["job_id"],
                 status=job["status"],
-                hint="HQ 全自动流水线已提交后台；可用 poll_job 查进度，完成后 result 含 play_url。",
+                hint="HQ 全自动流水线已提交后台；可用 poll_job 查进度，完成后 result 含 play_url。不要循环狂刷 poll_job，进度也可看工作台任务条。",
             )
         result = produce_episode(
             slug,
@@ -1336,7 +1336,7 @@ def register_tiktok_drama() -> None:
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "已废弃：create_from_premise / produce_episode 始终同步等待 play_url，忽略此字段",
+                    "description": "create_from_premise / produce_episode 默认 true：提交后台返回 job_id；false 则同步等到 play_url（仅调试）",
                 },
                 "shot": {
                     "type": "integer",
@@ -1482,9 +1482,10 @@ def register_tiktok_drama() -> None:
         "除非用户明确只要剧本不要成片，或已有项目只要重渲。"
         "已有剧本项目要出片用 produce_episode（同样单图+锁定妆+自动导出）。"
         "小改单镜后用 export_timeline。"
-        "create_from_premise / produce_episode 必须同步跑完全程（禁止 background=true），"
-        "直到返回 play_url 再结束本轮；前端会一直等待成片出现在对话框。"
-        "回复里务必带上 play_url（多集时说明各集），聊天会自动嵌入成片预览，并提示可去漫剧工作台微调。"
+        "create_from_premise / produce_episode 默认异步（返回 job_id），"
+        "用 poll_job 查进度或看工作台任务条；完成后 result 含 play_url。"
+        "不要循环狂刷 poll_job；回复里带上 job_id，完成后务必带 play_url（多集时说明各集），"
+        "聊天会自动嵌入成片预览，并提示可去漫剧工作台微调。"
     )
 
 

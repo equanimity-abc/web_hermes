@@ -85,6 +85,10 @@ class Config:
     DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "4"))
     DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "8"))
     DRAMA_RPM_DEFAULT: int = int(os.getenv("DRAMA_RPM_DEFAULT", "0"))
+    # Provider lane token buckets (Phase B). 0 = unlimited for that lane.
+    DRAMA_RPM_ARK: int = int(os.getenv("DRAMA_RPM_ARK", "20"))
+    DRAMA_RPM_DASHSCOPE: int = int(os.getenv("DRAMA_RPM_DASHSCOPE", "20"))
+    DRAMA_RPM_LIP: int = int(os.getenv("DRAMA_RPM_LIP", "10"))
 
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")

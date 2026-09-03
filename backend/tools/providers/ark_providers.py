@@ -61,6 +61,12 @@ def _ark_image(
     key = _ark_key()
     if not key:
         return False
+    try:
+        from tools.drama_parallel import acquire_lane
+
+        acquire_lane("ark")
+    except Exception:
+        pass
 
     from io import BytesIO
 
@@ -128,6 +134,12 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     key = _ark_key()
     if not key:
         return "none"
+
+    try:
+        from tools.drama_parallel import acquire_lane
+        acquire_lane("ark")
+    except Exception:
+        pass
 
     import base64
 
@@ -214,6 +226,12 @@ def _ark_tts(text, dest, *, voice=None) -> bool:
         from tools.providers.tts_providers import _edge_tts
 
         return _edge_tts(text, dest, voice=voice)
+
+    try:
+        from tools.drama_parallel import acquire_lane
+        acquire_lane("ark")
+    except Exception:
+        pass
 
     model = str(getattr(config, "ARK_AUDIO_MODEL", "") or "doubao-seed-audio-1-0").strip()
     body = {
