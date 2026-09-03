@@ -189,16 +189,25 @@ def _arcface_embedding(path: Path) -> tuple[list[float] | None, str]:
         return None, "arcface_error"
 
 
-def score_pair(left: Path, right: Path) -> dict[str, Any]:
-    if not left.is_file() or left.stat().st_size < 32:
+def score_pair(
+    left: Path,
+    right: Path,
+    *,
+    left_emb: list[float] | None = None,
+) -> dict[str, Any]:
+    if left_emb is None and (not left.is_file() or left.stat().st_size < 32):
         return {"status": "skipped", "reason": "missing_left", "method": "", "cosine": None}
     if not right.is_file() or right.stat().st_size < 32:
         return {"status": "skipped", "reason": "missing_right", "method": "", "cosine": None}
-    vec_a, method = _arcface_embedding(left)
+    if left_emb is not None:
+        vec_a, method = [float(x) for x in left_emb], "arcface"
+    else:
+        vec_a, method = _arcface_embedding(left)
     vec_b, method_b = _arcface_embedding(right) if vec_a is not None else (None, method)
     if vec_a is None or vec_b is None or method_b != "arcface":
         # P1-7: when ArcFace is unavailable, the histogram cosine is a
         # meaningless numeric proxy — mark it degraded so it can NEVER pass.
+        # Always recompute both sides with hist (never mix cached ArcFace + hist).
         vec_a = _hist_embedding(left)
         vec_b = _hist_embedding(right)
         if vec_a is None or vec_b is None:
@@ -332,7 +341,30 @@ def qc_shot_identity(
     char = _subject_character(slug, shot)
     checks: list[dict[str, Any]] = []
     if ref is not None and scene is not None:
-        pair = score_pair(ref, scene)
+        left_emb: list[float] | None = None
+        cid = str((char or {}).get("id") or "").strip()
+        if cid:
+            try:
+                from tools.drama_series import (
+                    load_character_embedding,
+                    save_character_embedding,
+                )
+
+                left_emb = load_character_embedding(slug, cid)
+                if left_emb is None:
+                    emb, emb_method = _arcface_embedding(ref)
+                    if emb is not None:
+                        save_character_embedding(
+                            slug,
+                            cid,
+                            emb,
+                            method=emb_method,
+                            ref_rel=str((char or {}).get("ref") or ref_rel(slug, cid)),
+                        )
+                        left_emb = emb
+            except Exception:
+                left_emb = None
+        pair = score_pair(ref, scene, left_emb=left_emb)
         pair["kind"] = "ref"
         pair["label"] = "锁参考图 vs 本镜画面"
         checks.append(pair)

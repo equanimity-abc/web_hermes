@@ -433,6 +433,10 @@ def _hq_process_one_shot(
             return {"shot": sn, "skipped": True, "reason": "locked"}
         shot = copy.deepcopy(shot)
 
+    from tools.drama_series import apply_dual_speaker_notes
+
+    apply_dual_speaker_notes(shot)
+
     acquire_provider_lanes_for_shot(slug, shot)
 
     layers = list(HQ_SHOT_LAYERS)
@@ -564,11 +568,19 @@ def produce_episode_hq(
 
     classify_shots(slug, n, force=False)
     doc = load_doc(slug, n) or doc
+    from tools.drama_series import apply_dual_speaker_notes_doc, ensure_cast_embeddings
+    from tools.drama_shots import save_doc
+    from tools.drama_snapshots import take_snapshot
+
+    dual_count = apply_dual_speaker_notes_doc(doc)
+    if dual_count > 0:
+        save_doc(doc)
     clock.end("sync")
 
     clock.start("cast")
     created_chars = ensure_characters_from_shots(slug, doc)
     ref_chars = ensure_character_refs(slug, on_progress=on_progress)
+    emb_cids = ensure_cast_embeddings(slug)
     _progress(
         on_progress,
         stage="cast",
@@ -582,6 +594,9 @@ def produce_episode_hq(
         "preset": preset,
         "characters_created": created_chars,
         "refs_generated": ref_chars,
+        "embeddings": emb_cids,
+        "dual_speaker_shots": dual_count,
+        "snapshots": [],
         "shots_rendered": [],
         "i2v_shots": [],
         "degraded": [],
@@ -589,6 +604,11 @@ def produce_episode_hq(
         "parallel": True,
         "shot_concurrency": shot_concurrency(),
     }
+
+    doc = load_doc(slug, n) or doc
+    snap = take_snapshot(slug, n, doc, tag="stage_cast")
+    if snap:
+        stages["snapshots"].append(snap)
 
     shot_ns = [int(s.get("n") or 0) for s in shots if int(s.get("n") or 0) > 0]
     done_lock = __import__("threading").Lock()
@@ -654,6 +674,11 @@ def produce_episode_hq(
             stages["i2v_shots"].append(sn)
         stages["degraded"].extend(row.get("degrades") or [])
 
+    doc = load_doc(slug, n) or doc
+    snap = take_snapshot(slug, n, doc, tag="stage_shots")
+    if snap:
+        stages["snapshots"].append(snap)
+
     _progress(on_progress, stage="bgm", message="挂载默认配乐")
     clock.start("bgm")
     ensure_default_bgm(slug, n, catalog_id=catalog_bgm)
@@ -661,6 +686,11 @@ def produce_episode_hq(
 
     if cancel_check:
         cancel_check()
+
+    doc = load_doc(slug, n) or doc
+    snap = take_snapshot(slug, n, doc, tag="stage_pre_export")
+    if snap:
+        stages["snapshots"].append(snap)
 
     _progress(on_progress, stage="export", message="QC 硬闸后拼接导出")
     clock.start("export")
@@ -673,6 +703,7 @@ def produce_episode_hq(
     )
     clock.end("export")
     stages["timing"] = clock.snapshot()
+    stages["observability"] = {"timing": stages["timing"], "failure_heat": {}}
     if not result.get("play_url"):
         from tools.drama_video import output_rel
 
