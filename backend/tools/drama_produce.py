@@ -482,6 +482,9 @@ def _hq_process_one_shot(
         cancel_check()
 
     models = models_with_overrides(slug, shot=shot, episode=n)
+    from tools.drama_motion_floors import assert_motion_floor
+
+    assert_motion_floor(shot, slug=slug, models=models)
     planned = effective_motion_ladder(shot, slug=slug, models=models)
     i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
     src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")

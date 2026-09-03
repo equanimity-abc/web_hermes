@@ -23,9 +23,9 @@
     "motion": {
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
-      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
-      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
-      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L0" },
+      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
+      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L3" },
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
@@ -40,6 +40,6 @@
         { "id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女（Edge）" }
       ]
     },
-    "subtitle": { "style": "static" }
+    "subtitle": { "style": "karaoke" }
   }
 }

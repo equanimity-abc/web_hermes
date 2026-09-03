@@ -18,8 +18,8 @@
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "dialogue": { "ladder": "L2", "provider": "kling-video", "fallback": "L1" },
-      "reaction": { "ladder": "L1", "provider": "wanx-video", "fallback": "L0" },
-      "action": { "ladder": "L3", "provider": "kling-video", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "wanx-video", "fallback": "L1" },
+      "action": { "ladder": "L3", "provider": "kling-video", "fallback": "L3" },
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
@@ -34,6 +34,6 @@
       { "id": "zh-CN-XiaohanNeural", "label": "晓涵 · 女" },
       { "id": "zh-CN-XiaozhenNeural", "label": "晓甄 · 女" }
     ]},
-    "subtitle": { "style": "static", "note": "karaoke 未实现，降级为静态字幕；待 S7 逐字卡点" }
+    "subtitle": { "style": "karaoke", "note": "逐字卡点 ASS；失败时 PNG 旁白仍可用" }
   }
 }

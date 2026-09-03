@@ -1000,18 +1000,100 @@ def upload_shot_candidate(slug: str, episode: int, shot: dict[str, Any], data: b
     return rec
 
 
-def _draw_subtitle_overlay(shot: dict[str, Any], dest: Path) -> None:
-    """Burn-in 文案：旁白左上角竖排；字幕（台词）底部横排。"""
+def _shot_overlay_duration(shot: dict[str, Any]) -> float:
+    try:
+        dur = float(shot.get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    if dur > 0.05:
+        return dur
+    try:
+        start = float(shot.get("start") or 0)
+        end = float(shot.get("end") or 0)
+        if end > start:
+            return end - start
+    except (TypeError, ValueError):
+        pass
+    return 3.0
+
+
+def _ffmpeg_escape_ass_path(path: Path | str) -> str:
+    """Escape a filesystem path for ffmpeg ass='…' filter (Windows-safe)."""
+    s = str(path).replace("\\", "/")
+    return s.replace(":", "\\:").replace("'", "\\'")
+
+
+def _karaoke_ass_path(shot: dict[str, Any]) -> Path | None:
+    rel = str((shot.get("assets") or {}).get("karaoke_ass") or "").strip()
+    if not rel:
+        return None
+    try:
+        p = resolve_safe(rel)
+    except ValueError:
+        p = Path(rel)
+    return p if p.is_file() else None
+
+
+def _vout_overlay_filter(shot: dict[str, Any]) -> str:
+    """Composite overlay PNG; burn karaoke ASS when present."""
+    ass = _karaoke_ass_path(shot)
+    if ass is not None:
+        esc = _ffmpeg_escape_ass_path(ass)
+        return f"[v][1:v]overlay=0:0:format=auto,ass='{esc}',format=yuv420p[vout]"
+    return "[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
+
+
+def _draw_subtitle_overlay(
+    shot: dict[str, Any],
+    dest: Path,
+    models: dict[str, Any] | None = None,
+) -> None:
+    """Burn-in 文案：旁白左上角竖排；字幕（台词）底部横排或 karaoke ASS。"""
     from PIL import Image, ImageDraw
+
+    from tools.drama_karaoke import shot_wants_karaoke, write_karaoke_ass
+
+    models_local = models
+    if models_local is None:
+        slug = str(shot.get("_slug") or "").strip()
+        if slug:
+            from tools.drama_models import load_models
+
+            models_local = load_models(slug)
+
+    karaoke = shot_wants_karaoke(models_local, shot)
 
     img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # 旁白 = 画外说明
+    # 旁白 = 画外说明（karaoke 时仍画旁白；台词改走 ASS）
     _draw_narration_vertical(draw, subtitle_display_text(shot.get("旁白") or ""))
-    # 字幕 = 台词
-    _draw_dialogue_caption(draw, dialogue_caption_text(shot))
+    if not karaoke:
+        _draw_dialogue_caption(draw, dialogue_caption_text(shot))
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest, "PNG")
+
+    assets = shot.setdefault("assets", {})
+    if karaoke:
+        ass_dest = dest.with_suffix(".ass")
+        written = write_karaoke_ass(
+            ass_dest,
+            dialogue_caption_text(shot),
+            duration=_shot_overlay_duration(shot),
+            play_res_x=WIDTH,
+            play_res_y=HEIGHT,
+        )
+        if written is not None:
+            try:
+                from tools.workspace import workspace_root
+
+                rel = str(ass_dest.resolve().relative_to(workspace_root())).replace("\\", "/")
+                assets["karaoke_ass"] = rel
+            except Exception:
+                assets["karaoke_ass"] = str(ass_dest).replace("\\", "/")
+        else:
+            assets.pop("karaoke_ass", None)
+    else:
+        assets.pop("karaoke_ass", None)
 
 
 # 样式单一入口：改这里全部镜头同步
@@ -1430,7 +1512,7 @@ def _encode_clip_from_still(
     vf = (
         f"[0:v]scale={ZOOM_W}:{ZOOM_H}:force_original_aspect_ratio=increase,"
         f"crop={ZOOM_W}:{ZOOM_H},{motion},{look},fps={FPS}[v];"
-        f"[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
+        f"{_vout_overlay_filter(shot)}"
     )
     # Input framerate is required or zoompan often emits a single still.
     args = [
@@ -1530,7 +1612,7 @@ def _encode_clip_from_motion(
             f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
             f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
         )
-    vf = f"{vchain};[v][1:v]overlay=0:0:format=auto,format=yuv420p[vout]"
+    vf = f"{vchain};{_vout_overlay_filter(shot)}"
     args = ["-y", "-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
     if audio is not None:
         args += ["-i", str(audio)]
@@ -1795,6 +1877,9 @@ def render_shot_layers(
     overlay = _path_for(shot, "overlay")
     voice = _path_for(shot, "voice")
     clip = _path_for(shot, "clip")
+    # Karaoke / model routing reads shot._slug
+    shot["_slug"] = slug
+    shot["_episode"] = episode
 
     rebuilt: list[str] = []
     degrades: list[dict[str, Any]] = []
@@ -1904,13 +1989,12 @@ def render_shot_layers(
             if voice_dur > duration + 0.05:
                 duration = voice_dur
                 shot["duration"] = round(float(duration), 1)
-        shot["_slug"] = slug
-        shot["_episode"] = episode
         _encode_clip(scene, overlay, clip, duration, audio, shot)
-        shot.pop("_slug", None)
-        shot.pop("_episode", None)
         rebuilt.append("clip")
         assets["clip"] = assets.get("clip") or str(clip)
+
+    shot.pop("_slug", None)
+    shot.pop("_episode", None)
 
     remaining = [layer for layer in (shot.get("dirty") or []) if layer not in rebuilt]
     shot["dirty"] = remaining

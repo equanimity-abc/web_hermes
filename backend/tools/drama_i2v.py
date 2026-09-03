@@ -505,6 +505,49 @@ def _run_i2v_provider(provider: str, scene: Path, dest: Path, shot: dict[str, An
     return result == "ai"
 
 
+def _same_tier_alt_provider(provider: str, models: dict[str, Any] | None) -> str | None:
+    """One alternate same-tier I2V vendor (Seedance ↔ Kling/Hailuo)."""
+    if not models:
+        return None
+    from tools.drama_models import provider_usable
+
+    p = str(provider or "").strip().lower()
+    if p in ("seedance", "ark", "doubao-video"):
+        for cand in ("kling", "kling-video", "kling-maas"):
+            if provider_usable(models, cand):
+                return cand
+        return None
+    if p in ("kling", "kling-video", "kling-maas", "hailuo"):
+        if provider_usable(models, "seedance"):
+            return "seedance"
+        return None
+    return None
+
+
+def _run_i2v_with_same_tier_alt(
+    provider: str,
+    scene: Path,
+    dest: Path,
+    shot: dict[str, Any],
+    sec: float,
+    *,
+    models: dict[str, Any] | None,
+    planned: str,
+) -> bool:
+    """Primary provider, then one same-tier alternate for L1/L2/L3."""
+    if _run_i2v_provider(provider, scene, dest, shot, sec):
+        return True
+    if planned not in ("L1", "L2", "L3"):
+        return False
+    alt = _same_tier_alt_provider(provider, models)
+    if not alt or alt == provider:
+        return False
+    if _run_i2v_provider(alt, scene, dest, shot, sec):
+        shot["i2v_provider"] = alt
+        return True
+    return False
+
+
 def try_generate_i2v(
     scene: Path,
     dest: Path,
@@ -552,7 +595,9 @@ def try_generate_i2v(
             return _finish("keys")
 
     if planned == "L3":
-        ok = _run_i2v_provider(provider, scene, dest, shot, max(run_sec, 3.0))
+        ok = _run_i2v_with_same_tier_alt(
+            provider, scene, dest, shot, max(run_sec, 3.0), models=models, planned=planned
+        )
         if not ok:
             if strict:
                 return "none"
@@ -572,7 +617,9 @@ def try_generate_i2v(
         except Exception:
             return "none"
 
-    if _run_i2v_provider(provider, scene, dest, shot, run_sec):
+    if _run_i2v_with_same_tier_alt(
+        provider, scene, dest, shot, run_sec, models=models, planned=planned
+    ):
         return _finish("ai")
 
     # 真 I2V 失败：专业档（strict）禁止 Ken Burns 顶替；草稿档才 fallback

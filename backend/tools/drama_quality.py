@@ -1,4 +1,9 @@
-"""Phase A quality gates: Fail Loud studio profile (no silent mock success)."""
+"""Phase A quality gates: Fail Loud studio profile (no silent mock success).
+
+Phase C motion floors are enforced in HQ produce via
+``tools.drama_motion_floors.assert_motion_floor`` (see ``_hq_process_one_shot``).
+Export-time callers may optionally import the same helper if needed.
+"""
 
 from __future__ import annotations
 
