@@ -432,7 +432,8 @@ class DramaQueue:
 
         self._progress(job, message="拼接整集…", current=0, total=1)
         job.check_cancel()
-        result = export_episode(job.slug, job.episode, background=False)
+        force = bool((job.params or {}).get("force"))
+        result = export_episode(job.slug, job.episode, background=False, force=force)
         self._progress(job, message="导出完成", current=1, total=1)
         return result
 

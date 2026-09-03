@@ -28,7 +28,7 @@ from tools.drama_models import infer_kind, infer_speaker, load_models
 from tools.drama_shots import load_doc, ordered_shots_from_doc
 from tools.workspace import resolve_safe
 
-DEFAULT_IDENTITY_MIN = 0.65
+DEFAULT_IDENTITY_MIN = 0.75
 DEFAULT_SSIM_MIN = 0.85
 DEFAULT_LUFS_TARGET = -14.0
 DEFAULT_LUFS_MIN = -16.0
@@ -36,7 +36,7 @@ DEFAULT_LUFS_MAX = -12.0
 DEFAULT_TRUE_PEAK = -1.0
 DEFAULT_LSE_C_MIN = 0.0
 DEFAULT_LSE_D_MAX = 1.0
-HINT_FAIL = "低于 0.65，请重抽首帧（不重配音）"
+HINT_FAIL = "低于 0.75，请重抽首帧（不重配音）"
 HINT_SKIPPED = "脚本未能出分，不得记为通过"
 LUFS_I_RE = re.compile(r"I:\s*(-?[\d.]+)\s*LUFS", re.I)
 LUFS_PEAK_RE = re.compile(r"(?:True peak|Peak):\s*(-?[\d.]+)\s*dBTP", re.I)

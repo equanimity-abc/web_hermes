@@ -1073,7 +1073,7 @@ def _action_create_from_premise(args: dict) -> str:
 
 
 def _action_produce_episode(args: dict) -> str:
-    from tools.drama_studio import produce_episode
+    from tools.drama_studio import DramaBadRequest, produce_episode
 
     slug, n, err = _episode_number(args)
     if err:
@@ -1085,31 +1085,34 @@ def _action_produce_episode(args: dict) -> str:
     force = bool(args.get("force"))
     style_id = str(args.get("style_id") or "").strip()
     catalog_bgm = str(args.get("catalog_bgm") or "").strip()
-    if background:
-        job = produce_episode(
+    try:
+        if background:
+            job = produce_episode(
+                slug,
+                n,
+                background=True,
+                force=force,
+                style_id=style_id,
+                catalog_bgm=catalog_bgm,
+            )
+            return _ok(
+                action="produce_episode",
+                slug=slug,
+                episode=n,
+                job_id=job["job_id"],
+                status=job["status"],
+                hint="HQ 全自动流水线已提交后台；可用 poll_job 查进度，完成后 result 含 play_url。",
+            )
+        result = produce_episode(
             slug,
             n,
-            background=True,
+            background=False,
             force=force,
             style_id=style_id,
             catalog_bgm=catalog_bgm,
         )
-        return _ok(
-            action="produce_episode",
-            slug=slug,
-            episode=n,
-            job_id=job["job_id"],
-            status=job["status"],
-            hint="HQ 全自动流水线已提交后台；可用 poll_job 查进度，完成后 result 含 play_url。",
-        )
-    result = produce_episode(
-        slug,
-        n,
-        background=False,
-        force=force,
-        style_id=style_id,
-        catalog_bgm=catalog_bgm,
-    )
+    except (DramaBadRequest, ValueError, RuntimeError, FileNotFoundError) as e:
+        return _err(str(e), slug=slug, episode=n, action="produce_episode")
     _record_video(
         project,
         {
@@ -1135,7 +1138,7 @@ def _action_produce_episode(args: dict) -> str:
 
 
 def _action_export_timeline(args: dict) -> str:
-    from tools.drama_studio import export_episode
+    from tools.drama_studio import DramaBadRequest, export_episode
 
     slug, n, err = _episode_number(args)
     if err:
@@ -1143,7 +1146,11 @@ def _action_export_timeline(args: dict) -> str:
     project = _load_project(slug)
     if not project:
         return _err("项目不存在，请先 init", slug=slug)
-    result = export_episode(slug, n)
+    # Phase A: Agent never force-exports past QC.
+    try:
+        result = export_episode(slug, n, force=False)
+    except (DramaBadRequest, ValueError, RuntimeError) as e:
+        return _err(str(e), slug=slug, episode=n, action="export_timeline")
     _record_video(
         project,
         {

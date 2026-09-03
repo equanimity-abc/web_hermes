@@ -214,6 +214,8 @@ class ModelsPatch(BaseModel):
 
 class ExportBody(BaseModel):
     background: bool = True
+    # Workbench may force export past QC; Agent must never set this.
+    force: bool = False
 
 
 class MixPatch(BaseModel):
@@ -664,7 +666,8 @@ async def drama_patch_timeline(slug: str, episode: int, body: TimelinePatch):
 async def drama_export_episode(slug: str, episode: int, body: ExportBody | None = None):
     try:
         background = body.background if body else True
-        return export_episode(slug, episode, background=background)
+        force = bool(body.force) if body else False
+        return export_episode(slug, episode, background=background, force=force)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 

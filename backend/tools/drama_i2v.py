@@ -511,8 +511,12 @@ def try_generate_i2v(
     shot: dict[str, Any],
     *,
     seconds: float | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return i2v_source: ai | keys | fallback | none."""
+    """Return i2v_source: ai | keys | fallback | none.
+
+    strict=True (HQ/Agent): never substitute Ken Burns / L3 mock for real I2V.
+    """
     if not scene.is_file():
         raise FileNotFoundError(f"缺少画面：{scene}")
     if not shutil.which(_ffmpeg_bin()):
@@ -550,6 +554,8 @@ def try_generate_i2v(
     if planned == "L3":
         ok = _run_i2v_provider(provider, scene, dest, shot, max(run_sec, 3.0))
         if not ok:
+            if strict:
+                return "none"
             ok = _provider_l3_mock(scene, dest, shot, max(ken_sec, 3.0))
             if ok:
                 shot["i2v_ladder"] = "L3"
@@ -569,7 +575,9 @@ def try_generate_i2v(
     if _run_i2v_provider(provider, scene, dest, shot, run_sec):
         return _finish("ai")
 
-    # 真 I2V 失败 → 明显 Ken Burns，标记 fallback（不要伪装成 ai）
+    # 真 I2V 失败：专业档（strict）禁止 Ken Burns 顶替；草稿档才 fallback
+    if strict:
+        return "none"
     try:
         _provider_mock_ai(scene, dest, shot, max(ken_sec, 2.5))
         return _finish("fallback")
@@ -584,12 +592,14 @@ def generate_shot_i2v(
     *,
     force: bool = False,
     allow_locked: bool = False,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Try I2V when enabled; rebuild motion asset. Returns status dict.
 
     Motion is the performance master. Locked motion is not overwritten unless
     the caller is an explicit video-page regenerate (force + allow_locked).
     Successful ai/keys runs auto-lock the motion layer.
+    strict=True: HQ/Agent Fail Loud — no Ken Burns substitute for real I2V.
     """
     from tools.drama_shots import set_shot_locks
 
@@ -621,7 +631,7 @@ def generate_shot_i2v(
         return {"tried": False, "i2v_source": str(shot.get("i2v_source") or "none"), "reason": "i2v_off"}
 
     scene = resolve_safe(str(assets.get("scene") or ""))
-    source = try_generate_i2v(scene, dest, shot)
+    source = try_generate_i2v(scene, dest, shot, strict=strict)
     shot["i2v_source"] = source
     if source == "ai" and str(shot.get("i2v_provider") or "") in ("kling", "kling-video", "kling-maas", "hailuo"):
         if not shot.get("i2v_deferred"):

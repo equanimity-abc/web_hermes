@@ -1832,7 +1832,7 @@ export function useDramaStudio() {
       message: '整集导出排队中…',
     })
     try {
-      const result = await dramaApi.exportEpisode(slug.value, episodeN.value, true)
+      const result = await dramaApi.exportEpisode(slug.value, episodeN.value, true, false)
       if (result.job_id) {
         await trackJob(result, slug.value)
         notice.value = '整集导出已加入后台队列'
@@ -1849,7 +1849,34 @@ export function useDramaStudio() {
       notice.value = `整集已导出（${result.assemble || 'assemble'} / ${result.mix_mode || 'mix'}，约 ${result.timeline?.total_duration || '?'}s）`
       setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
     } catch (e) {
-      error.value = e.message || String(e)
+      const msg = e.message || String(e)
+      const qcBlocked = /QC 硬闸|响度验收|身份/.test(msg)
+      if (qcBlocked && window.confirm(`${msg}\n\n工作台可强制导出带瑕疵成片，是否强制导出？`)) {
+        try {
+          const forced = await dramaApi.exportEpisode(slug.value, episodeN.value, true, true)
+          if (forced.job_id) {
+            await trackJob(forced, slug.value)
+            notice.value = '已强制导出（后台队列）'
+            setBatchProgress({
+              status: 'running',
+              message: '强制导出进行中…',
+              jobId: forced.job_id,
+            })
+            rendering.value = false
+            return
+          }
+          bust.value = Date.now()
+          await openEpisode(episodeN.value)
+          notice.value = '已强制导出（QC 未全部通过）'
+          setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
+          return
+        } catch (e2) {
+          error.value = e2.message || String(e2)
+          setBatchProgress({ status: 'error', message: error.value })
+          return
+        }
+      }
+      error.value = msg
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
       if (!batchProgress.value?.jobId) {

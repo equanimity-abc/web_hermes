@@ -273,10 +273,10 @@ export function patchTimeline(slug, episode, body) {
   })
 }
 
-export function exportEpisode(slug, episode, background = true) {
+export function exportEpisode(slug, episode, background = true, force = false) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/export`, {
     method: 'POST',
-    body: JSON.stringify({ background }),
+    body: JSON.stringify({ background, force: Boolean(force) }),
   })
 }
 

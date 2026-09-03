@@ -83,7 +83,7 @@ class Config:
     CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
 
     DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "4"))
-    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "3"))
+    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "8"))
     DRAMA_RPM_DEFAULT: int = int(os.getenv("DRAMA_RPM_DEFAULT", "0"))
 
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")

@@ -397,9 +397,16 @@ def produce_episode_hq(
     identity_retries: int = 1,
     cancel_check: Callable[[], None] | None = None,
     on_progress: Callable[..., None] | None = None,
+    allow_qc_fail_export: bool = False,
 ) -> dict[str, Any]:
-    """Run the full HQ pipeline synchronously; returns get_episode() + stages summary."""
+    """Run the full HQ pipeline synchronously; returns get_episode() + stages summary.
+
+    Phase A studio profile: Fail Loud — missing keys / identity fail / fake I2V /
+    QC fail all raise. Agent must keep allow_qc_fail_export=False.
+    """
     from tools.drama_i2v import generate_shot_i2v
+    from tools.drama_models import effective_motion_ladder, infer_kind, models_with_overrides
+    from tools.drama_quality import assert_studio_providers
     from tools.drama_shots import find_shot, load_doc, merge_save_shot, save_doc
     from tools.drama_studio import classify_shots, export_episode, get_episode
     from tools.drama_video import render_shot_layers, rerender_shot
@@ -408,6 +415,7 @@ def produce_episode_hq(
     n = int(episode)
     preset = ensure_hq_preset(slug)
     _progress(on_progress, stage="preset", message=f"质量预设 {preset}")
+    assert_studio_providers(slug)
 
     if cancel_check:
         cancel_check()
@@ -447,6 +455,7 @@ def produce_episode_hq(
         "shots_rendered": [],
         "i2v_shots": [],
         "degraded": [],
+        "strict": True,
     }
 
     for index, shot in enumerate(shots):
@@ -470,6 +479,8 @@ def produce_episode_hq(
         if force or not (shot.get("assets") or {}).get("clip"):
             layers = list(HQ_SHOT_LAYERS)
 
+        identity_ok = True
+        identity_last: dict[str, Any] = {}
         for attempt in range(max(0, identity_retries) + 1):
             info = render_shot_layers(
                 slug, n, shot, layers, title=ep_title, candidate_count=1
@@ -478,16 +489,30 @@ def produce_episode_hq(
             save_doc(doc)
             from tools.drama_qc import qc_shot_identity
 
-            identity = qc_shot_identity(slug, n, shot, apply=False)
+            identity_last = qc_shot_identity(slug, n, shot, apply=True)
             failed = (
-                str(identity.get("status") or "") == "ok"
-                and not identity.get("pass")
+                str(identity_last.get("status") or "") == "ok"
+                and not identity_last.get("pass")
                 and attempt < identity_retries
             )
             if failed:
                 layers = ["scene"]
+                identity_ok = False
                 continue
+            identity_ok = not (
+                str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass")
+            )
+            if str(identity_last.get("status") or "") == "skipped":
+                raise RuntimeError(
+                    f"Shot {sn} 身份验收 skipped（缺少定妆或依赖），专业档不得记为通过"
+                )
             break
+
+        if not identity_ok:
+            raise RuntimeError(
+                f"Shot {sn} 身份相似度未达阈值"
+                f"（{identity_last.get('cosine', identity_last.get('score', '?'))}），请重抽或提高定妆质量"
+            )
 
         doc = load_doc(slug, n) or doc
         shot = find_shot(doc, sn)
@@ -497,9 +522,19 @@ def produce_episode_hq(
             cancel_check()
 
         _progress(on_progress, stage="i2v", shot=sn, message=f"Shot {sn} I2V")
-        i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True)
+        models = models_with_overrides(slug, shot=shot, episode=n)
+        planned = effective_motion_ladder(shot, slug=slug, models=models)
+        i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
         if i2v.get("tried"):
             stages["i2v_shots"].append(sn)
+        src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
+        kind = infer_kind(shot)
+        if planned not in ("L0",) and kind not in ("establishing", "insert", "crowd", "title"):
+            if src not in ("ai", "keys"):
+                raise RuntimeError(
+                    f"Shot {sn} 需要真 I2V（计划 {planned}），但得到 {src or 'none'}；"
+                    "专业档禁止 Ken Burns/mock 顶替"
+                )
         merge_save_shot(slug, n, shot)
 
         if cancel_check:
@@ -515,9 +550,14 @@ def produce_episode_hq(
     if cancel_check:
         cancel_check()
 
-    _progress(on_progress, stage="export", message="拼接导出整集")
-    result = export_episode(slug, n, background=False)
-    # Guarantee play_url for chat / workbench even if assemble metadata is sparse.
+    _progress(on_progress, stage="export", message="QC 硬闸后拼接导出")
+    # Agent / HQ: never allow_qc_fail_export. Workbench-only force is separate API.
+    result = export_episode(
+        slug,
+        n,
+        background=False,
+        force=bool(allow_qc_fail_export),
+    )
     if not result.get("play_url"):
         from tools.drama_video import output_rel
 

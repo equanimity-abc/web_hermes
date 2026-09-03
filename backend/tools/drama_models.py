@@ -357,7 +357,7 @@ def default_models() -> dict[str, Any]:
         "bgm": {"provider": "library", "duck_db": -12, "license": "user_upload"},
         "sfx": {"provider": "library"},
         "qc": {
-            "identity_min": 0.65,
+            "identity_min": 0.75,
             "ssim_min": 0.85,
             "lufs_target": -14,
             "lufs_min": -16,

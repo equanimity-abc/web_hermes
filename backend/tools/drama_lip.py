@@ -36,11 +36,11 @@ BLOCKED_KINDS = frozenset({"establishing", "crowd", "action", "title", "insert"}
 # chain invertible (no aspect-ratio squash → no mouth drift / seams / flicker).
 LIP_CROP_SIZE = 512
 
-# Prefer highest visual fidelity first when LIP_QUALITY=max (default).
+# PixVerse first (product decision 2026-09); LatentSync remains high-quality fallback.
 QUALITY_CASCADE = (
-    "latentsync",
     "pixverse",
     "pixverse-lipsync",
+    "latentsync",
     "musetalk",
     "wav2lip",
     "http",
@@ -133,13 +133,13 @@ def _provider() -> str:
 
 
 def _default_provider() -> str:
-    # Prefer LatentSync when Replicate is configured; else PixVerse MaaS; else gateway.
-    if (getattr(config, "REPLICATE_API_TOKEN", "") or os.getenv("REPLICATE_API_TOKEN") or "").strip():
-        return "latentsync"
+    # Product decision: PixVerse first; LatentSync when only Replicate is configured.
     if (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip() and (
         getattr(config, "DASHSCOPE_API_KEY", "") or ""
     ).strip():
         return "pixverse"
+    if (getattr(config, "REPLICATE_API_TOKEN", "") or os.getenv("REPLICATE_API_TOKEN") or "").strip():
+        return "latentsync"
     if (getattr(config, "LIP_API_URL", "") or "").strip():
         return "musetalk"
     return "pixverse"

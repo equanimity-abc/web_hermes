@@ -973,14 +973,22 @@ def patch_timeline(slug: str, episode: int, body: dict[str, Any]) -> dict[str, A
     }
 
 
-def export_episode(slug: str, episode: int, *, background: bool = False) -> dict[str, Any]:
+def export_episode(
+    slug: str,
+    episode: int,
+    *,
+    background: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Assemble + mix episode. QC hard-gate unless force=True (workbench only)."""
     slug = parse_slug(slug)
     n = parse_episode(episode)
     if background:
-        return enqueue_job(slug, n, "export")
+        return enqueue_job(slug, n, "export", params={"force": bool(force)})
     doc = _ensure_shots_doc(slug, n)
     from tools.drama_audio import assert_export_licensed, load_mix
-    from tools.drama_shots import LAYERS, cascade_shot_timings
+    from tools.drama_quality import assert_loudness_after_export, assert_shots_qc_for_export
+    from tools.drama_shots import LAYERS, cascade_shot_timings, save_doc
     from tools.drama_video import assemble_episode, ffmpeg_available, render_shot_layers
     from tools.workspace import resolve_safe
 
@@ -988,6 +996,7 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
         raise DramaBadRequest("未找到 ffmpeg，无法导出整集")
     try:
         assert_export_licensed(slug, load_mix(slug, n))
+        assert_shots_qc_for_export(slug, n, doc, force=bool(force))
         # 导出前重渲：脏层全量处理；未锁镜头至少刷新 overlay+clip，
         # 避免声音页 CSS 预览正确、成片仍是旧旁白/旧时长。
         ep_title = str(doc.get("title") or f"第{n}集")
@@ -1021,6 +1030,7 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
         cascade_shot_timings(doc)
         save_doc(doc)
         mode = assemble_episode(doc)
+        assert_loudness_after_export(slug, n, force=bool(force))
     except ValueError as e:
         raise DramaBadRequest(str(e)) from e
     except RuntimeError as e:
@@ -1028,6 +1038,7 @@ def export_episode(slug: str, episode: int, *, background: bool = False) -> dict
     ep = get_episode(slug, n)
     ep["assemble"] = mode
     ep["mix_mode"] = (load_doc(slug, n) or {}).get("mix")
+    ep["export_forced"] = bool(force)
     return ep
 
 
@@ -1054,13 +1065,17 @@ def produce_episode(
     from tools.drama_produce import produce_episode_hq
 
     _assert_budget(slug, n)
-    result = produce_episode_hq(
-        slug,
-        n,
-        force=force,
-        style_id=style_id,
-        catalog_bgm=catalog_bgm or "rebirth_resolve",
-    )
+    try:
+        result = produce_episode_hq(
+            slug,
+            n,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm or "rebirth_resolve",
+            allow_qc_fail_export=False,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        raise DramaBadRequest(str(e)) from e
     project = load_project(slug)
     if project:
         videos = [v for v in (project.get("videos") or []) if int(v.get("n") or 0) != n]
