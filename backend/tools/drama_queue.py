@@ -450,6 +450,12 @@ class DramaQueue:
         force = bool(params.get("force"))
         style_id = str(params.get("style_id") or "")
         catalog_bgm = str(params.get("catalog_bgm") or "rebirth_resolve")
+        identity_ref_retries = params.get("identity_ref_retries")
+        if identity_ref_retries is not None:
+            try:
+                identity_ref_retries = int(identity_ref_retries)
+            except (TypeError, ValueError):
+                identity_ref_retries = None
 
         def on_progress(**fields: Any) -> None:
             self._progress(job, **fields)
@@ -460,6 +466,7 @@ class DramaQueue:
             force=force,
             style_id=style_id,
             catalog_bgm=catalog_bgm,
+            identity_ref_retries=identity_ref_retries,
             cancel_check=job.check_cancel,
             on_progress=on_progress,
         )

@@ -108,6 +108,85 @@ def voice_ids_for(slug: str | None = None) -> tuple[str, ...]:
     return tuple(vid for vid, _ in list_voice_catalog(slug))
 
 
+# —— 角色性别与音色分组 ——
+GENDER_MALE = "male"
+GENDER_FEMALE = "female"
+GENDERS = (GENDER_MALE, GENDER_FEMALE)
+
+# 已知音色 id → 性别（edge-tts 内置 + 方舟常见 id）
+_VOICE_GENDER: dict[str, str] = {
+    "zh-CN-YunxiNeural": GENDER_MALE,
+    "zh-CN-YunyangNeural": GENDER_MALE,
+    "zh-CN-YunjianNeural": GENDER_MALE,
+    "zh-CN-YunxiaNeural": GENDER_MALE,
+    "zh-CN-XiaoxiaoNeural": GENDER_FEMALE,
+    "zh-CN-XiaoyiNeural": GENDER_FEMALE,
+    "zh-CN-XiaoxuanNeural": GENDER_FEMALE,
+    "zh-CN-XiaomengNeural": GENDER_FEMALE,
+    "zh-CN-XiaoruiNeural": GENDER_FEMALE,
+    "zh-CN-XiaohanNeural": GENDER_FEMALE,
+    "zh-CN-XiaozhenNeural": GENDER_FEMALE,
+    "zh_female_vv_uranus_bigtts": GENDER_FEMALE,
+    "zh_male_M392_conversation_wvae_bigtts": GENDER_MALE,
+}
+
+
+def voice_gender(voice_id: str, catalog: list[tuple[str, str]] | None = None) -> str:
+    """音色 id → 性别：先查覆盖表，再按 label 文本识别（男/女）。"""
+    vid = str(voice_id or "").strip()
+    if vid in _VOICE_GENDER:
+        return _VOICE_GENDER[vid]
+    label = ""
+    for cid, clabel in (catalog or []):
+        if str(cid) == vid:
+            label = str(clabel or "")
+            break
+    s = label or vid
+    if "女" in s and "男" not in s:
+        return GENDER_FEMALE
+    if "男" in s:
+        return GENDER_MALE
+    return ""
+
+
+def normalize_gender(raw: Any, voice: str | None = None, catalog: list[tuple[str, str]] | None = None) -> str:
+    """规范化性别 male/female/空；支持中文 男/女/公/母/雄/雌，缺省时按音色回填。"""
+    v = str(raw or "").strip().lower()
+    if v in ("male", "m", "男", "公", "雄"):
+        return GENDER_MALE
+    if v in ("female", "f", "女", "母", "雌"):
+        return GENDER_FEMALE
+    if voice:
+        return voice_gender(voice, catalog)
+    return ""
+
+
+def gender_voice_pool(slug: str | None, gender: str) -> list[tuple[str, str]]:
+    """同性别音色池；性别未知或该组为空时回退全部音色。"""
+    catalog = list_voice_catalog(slug)
+    if not gender:
+        return catalog
+    pool = [(vid, label) for vid, label in catalog if voice_gender(vid, catalog) == gender]
+    return pool or catalog
+
+
+def pick_default_voice(slug: str | None, gender: str, existing: list[dict[str, Any]]) -> str:
+    """新角色默认音色：同性别池里优先取未被占用的，其次取占用最少的。"""
+    allowed = voice_ids_for(slug)
+    pool = gender_voice_pool(slug, gender)
+    used: dict[str, int] = {}
+    for c in existing:
+        vid = str(c.get("voice") or "").strip()
+        if vid in allowed:
+            used[vid] = used.get(vid, 0) + 1
+    for vid, _ in pool:
+        if vid not in used:
+            return vid
+    if pool:
+        return min((vid for vid, _ in pool), key=lambda vid: used.get(vid, 0))
+    return DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
+
+
 def default_tts_voices() -> list[dict[str, str]]:
     return [{"id": vid, "label": label} for vid, label in DEFAULT_VOICES]
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
@@ -260,12 +339,116 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
     bits = [
         "一张正方形插画，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
         "正面全身站立，居中构图，人物占画面主体",
-        f"三视图：{look}",
+        f"外形：{look}",
         "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
         "完整上色插画，高质量二次元立绘",
         no_text,
     ]
     return "，".join(b for b in bits if b)
+
+
+_LOOK_WEAK_MARKERS = (
+    "五官清晰",
+    "高质量二次元",
+    "符合剧情气质",
+    "抖音竖屏",
+    "主角/配角",
+    "发型与服装",
+)
+
+
+def look_needs_expand(look: str) -> bool:
+    """空洞/模板 look 需要扩写后再用于定妆与分镜。"""
+    s = str(look or "").strip()
+    if len(s) < 48:
+        return True
+    hits = sum(1 for m in _LOOK_WEAK_MARKERS if m in s)
+    return hits >= 2
+
+
+def expand_character_look(
+    slug: str,
+    name: str,
+    look: str,
+    *,
+    bible: str = "",
+    gender: str = "",
+) -> str:
+    """LLM 把 look 扩成可复现的外形描述；失败则回退原文。"""
+    raw = str(look or "").strip()
+    if not look_needs_expand(raw):
+        return raw
+    try:
+        from tools.drama_script import draft_text_sync
+    except Exception:
+        return raw or f"{name}，二次元角色，五官与服装需可复现"
+    name = str(name or "").strip() or "角色"
+    gender_hint = ""
+    g = str(gender or "").strip().lower()
+    if g in ("male", "男"):
+        gender_hint = "性别：男。"
+    elif g in ("female", "女"):
+        gender_hint = "性别：女。"
+    bible_bit = ""
+    bib = str(bible or "").strip()
+    if bib:
+        bible_bit = f"\n人设摘录（可参考）：\n{bib[:800]}\n"
+    system = (
+        "你是竖屏漫剧角色造型设计师。只输出一段简体中文外形描述，不要标题、不要列表、不要引号。"
+        "描述必须可直接喂给文生图：具体到脸型五官、瞳色、发型发色、服装剪裁与配饰、体态气质、题材风格。"
+        "禁止空话（如「五官清晰」「气质独特」「高质量二次元」）。字数 80–160。"
+    )
+    user = (
+        f"角色名：{name}。{gender_hint}\n"
+        f"现有描述：{raw or '（无）'}\n"
+        f"{bible_bit}"
+        "请扩写为可复现的定妆外形描述。"
+    )
+    try:
+        out = str(draft_text_sync(slug, user, system=system) or "").strip()
+    except Exception:
+        return raw or f"{name}，二次元角色，需可辨识的发型与服装"
+    out = out.strip().strip("「」\"'")
+    # 去掉偶发的项目符号/标题行
+    lines = [ln.strip(" -•\t") for ln in out.splitlines() if ln.strip()]
+    out = "，".join(lines) if lines else out
+    if len(out) < 24:
+        return raw or out
+    return out[:400]
+
+
+def ensure_character_looks_expanded(slug: str) -> list[str]:
+    """对项目内过薄的角色 look 做一次扩写并写回角色卡；返回被更新的 cid。"""
+    bible = ""
+    try:
+        path = resolve_safe(f"dramas/{slug}/bible.md")
+        if path.is_file():
+            bible = path.read_text(encoding="utf-8")
+    except (ValueError, OSError):
+        bible = ""
+    updated: list[str] = []
+    cards = load_characters(slug)
+    for rec in cards:
+        if str(rec.get("category") or "character") != "character":
+            continue
+        cid = str(rec.get("id") or "")
+        if not cid:
+            continue
+        look = str(rec.get("look") or "")
+        if not look_needs_expand(look):
+            continue
+        # 已锁定定妆时仍可扩写 look（只影响 prompt 文案，不改图），利于后续重渲。
+        expanded = expand_character_look(
+            slug,
+            str(rec.get("name") or cid),
+            look,
+            bible=bible,
+            gender=str(rec.get("gender") or ""),
+        )
+        if expanded and expanded != look:
+            upsert_character(slug, {"id": cid, "look": expanded})
+            updated.append(cid)
+    return updated
 
 
 def _prune_char_candidates(rows: list[dict[str, Any]], chosen: str = "") -> list[dict[str, Any]]:
@@ -330,6 +513,8 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
             voice = FEMALE_VOICE_FALLBACK
         else:
             voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
+    catalog = list_voice_catalog(slug)
+    gender = normalize_gender(raw.get("gender"), voice, catalog)
     ref = str(raw.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     chosen_ref = str(raw.get("chosen_ref") or "").strip()
     candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)
@@ -347,6 +532,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "ref_image_provider": ref_image_provider,
         "ref_image_model": ref_image_model,
         "catchphrase": str(raw.get("catchphrase") or "").strip(),
+        "gender": gender,
         "voice": voice,
         "ref": ref,
         "ref_locked": bool(raw.get("ref_locked")),
@@ -412,9 +598,14 @@ def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         # Fall back to a deterministic ascii id derived from the name.
         cid = suggest_character_id(name or raw_id or "c")
     cards = load_characters(slug)
-    existing = find_character(cards, cid) or {"id": cid}
+    existing_rec = find_character(cards, cid)
+    is_new = existing_rec is None
+    existing = existing_rec or {"id": cid}
     merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}
     merged["id"] = cid
+    # 新建角色未显式指定音色时，按性别自动挑选（避免所有角色都落 DEFAULT_VOICE）
+    if is_new and not str(merged.get("voice") or "").strip():
+        merged["voice"] = pick_default_voice(slug, normalize_gender(merged.get("gender")), cards)
     rec = normalize_character(slug, merged)
     next_cards = [rec if c.get("id") == cid else c for c in cards]
     if not find_character(next_cards, cid):

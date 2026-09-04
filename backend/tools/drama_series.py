@@ -159,6 +159,26 @@ def save_character_embedding(
     return path
 
 
+def invalidate_character_embedding(slug: str, cid: str) -> None:
+    """丢弃某角色的嵌入缓存，下次读取会从当前定妆重新计算。
+
+    只要角色的定妆（ref）文件被重新生成，就必须调用它；否则身份比对会一直拿旧脸
+    的向量，导致「已使用的定妆」和「修改后的定妆」不一致。
+    """
+    cid = str(cid or "").strip()
+    if not cid:
+        return
+    try:
+        path = embedding_path(slug, cid)
+    except ValueError:
+        return
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
 def ensure_character_embedding(slug: str, cid: str) -> dict[str, Any]:
     """Return cached ArcFace embedding or compute from character ref (soft-fail)."""
     cid = str(cid or "").strip()

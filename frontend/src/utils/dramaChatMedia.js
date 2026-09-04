@@ -96,7 +96,10 @@ export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
 
   let reason = raw
   let tip = ''
-  if (/身份验收|定妆|identity/i.test(raw)) {
+  if (/缺少本镜画面/.test(raw)) {
+    tip =
+      '请打开漫剧工作台 →「画面」页为该镜生成并锁定候选图，再重新渲染。'
+  } else if (/身份验收|定妆|identity/i.test(raw)) {
     tip =
       '请打开漫剧工作台 →「角色」页生成并锁定定妆图，然后对该镜头或整集重新渲染。'
   } else if (/缺少可用模型 Key|ARK_API_KEY|专业档缺少/i.test(raw)) {

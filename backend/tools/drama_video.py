@@ -846,8 +846,12 @@ def _generate_scene_image(
     return False
 
 
-def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: str | None = None) -> str | None:
-    """文生图出定妆图（角色三视图 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None."""
+def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: str | None = None, seed: int | None = None) -> str | None:
+    """文生图出定妆图（角色三视图 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None.
+
+    ``seed`` 显式传入时用于「重生成换一张脸」（定妆锁定前校验失败重试）；None 时保持
+    原有的确定性种子（slug:cid:out_rel），兼容既有调用。
+    """
     import zlib
 
     from tools.drama_characters import build_asset_ref_prompt, character_ref_shot, ref_canvas_size, ref_rel
@@ -857,7 +861,7 @@ def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: st
     out_rel = str(dest_rel or ref_rel(slug, cid)).replace("\\", "/")
     dest = resolve_safe(out_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    seed = zlib.crc32(f"{slug}:{cid}:{out_rel}".encode()) & 0x7FFFFFFF
+    seed = seed if seed is not None else (zlib.crc32(f"{slug}:{cid}:{out_rel}".encode()) & 0x7FFFFFFF)
     gen_w, gen_h = ref_canvas_size(char)
     ok = _generate_scene_image(
         prompt, dest, seed=seed, slug=slug, shot=character_ref_shot(char), width=gen_w, height=gen_h

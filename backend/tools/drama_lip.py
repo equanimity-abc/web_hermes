@@ -702,10 +702,15 @@ def _arcface_embed_bgr(img_bgr) -> tuple[list[float] | None, str]:
         from tools.drama_qc import _arcface_singleton
 
         app = _arcface_singleton()
+        if app is None:
+            return None, "no_insightface"
         faces = app.get(img_bgr)
         if not faces:
             return None, "no_face"
-        emb = getattr(faces[0], "normed_embedding", None) or getattr(faces[0], "embedding", None)
+        # 不能用 ``a or b``：numpy 向量真值会抛 ValueError，被误报成 arcface_error。
+        emb = getattr(faces[0], "normed_embedding", None)
+        if emb is None:
+            emb = getattr(faces[0], "embedding", None)
         if emb is None:
             return None, "no_embedding"
         return [float(x) for x in list(emb)], "arcface"
@@ -806,7 +811,9 @@ def _identity_layout_lock(
 
     detected: list[dict[str, Any]] = []
     for face in faces:
-        emb = getattr(face, "normed_embedding", None) or getattr(face, "embedding", None)
+        emb = getattr(face, "normed_embedding", None)
+        if emb is None:
+            emb = getattr(face, "embedding", None)
         bbox = getattr(face, "bbox", None)
         if emb is None or bbox is None:
             continue
@@ -1115,7 +1122,9 @@ def _speaker_face_crop_box(
                 best = None
                 best_score = -1.0
                 for face in faces:
-                    emb = getattr(face, "normed_embedding", None) or getattr(face, "embedding", None)
+                    emb = getattr(face, "normed_embedding", None)
+                    if emb is None:
+                        emb = getattr(face, "embedding", None)
                     if emb is None:
                         continue
                     score = _cosine(ref_emb, [float(x) for x in list(emb)])

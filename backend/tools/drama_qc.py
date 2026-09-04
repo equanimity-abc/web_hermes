@@ -177,16 +177,72 @@ def _arcface_embedding(path: Path) -> tuple[list[float] | None, str]:
         from PIL import Image
         import numpy as np
 
+        if app is None:
+            return None, "no_insightface"
         img = np.array(Image.open(path).convert("RGB"))
         faces = app.get(img)
         if not faces:
             return None, "no_face"
-        emb = getattr(faces[0], "normed_embedding", None) or getattr(faces[0], "embedding", None)
+        # 不能用 ``a or b``：numpy 向量的真值会抛 ValueError，被误报成 arcface_error。
+        emb = getattr(faces[0], "normed_embedding", None)
+        if emb is None:
+            emb = getattr(faces[0], "embedding", None)
         if emb is None:
             return None, "no_embedding"
         return [float(x) for x in list(emb)], "arcface"
     except Exception:
         return None, "arcface_error"
+
+
+def validate_character_ref(ref_path: Path | None) -> dict[str, Any]:
+    """锁定定妆前的身份就绪校验（纯函数、不改任何状态）。
+
+    用来在「生成定妆 → 锁定」之间把关：刚生成的定妆必须有可检测的人脸 + 可计算的
+    ArcFace 嵌入，才允许锁定；否则锁定的定妆在后续抽检时会命中 ``no_face`` /
+    ``no_embedding``，而且此时已无法回改（定妆一旦锁定即不可变）。
+
+    区分两类完全不同的失败：
+      - 可重试：图本身没人脸/嵌入不出来（no_face / no_embedding）→ 换种子重生成。
+      - 不可重试：依赖缺失（no_insightface / arcface_error）→ 快速失败，重生成无用。
+    """
+    if ref_path is None or not ref_path.is_file() or ref_path.stat().st_size < 32:
+        return {
+            "ok": False,
+            "reason": "missing_ref",
+            "retryable": False,
+            "method": "",
+            "hint": "定妆图文件缺失或过小，需重新生成",
+        }
+    if not _arcface_ready():
+        return {
+            "ok": False,
+            "reason": "no_insightface",
+            "retryable": False,
+            "method": "",
+            "hint": "身份模型 ArcFace 未就绪（insightface 未安装或 buffalo_l 未缓存）",
+        }
+    emb, method = _arcface_embedding(ref_path)
+    if emb is None:
+        retryable = method in ("no_face", "no_embedding")
+        return {
+            "ok": False,
+            "reason": method or "arcface_error",
+            "retryable": retryable,
+            "method": method or "",
+            "hint": (
+                "定妆图未检测到可用人脸，需重新生成"
+                if retryable
+                else "身份嵌入依赖缺失或调用失败，专业档不得记为通过"
+            ),
+        }
+    return {
+        "ok": True,
+        "reason": "",
+        "retryable": True,
+        "method": method,
+        "dims": len(emb),
+        "hint": "",
+    }
 
 
 def score_pair(
@@ -199,29 +255,51 @@ def score_pair(
         return {"status": "skipped", "reason": "missing_left", "method": "", "cosine": None}
     if not right.is_file() or right.stat().st_size < 32:
         return {"status": "skipped", "reason": "missing_right", "method": "", "cosine": None}
+
     if left_emb is not None:
         vec_a, method = [float(x) for x in left_emb], "arcface"
     else:
         vec_a, method = _arcface_embedding(left)
     vec_b, method_b = _arcface_embedding(right) if vec_a is not None else (None, method)
-    if vec_a is None or vec_b is None or method_b != "arcface":
-        # P1-7: when ArcFace is unavailable, the histogram cosine is a
-        # meaningless numeric proxy — mark it degraded so it can NEVER pass.
-        # Always recompute both sides with hist (never mix cached ArcFace + hist).
-        vec_a = _hist_embedding(left)
-        vec_b = _hist_embedding(right)
-        if vec_a is None or vec_b is None:
-            return {"status": "skipped", "reason": "no_embedder", "method": "skipped", "cosine": None}
+
+    if vec_a is not None and vec_b is not None and method_b == "arcface":
         cosine = round(_cosine(vec_a, vec_b), 4)
+        return {"status": "ok", "reason": "", "method": "arcface", "cosine": cosine}
+
+    # ArcFace 真不可用 → 直方图仅作诊断，专业档不得过关。
+    # 模型可用但某一侧没脸/调用失败 → 保留真实 reason，绝不能冒充「ArcFace 不可用」。
+    arcface_unavailable = (not _arcface_ready()) or method == "no_insightface" or method_b == "no_insightface"
+    if not arcface_unavailable:
+        fail_reason = method_b if vec_a is not None else method
+        fail_side = "right" if vec_a is not None else "left"
         return {
-            "status": "degraded",
-            "reason": "proxy_identity",
-            "method": "proxy",
-            "cosine": cosine,
-            "hint": "缺 ArcFace，直方图余弦不可判定身份（不得记为通过）",
+            "status": "skipped",
+            "reason": fail_reason or "no_score",
+            "method": fail_reason or "",
+            "cosine": None,
+            "side": fail_side,
+            "hint": (
+                "本镜画面未检测到可用人脸"
+                if fail_side == "right" and fail_reason == "no_face"
+                else "定妆参考图未检测到可用人脸"
+                if fail_side == "left" and fail_reason == "no_face"
+                else "身份嵌入未能出分"
+            ),
         }
-    cosine = round(_cosine(vec_a, vec_b), 4)
-    return {"status": "ok", "reason": "", "method": "arcface", "cosine": cosine}
+
+    # P1-7: histogram cosine is a meaningless numeric proxy — never counts as pass.
+    hist_a = _hist_embedding(left)
+    hist_b = _hist_embedding(right)
+    if hist_a is None or hist_b is None:
+        return {"status": "skipped", "reason": "no_embedder", "method": "skipped", "cosine": None}
+    cosine = round(_cosine(hist_a, hist_b), 4)
+    return {
+        "status": "degraded",
+        "reason": "proxy_identity",
+        "method": "proxy",
+        "cosine": cosine,
+        "hint": "缺 ArcFace，直方图余弦不可判定身份（不得记为通过）",
+    }
 
 
 def _subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
@@ -339,6 +417,7 @@ def qc_shot_identity(
     prev = previous_same_character(slug, episode, shot)
     prev_scene = _scene_path(prev) if prev else None
     char = _subject_character(slug, shot)
+    char_name = str((char or {}).get("name") or "").strip() or str(infer_speaker(shot) or "").strip()
     checks: list[dict[str, Any]] = []
     if ref is not None and scene is not None:
         left_emb: list[float] | None = None
@@ -387,6 +466,7 @@ def qc_shot_identity(
             "threshold": threshold,
             "hint": "本镜无角色，不抽检身份",
             "character_id": "",
+            "character_name": char_name,
             "checks": [],
             "kind": kind,
         }
@@ -406,6 +486,7 @@ def qc_shot_identity(
             "threshold": threshold,
             "hint": "需要锁定角色参考图和本镜画面才能抽检身份",
             "character_id": (char or {}).get("id") or infer_speaker(shot),
+            "character_name": char_name,
             "checks": [],
             "kind": kind,
         }
@@ -416,16 +497,30 @@ def qc_shot_identity(
 
     ok_checks = [c for c in checks if c.get("status") == "ok" and c.get("cosine") is not None]
     if not ok_checks:
+        fail_reason = str((checks[0].get("reason") if checks else "no_score") or "no_score")
+        if fail_reason == "proxy_identity":
+            fail_hint_text = "身份模型 ArcFace 不可用（直方图代理不得过关）；请安装 insightface 并就绪 buffalo_l"
+        elif fail_reason == "no_face":
+            fail_hint_text = "本镜画面未检测到可用人脸，无法做身份比对（可重抽画面）"
+        elif fail_reason == "no_embedding":
+            fail_hint_text = "本镜画面未能提取人脸嵌入，无法做身份比对（可重抽画面）"
+        elif fail_reason in ("no_embedder", "no_insightface", "arcface_error"):
+            fail_hint_text = "身份嵌入依赖缺失或调用失败，专业档不得记为通过"
+        elif fail_reason in ("missing_left", "missing_right"):
+            fail_hint_text = "定妆参考图或本镜画面文件缺失/过小"
+        else:
+            fail_hint_text = "身份脚本未能出分（缺依赖或无人脸），不得记为通过"
         result = {
             "status": "skipped",
             "pass": False,
             "required": True,
-            "reason": (checks[0].get("reason") if checks else "no_score"),
+            "reason": fail_reason,
             "method": checks[0].get("method") if checks else "",
             "cosine": None,
             "threshold": threshold,
-            "hint": "身份脚本未能出分（缺依赖或无人脸），不得记为通过",
+            "hint": fail_hint_text,
             "character_id": (char or {}).get("id") or infer_speaker(shot),
+            "character_name": char_name,
             "checks": checks,
             "kind": infer_kind(shot),
         }
@@ -449,6 +544,7 @@ def qc_shot_identity(
         "threshold": threshold,
         "hint": "" if passed else fail_hint(threshold),
         "character_id": (char or {}).get("id") or infer_speaker(shot),
+        "character_name": char_name,
         "checks": checks,
         "kind": infer_kind(shot),
         "dirtied": [],

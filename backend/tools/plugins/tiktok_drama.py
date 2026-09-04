@@ -575,7 +575,7 @@ def _action_save_character(args: dict) -> str:
         payload["id"] = cid
     if name:
         payload["name"] = name
-    for key in ("look", "voice", "colors", "catchphrase", "aliases"):
+    for key in ("look", "gender", "voice", "colors", "catchphrase", "aliases"):
         if args.get(key) is not None:
             payload[key] = args.get(key)
     try:
@@ -1085,6 +1085,12 @@ def _action_produce_episode(args: dict) -> str:
     force = bool(args.get("force"))
     style_id = str(args.get("style_id") or "").strip()
     catalog_bgm = str(args.get("catalog_bgm") or "").strip()
+    identity_ref_retries = args.get("identity_ref_retries")
+    if identity_ref_retries is not None:
+        try:
+            identity_ref_retries = int(identity_ref_retries)
+        except (TypeError, ValueError):
+            identity_ref_retries = None
     try:
         if background:
             job = produce_episode(
@@ -1094,6 +1100,7 @@ def _action_produce_episode(args: dict) -> str:
                 force=force,
                 style_id=style_id,
                 catalog_bgm=catalog_bgm,
+                identity_ref_retries=identity_ref_retries,
             )
             return _ok(
                 action="produce_episode",
@@ -1110,6 +1117,7 @@ def _action_produce_episode(args: dict) -> str:
             force=force,
             style_id=style_id,
             catalog_bgm=catalog_bgm,
+            identity_ref_retries=identity_ref_retries,
         )
     except (DramaBadRequest, ValueError, RuntimeError, FileNotFoundError) as e:
         return _err(str(e), slug=slug, episode=n, action="produce_episode")
@@ -1406,9 +1414,13 @@ def register_tiktok_drama() -> None:
                     "type": "string",
                     "description": "save_character 外形/定妆描述，会写入出图 prompt",
                 },
+                "gender": {
+                    "type": "string",
+                    "description": "save_character 角色性别，male/female（动物可用公/母，植物精按拟人性别）。未填时按音色回填",
+                },
                 "voice": {
                     "type": "string",
-                    "description": "save_character 绑定的 edge-tts 音色，如 zh-CN-YunxiNeural",
+                    "description": "save_character 绑定的 edge-tts 音色，如 zh-CN-YunxiNeural；未填时按 gender 自动挑默认音色",
                 },
                 "aliases": {
                     "type": "string",

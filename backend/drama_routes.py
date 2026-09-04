@@ -174,6 +174,7 @@ class CharacterBody(BaseModel):
     ref_image_provider: str | None = None
     ref_image_model: str | None = None
     catchphrase: str | None = None
+    gender: str | None = None
     voice: str | None = None
     ref_locked: bool | None = None
 

@@ -46,6 +46,87 @@ def _download(url: str, dest: Path) -> bool:
         return False
 
 
+# Seedream 多参考融合过多会稀释身份，漫剧分镜默认最多 3 张定妆。
+_MAX_SEEDREAM_REFS = 3
+
+
+def _local_ref_to_data_uri(rel: str, *, max_side: int = 1536) -> str | None:
+    """把工作区内的定妆/参考图编成 Seedream ``image`` 可用的 data URI。"""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from tools.workspace import resolve_safe
+
+    rel = str(rel or "").strip().replace("\\", "/")
+    if not rel:
+        return None
+    if rel.startswith(("http://", "https://", "data:image/")):
+        return rel
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        return None
+    if not path.is_file() or path.stat().st_size < 32:
+        return None
+    try:
+        img = Image.open(path).convert("RGB")
+        w, h = img.size
+        long_side = max(w, h)
+        if long_side > max_side:
+            scale = max_side / float(long_side)
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        buf = BytesIO()
+        # JPEG 显著小于 PNG，避免 data URI 撑爆请求体。
+        img.save(buf, format="JPEG", quality=90, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception as e:
+        log.warning("ark ref encode failed (%s): %s", rel, e)
+        return None
+
+
+def _seedream_image_payload(refs: tuple[str, ...]) -> str | list[str] | None:
+    """官方契约：单张 ``image=url``，多张 ``image=[url, ...]``（最多 10，我们限 3）。"""
+    uris: list[str] = []
+    for rel in refs:
+        if len(uris) >= _MAX_SEEDREAM_REFS:
+            break
+        uri = _local_ref_to_data_uri(str(rel or ""))
+        if uri:
+            uris.append(uri)
+    if not uris:
+        return None
+    if len(uris) == 1:
+        return uris[0]
+    return uris
+
+
+def _prompt_with_identity_refs(prompt: str, *, ref_count: int) -> str:
+    """参考图是「身份锚」，不是编辑底图——避免模型只做轻微改图。"""
+    base = str(prompt or "").strip()
+    if ref_count <= 0:
+        return base
+    if ref_count == 1:
+        clause = (
+            "参考图为角色定妆立绘：严格保持同一张脸、同一发型发色与同一套服装配饰；"
+            "生成本镜全新构图、景别与姿势，不要复制定妆立绘的站姿与背景"
+        )
+    else:
+        clause = (
+            f"参考图共{ref_count}张，均为出场角色定妆立绘（按图1、图2…顺序对应）；"
+            "严格保持各角色面部五官、发型与服装一致；"
+            "生成本镜全新构图与姿势，不要复制定妆立绘构图"
+        )
+    if not base:
+        return clause
+    return f"{base}。{clause}"
+
+
 def _ark_image(
     prompt: str,
     dest,
@@ -57,7 +138,13 @@ def _ark_image(
     height: int = 0,
     refs: tuple[str, ...] = (),
 ) -> bool:
-    """Seedream 文生图 → PNG."""
+    """Seedream 文生图 / 图生图（带定妆 ``image`` 参考）→ PNG。
+
+    官方示例：
+      - 单参考：``image="https://..."``
+      - 多参考：``image=["url1", "url2"]``
+    本地定妆无 data URI，免公网上传。
+    """
     key = _ark_key()
     if not key:
         return False
@@ -68,8 +155,6 @@ def _ark_image(
     except Exception:
         pass
 
-    from io import BytesIO
-
     from PIL import Image
 
     model = str(getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-pro-260628").strip()
@@ -78,13 +163,25 @@ def _ark_image(
     h = int(height or 1920)
     size = f"{w}x{h}" if w and h else "1080x1920"
 
+    image_payload = _seedream_image_payload(tuple(refs or ()))
+    ref_count = (
+        0
+        if image_payload is None
+        else (len(image_payload) if isinstance(image_payload, list) else 1)
+    )
+    final_prompt = _prompt_with_identity_refs(str(prompt), ref_count=ref_count)
+
     body: dict[str, Any] = {
         "model": model,
-        "prompt": str(prompt),
+        "prompt": final_prompt,
         "size": size,
         "response_format": "url",
+        "output_format": "png",
+        "watermark": False,
         "n": 1,
     }
+    if image_payload is not None:
+        body["image"] = image_payload
     if seed:
         body["seed"] = int(seed) % 2147483647
 

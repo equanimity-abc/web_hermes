@@ -1050,6 +1050,7 @@ def produce_episode(
     force: bool = False,
     style_id: str = "",
     catalog_bgm: str = "",
+    identity_ref_retries: int | None = None,
 ) -> dict[str, Any]:
     """One-shot HQ pipeline: cast → scene/voice/lip → I2V → BGM → export mp4."""
     slug = parse_slug(slug)
@@ -1060,20 +1061,23 @@ def produce_episode(
         params["style_id"] = style_id
     if catalog_bgm:
         params["catalog_bgm"] = catalog_bgm
+    if identity_ref_retries is not None:
+        params["identity_ref_retries"] = int(identity_ref_retries)
     if background:
         return enqueue_job(slug, n, "produce_episode", params=params)
     from tools.drama_produce import produce_episode_hq
 
     _assert_budget(slug, n)
+    kwargs: dict[str, Any] = {
+        "force": force,
+        "style_id": style_id,
+        "catalog_bgm": catalog_bgm or "rebirth_resolve",
+        "allow_qc_fail_export": False,
+    }
+    if identity_ref_retries is not None:
+        kwargs["identity_ref_retries"] = int(identity_ref_retries)
     try:
-        result = produce_episode_hq(
-            slug,
-            n,
-            force=force,
-            style_id=style_id,
-            catalog_bgm=catalog_bgm or "rebirth_resolve",
-            allow_qc_fail_export=False,
-        )
+        result = produce_episode_hq(slug, n, **kwargs)
     except (ValueError, RuntimeError, FileNotFoundError) as e:
         raise DramaBadRequest(str(e)) from e
     project = load_project(slug)
@@ -2140,11 +2144,12 @@ def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     return enrich_character(slug, rec)
 
 
-def generate_character_ref(slug: str, cid: str, *, lock: bool = False) -> dict[str, Any]:
+def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int | None = None) -> dict[str, Any]:
     """文生图生成定妆参考图，直接写入 ref（单张，无候选墙）。
 
     Autopilot passes lock=True so the plate is frozen for identity consistency.
     Workbench fine-tune keeps lock=False until the user clicks 锁定.
+    ``seed`` 用于锁定前校验失败后「换一张脸」重生成（None 时走默认确定性种子）。
     """
     load_project(slug)
     slug = parse_slug(slug)
@@ -2160,7 +2165,7 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False) -> dict[s
 
     from tools.drama_video import generate_character_portrait
 
-    rel = generate_character_portrait(slug, rec)
+    rel = generate_character_portrait(slug, rec, seed=seed)
     if not rel:
         raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常），可改用手动上传")
     upsert_character(slug, {"id": cid, "ref": rel})

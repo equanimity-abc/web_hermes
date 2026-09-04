@@ -188,6 +188,27 @@ const CAST_REF_MODELS = [
   { provider: 'kling-image', model: 'kling/kling-v3-omni-image-generation', label: '可灵 · Kling V3 Omni' },
   { provider: 'wanx', model: 'qwen-image-plus', label: '百炼 · Qwen-Image-Plus' },
 ]
+const GENDER_OPTIONS = [
+  { value: '', label: '自动' },
+  { value: 'male', label: '男' },
+  { value: 'female', label: '女' },
+]
+
+function voiceGenderOf(v) {
+  const label = String(v?.label || v?.id || '')
+  if (label.includes('女') && !label.includes('男')) return 'female'
+  if (label.includes('男')) return 'male'
+  return ''
+}
+
+// 按当前角色性别把同性别音色排前（同性别优先，方便挑选）
+const sortedVoices = computed(() => {
+  const gender = props.charDraft?.gender || ''
+  const list = props.voices || []
+  if (!gender) return list
+  const rank = (v) => (voiceGenderOf(v) === gender ? 0 : 1)
+  return [...list].sort((a, b) => rank(a) - rank(b))
+})
 
 const charRefModelKey = computed({
   get() {
@@ -1664,9 +1685,19 @@ const statusBar = computed(() => {
                   </select>
                 </label>
                 <label v-if="castCategory === 'character'" class="drama-field">
+                  性别
+                  <select v-model="charDraft.gender">
+                    <option v-for="g in GENDER_OPTIONS" :key="g.value" :value="g.value">{{ g.label }}</option>
+                  </select>
+                </label>
+                <label v-if="castCategory === 'character'" class="drama-field">
                   音色
                   <select v-model="charDraft.voice">
-                    <option v-for="v in voices" :key="v.id" :value="v.id">
+                    <option value="">自动（按性别）</option>
+                    <option v-if="charDraft.voice && !voices.some((v) => v.id === charDraft.voice)" :value="charDraft.voice">
+                      {{ voices.find((v) => v.id === charDraft.voice)?.label || charDraft.voice }}
+                    </option>
+                    <option v-for="v in sortedVoices" :key="v.id" :value="v.id">
                       {{ v.label || v.id }}
                     </option>
                   </select>
