@@ -472,13 +472,13 @@ def _hq_process_one_shot(
         )
         if str(identity_last.get("status") or "") == "skipped":
             raise RuntimeError(
-                f"Shot {sn} 身份验收 skipped（缺少定妆或依赖），专业档不得记为通过"
+                f"第{sn}镜身份验收未通过（缺少定妆或依赖），专业档不得记为通过"
             )
         break
 
     if not identity_ok:
         raise RuntimeError(
-            f"Shot {sn} 身份相似度未达阈值"
+            f"第{sn}镜身份相似度未达阈值"
             f"（{identity_last.get('cosine', identity_last.get('score', '?'))}），请重抽或提高定妆质量"
         )
 

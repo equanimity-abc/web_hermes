@@ -2,6 +2,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import DramaThumbImg from '@/components/drama/DramaThumbImg.vue'
 import DramaCastChat from '@/components/drama/DramaCastChat.vue'
+import DramaScriptChat from '@/components/drama/DramaScriptChat.vue'
+import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -22,6 +24,9 @@ const props = defineProps({
   bust: { type: Number, default: 0 },
   scriptDraft: { type: String, default: '' },
   scriptImpact: { type: Object, default: null },
+  scriptChatMessages: { type: Array, default: () => [] },
+  scriptChatLoading: { type: Boolean, default: false },
+  scriptChatProgress: { type: Object, default: null },
   boardMode: { type: String, default: 'shots' },
   characters: { type: Array, default: () => [] },
   voices: { type: Array, default: () => [] },
@@ -31,6 +36,7 @@ const props = defineProps({
   castChatMessages: { type: Array, default: () => [] },
   videoChatMessages: { type: Array, default: () => [] },
   voiceChatMessages: { type: Array, default: () => [] },
+  sceneChatMessages: { type: Array, default: () => [] },
   timelineOrder: { type: Array, default: () => [] },
   tlDraft: { type: Object, required: true },
   timelineItems: { type: Array, default: () => [] },
@@ -76,7 +82,8 @@ const emit = defineEmits([
   'update:boardMode',
   'preview-script',
   'save-script',
-  'generate-script',
+  'script-chat-send',
+  'enter-script-stage',
   'rerender-dirty',
   'select-character',
   'add-character',
@@ -143,12 +150,12 @@ const emit = defineEmits([
 ])
 
 const stage = ref('script')
-const premise = ref('')
 const refInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
 const videoChatRef = ref(null)
 const voiceChatRef = ref(null)
+const sceneChatRef = ref(null)
 const voiceVideoRef = ref(null)
 const voiceAudioRef = ref(null)
 const selectedKeyId = ref(null)
@@ -157,7 +164,7 @@ const castChatRef = ref(null)
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
 const stageList = computed(() => [
-  { id: 'script', label: '剧本', title: '步骤一：一句话生成完整剧本与分镜', done: Boolean(props.episode?.script) },
+  { id: 'script', label: '剧本', title: '步骤一：编写与对话生成剧本', done: Boolean(props.episode?.script) },
   { id: 'cast', label: '角色', title: '步骤二：文生图生成定妆图，定角色、物品、场景', done: (props.characters || []).some((c) => c.ref_exists) },
   { id: 'scene', label: '画面', title: '步骤三：分镜文生图与候选墙锁图', done: hasLayer('scene') },
   { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动），时长取自剧本', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
@@ -214,6 +221,47 @@ function onStageModelChange(nodeId, event) {
   const key = event?.target?.value
   if (!key) return
   emit('apply-stage-model', { node: nodeId, key })
+}
+
+const scriptStatusTitle = computed(() => {
+  const s = props.scriptChatProgress?.status
+  if (s === 'running') return '处理中'
+  if (s === 'error') return '失败'
+  if (s === 'done') return '完成'
+  return '状态'
+})
+
+const scriptStatusPct = computed(() => {
+  const p = props.scriptChatProgress?.pct
+  if (p != null) return Math.max(0, Math.min(100, Number(p)))
+  if (props.scriptChatProgress?.status === 'running') return 12
+  if (props.scriptChatProgress?.status === 'done') return 100
+  return 0
+})
+
+function onScriptChatSend(text) {
+  emit('script-chat-send', text)
+}
+
+watch(
+  stage,
+  (s, prev) => {
+    // prev is undefined on the immediate first run; still seed when landing on script.
+    // flush:'post' so App has finished mounting listeners before we emit.
+    if (s === 'script' && prev !== 'script') emit('enter-script-stage')
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function onCastRefModelChange(event) {
+  const key = event?.target?.value
+  if (!key) return
+  const [provider, model] = String(key).split('|')
+  if (props.charDraft) {
+    props.charDraft.ref_image_provider = provider
+    props.charDraft.ref_image_model = model || props.charDraft.ref_image_model
+  }
+  emit('apply-stage-model', { node: 'character_ref', key })
 }
 const castAssets = computed(() =>
   (props.characters || []).filter((c) => (c.category || 'character') === castCategory.value),
@@ -286,6 +334,35 @@ function onVoiceChatSend(instruction) {
   emit('refine-shot-chat', 'voice', props.selectedN, instruction)
 }
 
+function onSceneChatSend(instruction) {
+  if (!props.selectedN) return
+  emit('refine-shot-chat', 'scene', props.selectedN, instruction)
+}
+
+// 画面候选图轮播
+const currentCandidateIndex = ref(0)
+const sceneCandidatesList = computed(() => props.selected?.candidates || [])
+const currentCandidate = computed(() => sceneCandidatesList.value[currentCandidateIndex.value] || null)
+
+function prevCandidate() {
+  const len = sceneCandidatesList.value.length
+  if (!len) return
+  currentCandidateIndex.value = (currentCandidateIndex.value - 1 + len) % len
+}
+
+function nextCandidate() {
+  const len = sceneCandidatesList.value.length
+  if (!len) return
+  currentCandidateIndex.value = (currentCandidateIndex.value + 1) % len
+}
+
+watch(
+  () => props.selectedN,
+  () => {
+    currentCandidateIndex.value = 0
+  },
+)
+
 watch(
   () => props.castChatMessages.length,
   () => nextTick(() => castChatRef.value?.scrollToBottom?.()),
@@ -299,6 +376,11 @@ watch(
 watch(
   () => props.voiceChatMessages.length,
   () => nextTick(() => voiceChatRef.value?.scrollToBottom?.()),
+)
+
+watch(
+  () => props.sceneChatMessages.length,
+  () => nextTick(() => sceneChatRef.value?.scrollToBottom?.()),
 )
 
 watch(castCategory, () => {
@@ -1197,19 +1279,127 @@ const videoProgressPct = computed(() => {
   return Math.min(100, Math.round((finished / total) * 100))
 })
 
+const videoStatusTitle = computed(() => {
+  const s = props.videoGenProgress?.status
+  if (s === 'running') return '处理中'
+  if (s === 'done') return '完成'
+  if (s === 'error') return '失败'
+  return '状态'
+})
+
 const videoStatusLabel = computed(() => {
   const p = props.videoGenProgress
   if (!p) return '待命'
-  if (p.status === 'running') return videoProgressLabel.value || '视频生成中…'
-  if (p.status === 'done') return videoProgressLabel.value || '生成完成'
-  if (p.status === 'error') return videoProgressLabel.value || '生成失败'
-  return videoProgressLabel.value || '待命'
+  const count =
+    p.mode === 'batch' && p.total
+      ? `${p.current || 0}/${p.total}`
+      : ''
+  const msg =
+    p.status === 'running'
+      ? videoProgressLabel.value || '视频生成中…'
+      : p.status === 'done'
+        ? videoProgressLabel.value || '生成完成'
+        : p.status === 'error'
+          ? videoProgressLabel.value || '生成失败'
+          : videoProgressLabel.value || '待命'
+  return count ? `${count} · ${msg}` : msg
+})
+
+const voiceStatusTitle = computed(() => {
+  if (props.rendering) return '处理中'
+  if (props.selected && shotVoiceAudioUrl(props.selected)) return '完成'
+  return '状态'
 })
 
 const voiceStatusLabel = computed(() => {
   if (props.rendering) return '配音生成中…'
   if (props.selected && shotVoiceAudioUrl(props.selected)) return '配音已就绪'
   return '尚未生成配音'
+})
+
+const voiceStatusPct = computed(() => {
+  if (props.rendering) return 55
+  if (props.selected && shotVoiceAudioUrl(props.selected)) return 100
+  return 0
+})
+
+const voiceStatusState = computed(() => {
+  if (props.rendering) return 'running'
+  if (props.selected && shotVoiceAudioUrl(props.selected)) return 'done'
+  return 'idle'
+})
+
+const assembleStatusTitle = computed(() => {
+  if (props.rendering) return '处理中'
+  if (assembleMeta.value.exported) return '完成'
+  return '状态'
+})
+
+const assembleStatusPct = computed(() => {
+  if (props.rendering) return 55
+  if (assembleMeta.value.exported) return 100
+  return 0
+})
+
+const assembleStatusState = computed(() => {
+  if (props.rendering) return 'running'
+  if (assembleMeta.value.exported) return 'done'
+  return 'idle'
+})
+
+// 全局底部状态栏：按当前步骤返回对应的进度 / 状态 / 标题 / 消息。
+const statusBar = computed(() => {
+  switch (stage.value) {
+    case 'script':
+      return {
+        pct: scriptStatusPct.value,
+        status: props.scriptChatProgress?.status || 'idle',
+        title: scriptStatusTitle.value,
+        message: props.scriptChatProgress?.message || '就绪',
+      }
+    case 'cast': {
+      const list = props.characters || []
+      const withRef = list.filter((c) => c.ref_exists).length
+      return {
+        pct: list.length ? Math.round((withRef / list.length) * 100) : 0,
+        status: list.length && withRef === list.length ? 'done' : 'idle',
+        title: '角色',
+        message: list.length ? `定妆图 ${withRef}/${list.length}` : '暂无角色',
+      }
+    }
+    case 'scene': {
+      const gen = props.generatingCandidateNs || []
+      return {
+        pct: gen.length ? 40 : 0,
+        status: gen.length ? 'running' : 'idle',
+        title: '画面',
+        message: gen.length ? `正在生成 ${gen.length} 个候选图…` : '候选项待生成',
+      }
+    }
+    case 'video':
+      return {
+        pct: videoProgressPct.value,
+        status: props.videoGenProgress?.status || 'idle',
+        title: videoStatusTitle.value,
+        message: videoStatusLabel.value,
+      }
+    case 'voice':
+      return {
+        pct: voiceStatusPct.value,
+        status: voiceStatusState.value,
+        title: voiceStatusTitle.value,
+        message: voiceStatusLabel.value,
+      }
+    case 'assemble':
+      return {
+        pct: assembleStatusPct.value,
+        status: assembleStatusState.value,
+        title: assembleStatusTitle.value,
+        message: assembleStatusLabel.value,
+      }
+    default:
+      return { pct: 0, status: 'idle', title: '状态', message: '就绪' }
+  }
 })
 </script>
 
@@ -1311,67 +1501,59 @@ const voiceStatusLabel = computed(() => {
     <div v-if="project" class="drama-flow">
       <!-- ============ 阶段 1：剧本 ============ -->
       <section v-if="stage === 'script'" class="drama-stage-panel drama-script-stage">
-        <div class="drama-model-bar">
-          <label class="drama-model-bar-label">本步模型</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('script')"
-            :disabled="saving"
-            @change="onStageModelChange('script', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('script')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="drama-model-bar-hint">默认方舟；可改 DeepSeek / Kimi</span>
-        </div>
-        <div class="drama-panel-body drama-script-panels">
-          <div class="drama-script-panel drama-script-panel--generate">
-            <div class="drama-script-panel-inner">
-              <textarea
-                v-model="premise"
-                class="drama-script-premise"
-                rows="2"
-                placeholder="输入一句话故事梗概，例如：被赶出家门的豪门养女，重生回到三年前复仇翻盘。"
-              />
-              <button
-                type="button"
-                class="btn-primary drama-script-generate-btn"
-                :disabled="saving || rendering || !premise.trim()"
-                @click="onGenerateScript"
-              >
-                {{ saving ? '生成中…' : '生成剧本' }}
-              </button>
-            </div>
-          </div>
-
-          <div class="drama-script-panel drama-script-panel--edit">
-            <div class="drama-script-panel-head">
-              <span class="drama-script-panel-title">剧本（生成后可手动微调）</span>
-            </div>
-            <div class="drama-script-panel-inner drama-script-panel-inner--edit">
-              <textarea
-                class="drama-script-editor"
-                :value="scriptDraft"
-                spellcheck="false"
-                rows="16"
-                placeholder="# 标题&#10;- 时长: 60s&#10;## 分镜&#10;### Shot 1 (0-3s)"
-                @input="emit('update:scriptDraft', $event.target.value)"
-              />
-              <div class="drama-script-panel-actions">
-                <button
-                  type="button"
-                  class="btn-ghost"
-                  :disabled="saving || rendering || !scriptDraft.trim()"
-                  @click="emit('save-script')"
-                >
-                  {{ saving ? '保存中…' : '保存剧本' }}
-                </button>
+        <div class="drama-panel-body">
+          <div class="drama-script-layout">
+            <div class="drama-script-editor-col">
+              <div class="drama-script-panel drama-script-panel--edit">
+                <div class="drama-script-panel-head">
+                  <span class="drama-script-panel-title">剧本</span>
+                  <div class="drama-script-panel-head-actions">
+                    <label class="drama-model-bar-label">剧本模型</label>
+                    <select
+                      class="drama-model-select"
+                      :value="currentModelKey('script')"
+                      :disabled="saving || scriptChatLoading"
+                      @change="onStageModelChange('script', $event)"
+                    >
+                      <option
+                        v-for="opt in catalogOptions('script')"
+                        :key="`${opt.provider}|${opt.model}`"
+                        :value="`${opt.provider}|${opt.model}`"
+                      >
+                        {{ opt.label }}
+                      </option>
+                    </select>
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      :disabled="saving || rendering || !scriptDraft.trim()"
+                      @click="emit('save-script')"
+                    >
+                      {{ saving ? '保存中…' : '保存剧本' }}
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  class="drama-script-editor"
+                  :value="scriptDraft"
+                  spellcheck="false"
+                  rows="22"
+                  placeholder="在右侧对话生成或修改剧本；也可在此直接编辑后保存。"
+                  @input="emit('update:scriptDraft', $event.target.value)"
+                />
               </div>
+            </div>
+
+            <div class="drama-script-chat-col">
+              <DramaScriptChat
+                :messages="scriptChatMessages"
+                :loading="scriptChatLoading"
+                :disabled="!project || saving"
+                hint="用一句话描述故事即可生成剧本；已有剧本时可继续对话修改。首条可来自主聊天。"
+                placeholder="例如：豪门养女重生复仇，共1集60秒…"
+                pending-label="正在生成 / 修改剧本…"
+                @send="onScriptChatSend"
+              />
             </div>
           </div>
         </div>
@@ -1379,24 +1561,6 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 2：定妆资产 ============ -->
       <section v-else-if="stage === 'cast'" class="drama-stage-panel drama-cast-stage">
-        <div class="drama-model-bar">
-          <label class="drama-model-bar-label">定妆生图</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('character_ref')"
-            :disabled="saving"
-            @change="onStageModelChange('character_ref', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('character_ref')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="drama-model-bar-hint">默认 Seedream；单卡仍可在下方单独覆盖</span>
-        </div>
         <div class="drama-panel-body drama-cast-layout">
           <div class="drama-cast-sidebar">
             <div class="drama-cast-tabs">
@@ -1485,9 +1649,13 @@ const voiceStatusLabel = computed(() => {
                 </label>
                 <label class="drama-field">
                   模型
-                  <select v-model="charRefModelKey">
+                  <select
+                    :value="charRefModelKey"
+                    :disabled="saving"
+                    @change="onCastRefModelChange"
+                  >
                     <option
-                      v-for="opt in CAST_REF_MODELS"
+                      v-for="opt in catalogOptions('character_ref')"
                       :key="`${opt.provider}|${opt.model}`"
                       :value="`${opt.provider}|${opt.model}`"
                     >
@@ -1569,24 +1737,6 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 3：画面（可分镜出图） ============ -->
       <section v-else-if="stage === 'scene'" class="drama-stage-panel drama-scene-stage">
-        <div class="drama-model-bar">
-          <label class="drama-model-bar-label">本步模型</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('image')"
-            :disabled="saving"
-            @change="onStageModelChange('image', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('image')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="drama-model-bar-hint">默认 Seedream，作用于全部分镜出图</span>
-        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">
@@ -1625,77 +1775,64 @@ const voiceStatusLabel = computed(() => {
             <div class="drama-scene-detail-head">
               <h3>Shot {{ selected.n }}</h3>
               <div class="drama-scene-detail-actions">
-                <button
-                  type="button"
-                  class="btn-primary btn-sm"
-                  :disabled="rendering || shotFrozen || candidatesFull || selectedGeneratingCandidates"
-                  @click="onGenerateCandidate"
-                >
+                <button type="button" class="btn-primary btn-sm" :disabled="rendering || shotFrozen || candidatesFull || selectedGeneratingCandidates" @click="onGenerateCandidate">
                   {{ selectedGeneratingCandidates ? '生成中…' : '生成候选图' }}
                 </button>
-                <button
-                  type="button"
-                  class="btn-tiny"
-                  :disabled="rendering || shotFrozen"
-                  @click="emit('toggle-lock', 'scene')"
-                >
-                  {{ isLocked('scene') ? '解锁画面' : '锁定画面' }}
-                </button>
               </div>
             </div>
 
-            <div class="drama-scene-script">
-              <label class="drama-field">
-                画面描述
-                <textarea
-                  class="drama-scene-script-text"
-                  :value="selected.画面 || ''"
-                  rows="4"
-                  readonly
-                  placeholder="（剧本中尚未填写画面描述）"
-                />
-              </label>
-              <p class="drama-scene-script-hint">来自剧本分镜；修改请返回「剧本」步骤编辑对应 Shot 的「画面」字段。</p>
-              <div v-if="shotRolesLabel(selected) || selected.字幕 || selected.旁白 || selected.对白" class="drama-scene-meta">
-                <span v-if="shotRolesLabel(selected)" class="drama-scene-meta-item">
-                  <strong>角色</strong>{{ shotRolesLabel(selected) }}
-                </span>
-                <span v-if="selected.字幕 || selected.对白" class="drama-scene-meta-item">
-                  <strong>字幕</strong>{{ selected.字幕 || selected.对白 }}
-                </span>
-                <span v-if="selected.旁白" class="drama-scene-meta-item">
-                  <strong>旁白</strong>{{ selected.旁白 }}
-                </span>
-              </div>
-            </div>
-
-            <div class="drama-scene-main">
-              <div class="drama-scene-candidates">
-                <div class="drama-candidates-head">
-                  <h4>候选墙</h4>
-                  <span class="drama-candidate-count">{{ (selected.candidates || []).length }}/4</span>
-                  <span class="drama-candidate-hint">点击候选图锁定画面</span>
-                </div>
-                <div class="drama-candidate-grid drama-scene-candidate-grid">
-                  <div
-                    v-for="cand in selected.candidates || []"
-                    :key="cand.id"
-                    class="drama-candidate drama-scene-candidate"
-                    :class="{ chosen: isCandidateChosen(cand, selected) }"
-                    :title="isCandidateChosen(cand, selected) ? '已锁定此画面' : '点击锁定此画面'"
-                    @click="onChooseCandidate(cand.id)"
-                  >
-                    <DramaThumbImg
-                      v-if="candUrl(cand)"
-                      :src="candUrl(cand)"
-                      :alt="cand.id"
-                      loading="eager"
-                      fetchpriority="high"
-                    />
-                    <span v-else class="drama-candidate-empty">无图</span>
-                    <span class="drama-candidate-del" title="删除候选" @click.stop="emit('delete-candidate', cand.id)">×</span>
+            <div class="drama-scene-body">
+              <div class="drama-scene-left">
+                <div class="drama-scene-script">
+                  <label class="drama-field">
+                    画面描述
+                    <textarea class="drama-scene-script-text" :value="selected.画面 || ''" rows="4" readonly placeholder="（剧本中尚未填写画面描述）" />
+                  </label>
+                  <p class="drama-scene-script-hint">来自剧本分镜；修改请返回「剧本」步骤编辑对应 Shot 的「画面」字段。</p>
+                  <div v-if="shotRolesLabel(selected) || selected.字幕 || selected.旁白 || selected.对白" class="drama-scene-meta">
+                    <span v-if="shotRolesLabel(selected)" class="drama-scene-meta-item"><strong>角色</strong>{{ shotRolesLabel(selected) }}</span>
+                    <span v-if="selected.字幕 || selected.对白" class="drama-scene-meta-item"><strong>字幕</strong>{{ selected.字幕 || selected.对白 }}</span>
+                    <span v-if="selected.旁白" class="drama-scene-meta-item"><strong>旁白</strong>{{ selected.旁白 }}</span>
                   </div>
                 </div>
+
+                <div class="drama-stage-settings">
+                  <div class="drama-stage-settings-head">设置</div>
+                  <div class="drama-stage-settings-row">
+                    <label class="drama-field">
+                      出图模型
+                      <select class="drama-model-select" :value="currentModelKey('image')" :disabled="saving" @change="onStageModelChange('image', $event)">
+                        <option v-for="opt in catalogOptions('image')" :key="`${opt.provider}|${opt.model}`" :value="`${opt.provider}|${opt.model}`">{{ opt.label }}</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p class="drama-stage-settings-hint">作用于本项目全部分镜出图</p>
+                </div>
+              </div>
+
+              <div class="drama-scene-right">
+                <div class="drama-scene-candidates">
+                  <div class="drama-candidates-head">
+                    <h4>候选图</h4>
+                    <div class="drama-candidates-actions">
+                      <span class="drama-candidate-count">{{ sceneCandidatesList.length ? currentCandidateIndex + 1 : 0 }}/{{ sceneCandidatesList.length }}</span>
+                      <button type="button" class="btn-tiny" :disabled="rendering || shotFrozen" @click="emit('toggle-lock', 'scene')">
+                        {{ isLocked('scene') ? '解锁' : '锁定' }}
+                      </button>
+                      <button type="button" class="btn-tiny" :disabled="!currentCandidate" @click="emit('delete-candidate', currentCandidate && currentCandidate.id)">删除</button>
+                    </div>
+                  </div>
+                  <div class="drama-scene-carousel">
+                    <button type="button" class="drama-candidate-nav drama-candidate-prev" :disabled="sceneCandidatesList.length <= 1" @click="prevCandidate">‹</button>
+                    <div class="drama-candidate-frame">
+                      <DramaThumbImg v-if="currentCandidate && candUrl(currentCandidate)" :key="currentCandidate.id" :src="candUrl(currentCandidate)" :alt="currentCandidate.id" loading="eager" fetchpriority="high" />
+                      <span v-else class="drama-candidate-empty">无候选图，点击「生成候选图」</span>
+                    </div>
+                    <button type="button" class="drama-candidate-nav drama-candidate-next" :disabled="sceneCandidatesList.length <= 1" @click="nextCandidate">›</button>
+                  </div>
+                </div>
+
+                <DramaCastChat ref="sceneChatRef" class="drama-scene-chat" title="对话改画面" :character-name="`Shot ${selected.n}`" hint="用自然语言调整画面描述等；保存后可点「生成候选图」生效。" placeholder="例如：改成分镜特写、画面加一条小河…" disabled-placeholder="请先选择镜头" pending-label="正在理解并更新…" :messages="sceneChatMessages" :loading="saving" @send="onSceneChatSend" />
               </div>
             </div>
           </div>
@@ -1708,24 +1845,6 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 4：视频 ============ -->
       <section v-else-if="stage === 'video'" class="drama-stage-panel drama-video-stage">
-        <div class="drama-model-bar">
-          <label class="drama-model-bar-label">本步模型</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('motion')"
-            :disabled="saving"
-            @change="onStageModelChange('motion', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('motion')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="drama-model-bar-hint">默认 Seedance（图生视频）</span>
-        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">
@@ -1788,7 +1907,9 @@ const voiceStatusLabel = computed(() => {
               </div>
             </div>
 
-            <div class="drama-scene-script">
+            <div class="drama-scene-body">
+              <div class="drama-scene-left">
+                <div class="drama-scene-script">
               <label class="drama-field">
                 画面描述
                 <textarea
@@ -1800,6 +1921,22 @@ const voiceStatusLabel = computed(() => {
                 />
               </label>
               <div class="drama-voice-meta-row drama-video-meta-row">
+                <label class="drama-voice-kv">
+                  <strong>模型</strong>
+                  <select
+                    :value="currentModelKey('motion')"
+                    :disabled="saving"
+                    @change="onStageModelChange('motion', $event)"
+                  >
+                    <option
+                      v-for="opt in catalogOptions('motion')"
+                      :key="`${opt.provider}|${opt.model}`"
+                      :value="`${opt.provider}|${opt.model}`"
+                    >
+                      {{ opt.label }}
+                    </option>
+                  </select>
+                </label>
                 <label class="drama-voice-kv">
                   <strong>运镜</strong>
                   <select v-model="draft.camera">
@@ -1846,9 +1983,10 @@ const voiceStatusLabel = computed(() => {
                 </label>
               </div>
             </div>
+              </div>
 
-            <div class="drama-scene-main drama-av-main">
-              <div class="drama-av-preview-panel">
+              <div class="drama-scene-right">
+                <div class="drama-av-preview-panel">
                 <div class="drama-av-preview-area">
                   <div class="drama-av-frame">
                     <video
@@ -1871,28 +2009,10 @@ const voiceStatusLabel = computed(() => {
                     <div v-else class="drama-stage-empty">本镜尚未出图或视频，请先在「画面」步骤锁定关键帧</div>
                   </div>
                 </div>
-                <div
-                  class="drama-video-progress drama-av-status"
-                  :class="{
-                    'is-idle': !videoGenProgress,
-                    'is-running': videoGenProgress?.status === 'running',
-                    'is-done': videoGenProgress?.status === 'done',
-                    'is-error': videoGenProgress?.status === 'error',
-                  }"
-                >
-                  <div class="drama-video-progress-head">
-                    <span class="drama-video-progress-label">{{ videoStatusLabel }}</span>
-                    <span v-if="videoGenProgress?.mode === 'batch'" class="drama-video-progress-count">
-                      {{ videoGenProgress.current || 0 }}/{{ videoGenProgress.total || 0 }}
-                    </span>
-                  </div>
-                  <div class="drama-video-progress-bar">
-                    <div class="drama-video-progress-fill" :style="{ width: `${videoGenProgress ? videoProgressPct : 0}%` }" />
-                  </div>
-                </div>
               </div>
               <DramaCastChat
                 ref="videoChatRef"
+                class="drama-scene-chat"
                 title="对话改视频"
                 :character-name="`Shot ${selected.n}`"
                 hint="用自然语言调整运镜、时长、I2V 模式等；保存后可点「生成视频」生效。"
@@ -1903,6 +2023,7 @@ const voiceStatusLabel = computed(() => {
                 :loading="saving"
                 @send="onVideoChatSend"
               />
+              </div>
             </div>
           </div>
 
@@ -1914,39 +2035,6 @@ const voiceStatusLabel = computed(() => {
 
       <!-- ============ 阶段 5：声音 ============ -->
       <section v-else-if="stage === 'voice'" class="drama-stage-panel drama-voice-stage">
-        <div class="drama-model-bar">
-          <label class="drama-model-bar-label">配音</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('tts')"
-            :disabled="saving"
-            @change="onStageModelChange('tts', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('tts')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <label class="drama-model-bar-label">口型</label>
-          <select
-            class="drama-model-select"
-            :value="currentModelKey('lip')"
-            :disabled="saving"
-            @change="onStageModelChange('lip', $event)"
-          >
-            <option
-              v-for="opt in catalogOptions('lip')"
-              :key="`${opt.provider}|${opt.model}`"
-              :value="`${opt.provider}|${opt.model}`"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="drama-model-bar-hint">默认 Seed Audio + PixVerse</span>
-        </div>
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
             <div class="drama-scene-list">
@@ -2000,7 +2088,9 @@ const voiceStatusLabel = computed(() => {
               </div>
             </div>
 
-            <div class="drama-scene-script">
+            <div class="drama-scene-body">
+              <div class="drama-scene-left">
+                <div class="drama-scene-script">
               <div class="drama-voice-script-row">
                 <label class="drama-field">
                   字幕
@@ -2036,22 +2126,51 @@ const voiceStatusLabel = computed(() => {
                   <span class="drama-voice-readonly">{{ selectedSpeakerVoiceLabel }}</span>
                 </div>
                 <div class="drama-voice-kv">
-                  <strong>口型</strong>
+                  <strong>口型状态</strong>
                   <span class="drama-voice-readonly">{{ lipStatusLabel(selected) }}</span>
                 </div>
-                <div class="drama-voice-kv">
-                  <strong>模型</strong>
-                  <span class="drama-voice-readonly">{{ selected?.lip?.wanted_provider || selected?.lip?.provider || selected?.lip_source || '—' }}</span>
-                </div>
+                <label class="drama-voice-kv">
+                  <strong>配音</strong>
+                  <select
+                    :value="currentModelKey('tts')"
+                    :disabled="saving"
+                    @change="onStageModelChange('tts', $event)"
+                  >
+                    <option
+                      v-for="opt in catalogOptions('tts')"
+                      :key="`${opt.provider}|${opt.model}`"
+                      :value="`${opt.provider}|${opt.model}`"
+                    >
+                      {{ opt.label }}
+                    </option>
+                  </select>
+                </label>
+                <label class="drama-voice-kv">
+                  <strong>口型</strong>
+                  <select
+                    :value="currentModelKey('lip')"
+                    :disabled="saving"
+                    @change="onStageModelChange('lip', $event)"
+                  >
+                    <option
+                      v-for="opt in catalogOptions('lip')"
+                      :key="`${opt.provider}|${opt.model}`"
+                      :value="`${opt.provider}|${opt.model}`"
+                    >
+                      {{ opt.label }}
+                    </option>
+                  </select>
+                </label>
                 <div class="drama-voice-kv" :class="identityClass">
                   <strong>身份</strong>
                   <span class="drama-voice-readonly">{{ identityLabel }}</span>
                 </div>
               </div>
             </div>
+              </div>
 
-            <div class="drama-scene-main drama-av-main">
-              <div class="drama-av-preview-panel">
+              <div class="drama-scene-right">
+                <div class="drama-av-preview-panel">
                 <div class="drama-av-preview-area">
                   <div class="drama-av-frame drama-voice-frame">
                     <video
@@ -2110,27 +2229,10 @@ const voiceStatusLabel = computed(() => {
                   @pause="onVoiceAudioPause"
                   @ended="onVoiceAudioEnded"
                 />
-                <div
-                  class="drama-video-progress drama-av-status"
-                  :class="{
-                    'is-idle': !rendering && !shotVoiceAudioUrl(selected),
-                    'is-running': rendering,
-                    'is-done': !rendering && !!shotVoiceAudioUrl(selected),
-                  }"
-                >
-                  <div class="drama-video-progress-head">
-                    <span class="drama-video-progress-label">{{ voiceStatusLabel }}</span>
-                  </div>
-                  <div class="drama-video-progress-bar">
-                    <div
-                      class="drama-video-progress-fill"
-                      :style="{ width: rendering ? '55%' : shotVoiceAudioUrl(selected) ? '100%' : '0%' }"
-                    />
-                  </div>
-                </div>
               </div>
               <DramaCastChat
                 ref="voiceChatRef"
+                class="drama-scene-chat"
                 title="对话改配音"
                 :character-name="`Shot ${selected.n}`"
                 hint="用自然语言改字幕或旁白；保存后可点「生成配音」生效。说话人用上方下拉选择，音色只读跟随角色卡。"
@@ -2141,6 +2243,7 @@ const voiceStatusLabel = computed(() => {
                 :loading="saving"
                 @send="onVoiceChatSend"
               />
+              </div>
             </div>
           </div>
 
@@ -2172,12 +2275,6 @@ const voiceStatusLabel = computed(() => {
                 </div>
               </div>
               <div class="drama-assemble-status" :class="assembleStatusClass">
-                <div class="drama-assemble-status-top">
-                  <span class="drama-assemble-pill" :class="assembleMeta.exported ? 'is-ok' : 'is-wait'">
-                    {{ assembleMeta.exported ? '已导出' : '待导出' }}
-                  </span>
-                  <span class="drama-assemble-status-msg">{{ assembleStatusLabel }}</span>
-                </div>
                 <dl class="drama-assemble-status-kv">
                   <div>
                     <dt>镜头</dt>
@@ -2198,12 +2295,6 @@ const voiceStatusLabel = computed(() => {
                     </dd>
                   </div>
                 </dl>
-                <div class="drama-video-progress-bar">
-                  <div
-                    class="drama-video-progress-fill"
-                    :style="{ width: rendering ? '55%' : assembleMeta.exported ? '100%' : '0%' }"
-                  />
-                </div>
               </div>
             </div>
 
@@ -2275,9 +2366,18 @@ const voiceStatusLabel = computed(() => {
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
         <li><strong>1. 立项</strong> 在对话里说「帮我立项一个 xxx 漫剧」或点左侧项目</li>
-        <li><strong>2. 剧本</strong> 一句话生成完整剧本与分镜</li>
+        <li><strong>2. 剧本</strong> 对话生成或编写剧本与分镜</li>
         <li><strong>3. 一路生成</strong> 角色 → 画面 → 视频 → 声音 → 成片</li>
       </ol>
+    </div>
+
+    <div v-if="project" class="drama-script-status">
+      <DramaProgressStatusBar
+        :pct="statusBar.pct"
+        :status="statusBar.status"
+        :title="statusBar.title"
+        :message="statusBar.message"
+      />
     </div>
 
   </main>

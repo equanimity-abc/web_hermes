@@ -23,6 +23,9 @@ export function useDramaStudio() {
   const charDraft = ref(emptyCharDraft())
   const castChatHistory = ref({})
   const shotChatHistory = ref({})
+  const scriptChatHistory = ref({})
+  const scriptChatProgress = ref({ status: 'idle', message: '', pct: null })
+  const scriptChatLoading = ref(false)
   const timelineOrder = ref([])
   const tlDraft = ref(emptyTlDraft())
   const mixDraft = ref(emptyMixDraft())
@@ -1039,6 +1042,7 @@ export function useDramaStudio() {
     const text = String(premise || '').trim()
     if (!text) {
       error.value = '请先给一句故事梗概'
+      scriptChatProgress.value = { status: 'error', message: error.value, pct: null }
       return
     }
     // init 立项后可能还没有任何分集（episodeN == null），此时默认落到 EP01。
@@ -1047,6 +1051,7 @@ export function useDramaStudio() {
     saving.value = true
     error.value = ''
     notice.value = '正在根据梗概生成剧本…'
+    scriptChatProgress.value = { status: 'running', message: '正在根据梗概生成剧本…', pct: 20 }
     try {
       const data = await dramaApi.generateScript(slug.value, ep, text)
       episodeN.value = data.episode || ep
@@ -1060,14 +1065,105 @@ export function useDramaStudio() {
       }
       const keep = (data.shots || []).some((s) => s.n === selectedN.value)
       selectShot(keep ? selectedN.value : data.shots?.[0]?.n || null)
-      notice.value = (data.shots || []).length
-        ? `已生成剧本，共 ${data.shots.length} 镜`
-        : '剧本已生成'
+      const shotCount = (data.shots || []).length
+      notice.value = shotCount ? `已生成剧本，共 ${shotCount} 镜` : '剧本已生成'
+      scriptChatProgress.value = {
+        status: 'done',
+        message: notice.value,
+        pct: 100,
+      }
       return data
     } catch (e) {
       error.value = e.message || String(e)
+      scriptChatProgress.value = { status: 'error', message: error.value, pct: null }
     } finally {
       saving.value = false
+    }
+  }
+
+  function scriptChatKey() {
+    if (!slug.value) return null
+    return `${slug.value}:ep${episodeN.value || 1}`
+  }
+
+  function scriptChatMessages() {
+    const key = scriptChatKey()
+    if (!key) return []
+    return scriptChatHistory.value[key] || []
+  }
+
+  function pushScriptChatMessage(role, content, extra = {}) {
+    const key = scriptChatKey()
+    if (!key || !content) return
+    const prev = scriptChatHistory.value[key] || []
+    scriptChatHistory.value = {
+      ...scriptChatHistory.value,
+      [key]: [...prev, { role, content, ...extra }],
+    }
+  }
+
+  function ensureScriptChatSeed(seedText) {
+    const key = scriptChatKey()
+    if (!key) return
+    const prev = scriptChatHistory.value[key] || []
+    if (prev.length) return
+    const text = String(seedText || '').trim()
+    if (!text) return
+    scriptChatHistory.value = {
+      ...scriptChatHistory.value,
+      [key]: [{ role: 'user', content: text, seed: true }],
+    }
+  }
+
+  async function sendScriptChat(instruction) {
+    const text = String(instruction || '').trim()
+    if (!slug.value || !text || scriptChatLoading.value) return null
+    pushScriptChatMessage('user', text)
+    scriptChatLoading.value = true
+    error.value = ''
+    scriptChatProgress.value = { status: 'running', message: '正在处理…', pct: 10 }
+    try {
+      if (!String(scriptDraft.value || '').trim()) {
+        scriptChatProgress.value = { status: 'running', message: '正在根据一句话生成剧本…', pct: 25 }
+        const data = await generateScriptFromPremise(text)
+        if (!data) {
+          pushScriptChatMessage('assistant', error.value || '生成失败')
+          return null
+        }
+        const shotCount = (data.shots || []).length
+        const reply = shotCount
+          ? `已根据你的描述生成剧本，共 ${shotCount} 镜。可在左侧微调或继续对话修改。`
+          : '已根据你的描述生成剧本。可在左侧微调或继续对话修改。'
+        pushScriptChatMessage('assistant', reply)
+        return data
+      }
+
+      scriptChatProgress.value = { status: 'running', message: '正在按要求修改剧本…', pct: 30 }
+      const ep = episodeN.value || 1
+      const refined = await dramaApi.refineScript(slug.value, ep, scriptDraft.value, text)
+      scriptDraft.value = refined.content || scriptDraft.value
+      scriptChatProgress.value = { status: 'running', message: '正在保存…', pct: 70 }
+      await saveScriptChanges()
+      if (error.value) {
+        scriptChatProgress.value = { status: 'error', message: error.value, pct: null }
+        pushScriptChatMessage('assistant', error.value)
+        return null
+      }
+      pushScriptChatMessage('assistant', '已按你的要求修改剧本并保存')
+      scriptChatProgress.value = {
+        status: 'done',
+        message: '已按你的要求修改剧本并保存',
+        pct: 100,
+      }
+      notice.value = '已按你的要求修改剧本并保存'
+      return refined
+    } catch (e) {
+      error.value = e.message || String(e)
+      scriptChatProgress.value = { status: 'error', message: error.value, pct: null }
+      pushScriptChatMessage('assistant', error.value)
+      return null
+    } finally {
+      scriptChatLoading.value = false
     }
   }
 
@@ -2535,6 +2631,12 @@ export function useDramaStudio() {
     previewScriptChanges,
     saveScriptChanges,
     generateScriptFromPremise,
+    scriptChatHistory,
+    scriptChatProgress,
+    scriptChatLoading,
+    scriptChatMessages,
+    ensureScriptChatSeed,
+    sendScriptChat,
     rerenderDirtyShots,
     selectCharacter,
     toggleShotRole,

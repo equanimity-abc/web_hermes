@@ -158,6 +158,11 @@ class ScriptGenerateBody(BaseModel):
     title: str | None = None
 
 
+class ScriptRefineBody(BaseModel):
+    content: str = Field(min_length=1)
+    instruction: str = Field(default="精修改写，保留原意并提升剧本表达。", min_length=1, max_length=2000)
+
+
 class CharacterBody(BaseModel):
     id: str | None = None
     name: str | None = None
@@ -634,6 +639,22 @@ def drama_generate_script(slug: str, episode: int, body: ScriptGenerateBody):
     # 内部的 asyncio.run() 会在事件循环里抛 RuntimeError（500）。
     try:
         return generate_episode_script(slug, episode, body.premise)
+    except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/script/refine")
+def drama_refine_script(slug: str, episode: int, body: ScriptRefineBody):
+    # 同步 def：refine_text_sync 内部使用 asyncio.run()。
+    try:
+        from tools.drama_script import refine_text_sync
+        from tools.drama_studio import get_project, parse_episode, parse_slug
+
+        slug = parse_slug(slug)
+        n = parse_episode(episode)
+        get_project(slug)
+        refined = refine_text_sync(slug, body.content, instruction=body.instruction)
+        return {"slug": slug, "episode": n, "content": refined, "chars": len(refined)}
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 

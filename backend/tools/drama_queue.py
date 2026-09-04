@@ -313,7 +313,12 @@ class DramaQueue:
                 if job.cancelled():
                     job.touch(status="cancelled", result=None, error=None)
                 else:
-                    job.touch(status="error", error=str(e), result=None)
+                    err = str(e)
+                    prog = job.progress or {}
+                    if prog.get("shot") and f"Shot {prog['shot']}" not in err and f"第{prog['shot']}镜" not in err:
+                        err = f"第{prog['shot']}镜：{err}"
+                    job.touch(status="error", error=err, result=None)
+                    self._progress(job, message=err)
             self._release_busy(job)
             self._persist(job)
 

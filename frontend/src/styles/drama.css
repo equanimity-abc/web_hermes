@@ -30,7 +30,6 @@
   flex-direction: column;
   --drama-shot-cell: 110px;
   background: var(--color-bg);
-  padding-bottom: 88px;
 }
 
 .drama-top {
@@ -395,57 +394,14 @@
   bottom: 0;
   z-index: 40;
   background: #fff;
-  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
   box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
   max-height: 200px;
   overflow: auto;
 }
 
-.drama-batch-progress {
-  padding: 10px 16px 8px;
-  border-bottom: 1px solid var(--color-border-soft, #e5e7eb);
-}
-
-.drama-batch-progress-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.drama-batch-progress-head strong {
-  color: var(--color-text);
-  font-size: 13px;
-}
-
-.drama-batch-progress-msg {
-  margin: 4px 0 8px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.drama-batch-progress-track {
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-border-soft, #e5e7eb);
-  overflow: hidden;
-}
-
-.drama-batch-progress-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--color-primary);
-  transition: width 0.25s ease;
-}
-
-.drama-batch-progress.is-done .drama-batch-progress-fill {
-  background: #16a34a;
-}
-
-.drama-batch-progress.is-error .drama-batch-progress-fill {
-  background: var(--color-danger, #dc2626);
+.drama-job-bar-progress {
+  margin: 8px 12px;
 }
 
 .drama-job-bar-head {
@@ -1184,12 +1140,176 @@
   justify-self: center;
 }
 
-/* —— 剧本页上下分区 —— */
-.drama-script-stage .drama-panel-body {
+/* —— 剧本页：左编辑 + 右对话 —— */
+.drama-script-stage {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+}
+
+.drama-script-stage .drama-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.drama-script-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+
+.drama-script-editor-col,
+.drama-script-chat-col {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drama-script-editor-col .drama-script-panel--edit {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.drama-script-editor-col .drama-script-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+
+.drama-script-panel-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drama-script-panel-head .drama-model-select {
+  max-width: 220px;
+}
+
+.drama-script-editor-col .drama-script-editor {
+  flex: 1;
+  min-height: 320px;
+  margin: 0 14px 14px;
+  width: calc(100% - 28px);
+  resize: none;
+}
+
+.drama-script-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.drama-script-chat-messages {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drama-script-chat-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.drama-script-chat-msg {
+  display: flex;
+}
+
+.drama-script-chat-msg.user {
+  justify-content: flex-end;
+}
+
+.drama-script-chat-msg.assistant {
+  justify-content: flex-start;
+}
+
+.drama-script-chat-bubble {
+  max-width: 92%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.drama-script-chat-msg.user .drama-script-chat-bubble {
+  background: #eef2ff;
+  color: #312e81;
+}
+
+.drama-script-chat-msg.assistant .drama-script-chat-bubble {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.drama-script-chat-bubble--pending {
+  opacity: 0.75;
+  font-style: italic;
+}
+
+.drama-script-chat-input {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--color-border);
+  background: #fafafa;
+}
+
+.drama-script-chat-textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.drama-script-chat-send {
+  flex-shrink: 0;
+}
+
+.drama-script-status {
+  flex-shrink: 0;
+  height: 55px;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  background: #fff;
+  padding: 0 20px;
+}
+
+.drama-script-status .drama-progress-status-bar {
+  width: 100%;
 }
 
 .drama-script-panel {
@@ -1199,51 +1319,10 @@
   overflow: hidden;
 }
 
-.drama-script-panel--generate {
-  border-color: var(--color-primary);
-  background: var(--color-primary-soft);
-}
-
-.drama-script-panel-head {
-  padding: 10px 14px 0;
-}
-
 .drama-script-panel-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-secondary);
-}
-
-.drama-script-panel-inner {
-  display: flex;
-  align-items: stretch;
-  gap: 12px;
-  padding: 14px;
-}
-
-.drama-script-panel-inner--edit {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-.drama-script-premise {
-  flex: 1;
-  min-height: 56px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-text);
-  background: #fff;
-  resize: vertical;
-}
-
-.drama-script-generate-btn {
-  align-self: stretch;
-  min-width: 108px;
-  white-space: nowrap;
 }
 
 .drama-script-editor {
@@ -1259,11 +1338,7 @@
   color: var(--color-text);
   background: #fff;
   resize: vertical;
-}
-
-.drama-script-panel-actions {
-  display: flex;
-  justify-content: flex-end;
+  box-sizing: border-box;
 }
 
 /* —— P0-1 可点击步骤条 —— */
@@ -1359,36 +1434,6 @@
 .drama-status-dot.is-todo {
   background: var(--color-bg-muted);
   color: var(--color-text-faint);
-}
-
-/* —— P1-3 本镜状态聚合条 —— */
-.drama-status-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-.drama-status-tag {
-  font-size: 12px;
-  line-height: 1.4;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.drama-status-tag--muted {
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-.drama-status-tag--info {
-  color: #4338ca;
-  background: #eef2ff;
-}
-.drama-status-tag--dirty {
-  color: #b45309;
-  background: #fff7ed;
 }
 
 /* —— P0-2 检查器折叠分组（accordion） —— */
@@ -1576,6 +1621,7 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  padding-bottom: 2px;
 }
 .drama-stage-panel {
   flex: 1;
@@ -1624,11 +1670,40 @@
   color: var(--color-text-faint);
 }
 
+.drama-stage-settings {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+}
+.drama-stage-settings-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+.drama-stage-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.drama-stage-settings-row .drama-field {
+  min-width: 220px;
+  flex: 1;
+}
+.drama-stage-settings-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
 .drama-panel-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 20px 20px;
+  padding: 16px 20px 0;
 }
 
 .drama-assemble-body {
@@ -1720,32 +1795,10 @@
 .drama-assemble-status {
   flex: 0 0 auto;
   margin: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: #f8fafc;
-  border: 1px solid var(--color-border);
-  border-top: 2px solid rgba(37, 99, 235, 0.35);
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.drama-assemble-status-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.drama-assemble-status-msg {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .drama-assemble-status-kv {
@@ -1753,6 +1806,10 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border);
 }
 
 .drama-assemble-status-kv dt {
@@ -1769,35 +1826,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.drama-assemble-status .drama-video-progress-bar {
-  margin: 0;
-  background: var(--color-bg-muted);
-}
-
-.drama-assemble-status.is-idle .drama-video-progress-fill {
-  background: rgba(15, 23, 42, 0.15);
-}
-
-.drama-assemble-pill {
-  flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--color-bg-muted);
-  color: var(--color-text-muted);
-}
-
-.drama-assemble-pill.is-ok {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.drama-assemble-pill.is-wait {
-  background: #fef3c7;
-  color: #92400e;
 }
 
 .drama-assemble-side {
@@ -2592,11 +2620,11 @@
   line-height: 1.45;
 }
 
-.drama-av-status,
-.drama-av-preview-panel .drama-video-progress {
+.drama-av-status {
   flex: 0 0 auto;
-  min-height: 58px;
-  margin: 10px 10px 10px;
+  min-height: 0;
+  height: 40px;
+  margin: 10px;
   box-sizing: border-box;
 }
 
@@ -2788,6 +2816,29 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+/* 视频 / 声音页左侧栏内的配置与字幕/旁白改为纵向堆叠，每项占满整行、靠左 */
+.drama-scene-left .drama-voice-meta-row,
+.drama-scene-left .drama-voice-script-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
+/* 左侧配置项：左对齐、支持换行，标签与值保持同一水平线 */
+.drama-scene-left .drama-voice-kv {
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.drama-scene-left .drama-voice-kv > span {
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .drama-voice-kv {
   display: flex;
   align-items: center;
@@ -2848,92 +2899,6 @@
   .drama-voice-meta-row {
     grid-template-columns: 1fr 1fr;
   }
-}
-
-.drama-video-progress {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: #fff;
-}
-
-.drama-av-status.drama-video-progress {
-  margin-top: 0;
-  background: #2a3648;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-top: 2px solid rgba(147, 197, 253, 0.45);
-  box-shadow:
-    0 -6px 16px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.drama-av-status .drama-video-progress-label {
-  color: #d1d5db;
-}
-
-.drama-av-status .drama-video-progress-count {
-  color: #93c5fd;
-}
-
-.drama-av-status .drama-video-progress-bar {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.drama-av-status.is-idle .drama-video-progress-fill {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.drama-video-progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.drama-video-progress-label {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  line-height: 1.4;
-}
-
-.drama-video-progress-count {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.drama-video-progress-bar {
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-bg-muted);
-  overflow: hidden;
-}
-
-.drama-video-progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--color-primary);
-  transition: width 0.25s ease;
-}
-
-.drama-video-progress.is-running .drama-video-progress-fill {
-  background: #f59e0b;
-}
-
-.drama-video-progress.is-done .drama-video-progress-fill {
-  background: #10b981;
-}
-
-.drama-video-progress.is-error .drama-video-progress-fill {
-  background: #ef4444;
-}
-
-.drama-video-progress.is-error .drama-video-progress-label {
-  color: #ef4444;
 }
 
 .drama-scene-thumb {
@@ -3113,6 +3078,141 @@
 
 .drama-scene-candidate-grid {
   margin-top: 10px;
+}
+
+/* —— 画面页：左侧信息 + 右侧轮播/聊天 —— */
+.drama-scene-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+
+.drama-scene-left {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.drama-scene-left .drama-scene-script {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.drama-scene-left .drama-stage-settings {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.drama-scene-right {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drama-scene-right .drama-scene-candidates {
+  flex: 3 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drama-scene-right .drama-av-preview-panel {
+  flex: 3 1 0;
+  min-height: 0;
+  width: 100%;
+  border-right: none;
+}
+
+.drama-scene-right .drama-cast-chat {
+  flex: 2 1 0 !important;
+}
+
+.drama-scene-carousel {
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drama-candidate-nav {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-text);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drama-candidate-nav:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.drama-candidate-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.drama-candidate-frame {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.drama-candidate-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.drama-candidate-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.drama-candidate-lock-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-muted);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.drama-candidate-lock-status.is-locked {
+  background: #ecfdf5;
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.drama-scene-chat {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .btn-sm {

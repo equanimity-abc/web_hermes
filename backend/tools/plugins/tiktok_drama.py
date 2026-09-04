@@ -1483,9 +1483,9 @@ def register_tiktok_drama() -> None:
         "已有剧本项目要出片用 produce_episode（同样单图+锁定妆+自动导出）。"
         "小改单镜后用 export_timeline。"
         "create_from_premise / produce_episode 默认异步（返回 job_id），"
-        "用 poll_job 查进度或看工作台任务条；完成后 result 含 play_url。"
-        "不要循环狂刷 poll_job；回复里带上 job_id，完成后务必带 play_url（多集时说明各集），"
-        "聊天会自动嵌入成片预览，并提示可去漫剧工作台微调。"
+        "前端对话框会继续等待进度与结果（失败也会显示第几镜/原因）；"
+        "不要让用户「自己去工作台干等」；可用 poll_job 查进度或看工作台任务条，但回复里先说明已在后台渲染。"
+        "完成后务必带 play_url（多集时说明各集），聊天会自动嵌入成片预览，并提示可去漫剧工作台微调。"
     )
 
 

@@ -2,12 +2,16 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
-import SettingsModal from '@/components/layout/SettingsModal.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
 import DramaJobBar from '@/components/drama/DramaJobBar.vue'
+import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
+import {
+  peekSessionMessages,
+  clearSessionMessageCache,
+} from '@/composables/useDramaChatProgress'
 import { useDramaStudio } from '@/composables/useDramaStudio'
 import { useSessions } from '@/composables/useSessions'
 import { useSidebarResize } from '@/composables/useSidebarResize'
@@ -15,7 +19,6 @@ import { useClipboardToast } from '@/composables/useClipboardToast'
 
 const chatViewRef = ref(null)
 const view = ref('chat')
-const settingsOpen = ref(false)
 const {
   projects: dramaProjects,
   slug: dramaSlug,
@@ -55,7 +58,11 @@ const {
   toggleLock,
   previewScriptChanges,
   saveScriptChanges,
-  generateScriptFromPremise,
+  scriptChatProgress,
+  scriptChatLoading,
+  scriptChatMessages,
+  ensureScriptChatSeed,
+  sendScriptChat,
   rerenderDirtyShots,
   selectCharacter,
   toggleShotRole,
@@ -161,6 +168,7 @@ const {
 const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
 const dramaVideoChatMessages = computed(() => shotChatMessages('video', dramaSelectedN.value))
 const dramaVoiceChatMessages = computed(() => shotChatMessages('voice', dramaSelectedN.value))
+const dramaSceneChatMessages = computed(() => shotChatMessages('scene', dramaSelectedN.value))
 
 const {
   currentSessionId,
@@ -191,6 +199,8 @@ const {
   regenerateResponse,
   toggleLike,
   toggleDislike,
+  stashCurrent,
+  resumeAfterMessagesLoad,
 } = useChat({
   getSessionId: () => currentSessionId.value,
   setSessionId: (id) => {
@@ -201,8 +211,48 @@ const {
   onTurnComplete: () => refreshSessionList(),
 })
 
+const dramaScriptChatMessages = computed(() => scriptChatMessages())
+const firstUserContent = computed(() => {
+  const msg = (messages.value || []).find((m) => m.role === 'user')
+  return String(msg?.content || '').trim()
+})
+
+const dramaBatchPct = computed(() => {
+  const p = dramaBatchProgress.value
+  if (!p) return 0
+  if (p.total) {
+    return Math.min(100, Math.round(((p.current || 0) / p.total) * 100))
+  }
+  if (p.status === 'done') return 100
+  if (p.status === 'running') return 35
+  return 0
+})
+
+const dramaBatchStatusTitle = computed(() => {
+  const s = dramaBatchProgress.value?.status
+  if (s === 'running') return '处理中'
+  if (s === 'done') return '完成'
+  if (s === 'error') return '失败'
+  return dramaBatchProgress.value?.label || '批量任务'
+})
+
+const dramaBatchStatusMessage = computed(() => {
+  const p = dramaBatchProgress.value
+  if (!p) return ''
+  const parts = []
+  if (p.label) parts.push(p.label)
+  if (p.total) {
+    let count = `${p.current || 0}/${p.total}`
+    if (p.failed) count += ` · 失败 ${p.failed}`
+    parts.push(count)
+  }
+  if (p.message) parts.push(p.message)
+  return parts.filter(Boolean).join(' · ') || '就绪'
+})
+
 function newChat() {
   view.value = 'chat'
+  stashCurrent(currentSessionId.value || '__draft__')
   clearCurrentSession()
   resetConversation()
   nextTick(() => chatViewRef.value?.focusComposer?.())
@@ -214,10 +264,25 @@ async function switchSession(sessionId) {
   if (sessionId === currentSessionId.value && isLoading.value) {
     return
   }
+
+  // Keep live progress for the session we leave
+  const leaving = currentSessionId.value || '__draft__'
+  stashCurrent(leaving)
+
   setCurrentSessionId(sessionId)
+  const cached = peekSessionMessages(sessionId)
+  if (cached && cached.length) {
+    setMessages(cached)
+    void resumeAfterMessagesLoad(sessionId)
+    nextTick(() => chatViewRef.value?.scrollToBottom?.())
+    return
+  }
   try {
     const list = await loadSessionMessages(sessionId)
     setMessages(list)
+    // Cache the live array reference so later switches keep dramaJob updates
+    stashCurrent(sessionId)
+    void resumeAfterMessagesLoad(sessionId)
   } catch (e) {
     console.error('加载会话失败:', e)
   }
@@ -225,6 +290,7 @@ async function switchSession(sessionId) {
 
 async function deleteSession(sessionId) {
   try {
+    clearSessionMessageCache(sessionId)
     await removeSession(sessionId)
     if (sessionId === currentSessionId.value) newChat()
   } catch (e) {
@@ -249,18 +315,18 @@ async function onAttach(file) {
 }
 
 function setView(next) {
+  if (next === 'drama') {
+    stashCurrent(currentSessionId.value || '__draft__')
+  }
   view.value = next
 }
 
-function onSettingsSaved() {
-  showToast('API Key 已保存')
-  settingsOpen.value = false
-}
-
 async function openDramaProject(slug) {
+  stashCurrent(currentSessionId.value || '__draft__')
   view.value = 'drama'
   try {
     await openProject(slug)
+    ensureScriptChatSeed(firstUserContent.value)
   } catch (e) {
     console.error('打开漫剧项目失败:', e)
     showToast(e.message || '打开项目失败')
@@ -269,10 +335,12 @@ async function openDramaProject(slug) {
 
 async function openDramaFromChat({ slug, episode } = {}) {
   if (!slug) return
+  stashCurrent(currentSessionId.value || '__draft__')
   view.value = 'drama'
   try {
     await openProject(slug)
     if (episode != null) await openEpisode(Number(episode))
+    ensureScriptChatSeed(firstUserContent.value)
   } catch (e) {
     console.error('打开漫剧项目失败:', e)
     showToast(e.message || '打开项目失败')
@@ -294,6 +362,7 @@ async function deleteDramaProject(slug) {
 
 watch(view, async (next) => {
   if (next !== 'drama') return
+  ensureScriptChatSeed(firstUserContent.value)
   try {
     await refreshProjects()
   } catch (e) {
@@ -302,8 +371,15 @@ watch(view, async (next) => {
   }
 })
 
+function onEnterScriptStage() {
+  ensureScriptChatSeed(firstUserContent.value)
+}
+
 onMounted(() => {
   refreshSessionList()
+  if ((messages.value || []).length) {
+    void resumeAfterMessagesLoad(currentSessionId.value)
+  }
 })
 </script>
 
@@ -323,13 +399,6 @@ onMounted(() => {
       @set-view="setView"
       @select-project="openDramaProject"
       @delete-project="deleteDramaProject"
-      @open-settings="settingsOpen = true"
-    />
-
-    <SettingsModal
-      :open="settingsOpen"
-      @close="settingsOpen = false"
-      @saved="onSettingsSaved"
     />
 
     <ChatView
@@ -369,6 +438,9 @@ onMounted(() => {
       :bust="dramaBust"
       v-model:script-draft="dramaScriptDraft"
       :script-impact="dramaScriptImpact"
+      :script-chat-messages="dramaScriptChatMessages"
+      :script-chat-loading="scriptChatLoading"
+      :script-chat-progress="scriptChatProgress"
       v-model:board-mode="dramaBoardMode"
       :characters="dramaCharacters"
       :voices="dramaVoices"
@@ -378,6 +450,7 @@ onMounted(() => {
       :cast-chat-messages="dramaCastChatMessages"
       :video-chat-messages="dramaVideoChatMessages"
       :voice-chat-messages="dramaVoiceChatMessages"
+      :scene-chat-messages="dramaSceneChatMessages"
       :timeline-order="dramaTimelineOrder"
       :tl-draft="dramaTlDraft"
       :timeline-items="dramaTimelineItems"
@@ -434,7 +507,8 @@ onMounted(() => {
       @toggle-lock="toggleLock"
       @preview-script="previewScriptChanges"
       @save-script="saveScriptChanges"
-      @generate-script="generateScriptFromPremise"
+      @script-chat-send="sendScriptChat"
+      @enter-script-stage="onEnterScriptStage"
       @rerender-dirty="rerenderDirtyShots"
       @select-character="selectCharacter"
       @add-character="addCharacter"
@@ -486,38 +560,14 @@ onMounted(() => {
       v-if="view === 'drama' && (dramaBatchProgress || (dramaActiveJobs && dramaActiveJobs.length))"
       class="drama-job-bar"
     >
-      <div
+      <DramaProgressStatusBar
         v-if="dramaBatchProgress"
-        class="drama-batch-progress"
-        :class="{
-          'is-running': dramaBatchProgress.status === 'running',
-          'is-done': dramaBatchProgress.status === 'done',
-          'is-error': dramaBatchProgress.status === 'error',
-        }"
-      >
-        <div class="drama-batch-progress-head">
-          <strong>{{ dramaBatchProgress.label || '批量任务' }}</strong>
-          <span>
-            {{ dramaBatchProgress.current || 0 }}/{{ dramaBatchProgress.total || 0 }}
-            <template v-if="dramaBatchProgress.failed"> · 失败 {{ dramaBatchProgress.failed }}</template>
-          </span>
-        </div>
-        <p class="drama-batch-progress-msg">{{ dramaBatchProgress.message || '' }}</p>
-        <div class="drama-batch-progress-track">
-          <div
-            class="drama-batch-progress-fill"
-            :style="{
-              width: `${
-                dramaBatchProgress.total
-                  ? Math.min(100, Math.round(((dramaBatchProgress.current || 0) / dramaBatchProgress.total) * 100))
-                  : dramaBatchProgress.status === 'running'
-                    ? 35
-                    : 0
-              }%`,
-            }"
-          />
-        </div>
-      </div>
+        class="drama-job-bar-progress"
+        :pct="dramaBatchPct"
+        :status="dramaBatchProgress.status || 'idle'"
+        :title="dramaBatchStatusTitle"
+        :message="dramaBatchStatusMessage"
+      />
       <DramaJobBar
         v-if="dramaActiveJobs?.length"
         :jobs="dramaActiveJobs"

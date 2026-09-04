@@ -6,7 +6,14 @@ import {
   streamChat,
   uploadWorkspaceFile,
 } from '@/api/chat'
-import { attachDramaMedia, awaitPendingDramaVideos, enrichMessageWithDramaMedia, extractDramaVideoFromToolResult } from '@/utils/dramaChatMedia'
+import {
+  attachDramaMedia,
+  awaitPendingDramaVideos,
+  enrichMessageWithDramaMedia,
+  extractDramaVideoFromToolResult,
+  resumeDramaProgressForMessages,
+} from '@/utils/dramaChatMedia'
+import { stashSessionMessages } from '@/composables/useDramaChatProgress'
 
 /**
  * Conversation messages + streaming send loop (P4/P5: cancel + approval).
@@ -47,7 +54,15 @@ export function useChat(deps) {
     const last = lastAssistant()
     if (!last) return
     last.isStreaming = false
-    last.status = ''
+    // Keep progress/error status visible when a drama job failed or is still informative.
+    const dramaState = String(last.dramaJob?.state || '')
+    if (dramaState === 'error') {
+      last.status = last.dramaJob?.line || last.status || ''
+    } else if (dramaState === 'done') {
+      last.status = ''
+    } else if (!opts.keepStatus) {
+      last.status = ''
+    }
     if (opts.cancelled && !last.content) {
       last.content = '（已停止生成）'
       last.cancelled = true
@@ -56,6 +71,7 @@ export function useChat(deps) {
     }
     if (last.toolCalls) {
       last.toolCalls.forEach((t) => {
+        if (t.status === 'error' || t.status === 'denied' || t.status === 'cancelled') return
         if (t.status === 'running' || t.status === 'awaiting_approval') {
           t.status = opts.cancelled ? 'cancelled' : 'done'
         }
@@ -149,6 +165,7 @@ export function useChat(deps) {
       isStreaming: true,
       status: '',
     })
+    stashCurrent(deps.getSessionId?.() || '')
     await nextTick()
     scrollToBottom()
 
@@ -229,7 +246,12 @@ export function useChat(deps) {
               try {
                 const parsed = JSON.parse(hit.result)
                 if (parsed && parsed.error) hit.status = 'error'
-                else {
+                else if (parsed && parsed.job_id && !parsed.play_url) {
+                  // 后台成片：工具先返回 job_id，前端继续轮询，卡片保持「运行中」
+                  hit.status = 'running'
+                  last.status = '成片已提交后台，正在等待进度…'
+                  statusText.value = last.status
+                } else {
                   const media = extractDramaVideoFromToolResult(hit.result)
                   if (media) attachDramaMedia(last, media)
                 }
@@ -277,7 +299,7 @@ export function useChat(deps) {
         terminal = 'error'
       }
     } finally {
-      // 成片未就绪时继续等待，不要提前结束 loading
+      // 成片未就绪时继续等待后台 job，对话框保持 loading + 进度；失败写进气泡正文
       if (terminal !== 'cancelled') {
         const last = lastAssistant()
         if (last) {
@@ -287,33 +309,64 @@ export function useChat(deps) {
             const hadDramaTool = (last.toolCalls || []).some(
               (t) => String(t.name || '') === 'tiktok_drama',
             )
-            if (hadDramaTool && !hasVideo) {
-              last.status = '成片生成中，请稍候…完成后会自动出现在对话里'
+            const toolNeedsWait = (last.toolCalls || []).some((t) => {
+              if (String(t.name || '') !== 'tiktok_drama') return false
+              try {
+                const data = JSON.parse(t.result || '')
+                return Boolean(data?.job_id) || (data?.ok === false && data?.error)
+              } catch {
+                return false
+              }
+            })
+            if (hadDramaTool && (!hasVideo || toolNeedsWait)) {
+              last.isStreaming = true
+              last.status = '成片生成中，请稍候…进度会实时更新，失败也会直接显示原因'
               statusText.value = last.status
-              await awaitPendingDramaVideos(last, {
+              const waitResult = await awaitPendingDramaVideos(last, {
                 signal: abortController?.signal,
+                sessionId: deps.getSessionId?.() || '',
                 onStatus: (text) => {
                   statusText.value = text || ''
                   last.status = text || ''
                   nextTick(() => scrollToBottom())
                 },
               })
-            }
-            enrichMessageWithDramaMedia(last)
-            if ((last.media || []).some((m) => m?.url)) {
-              last.status = ''
+              enrichMessageWithDramaMedia(last)
+              if (waitResult && waitResult.ok === false && waitResult.error) {
+                last.content = waitResult.error
+                last.status = waitResult.error
+                statusText.value = waitResult.error
+              } else if ((last.media || []).some((m) => m?.url)) {
+                last.status = ''
+                statusText.value = ''
+              }
               nextTick(() => scrollToBottom())
             }
           } catch (e) {
             if (e?.name !== 'AbortError') {
               console.error('await drama video failed:', e)
+              const lastErr = lastAssistant()
+              if (lastErr) {
+                const msg = `❌ 成片等待失败：${e.message || e}`
+                lastErr.content = msg
+                lastErr.status = msg
+                lastErr.dramaJob = {
+                  ...(lastErr.dramaJob || {}),
+                  state: 'error',
+                  line: msg,
+                  error: String(e.message || e),
+                }
+              }
             }
           }
         }
       }
       finishAssistant({ cancelled: terminal === 'cancelled' })
       isLoading.value = false
-      statusText.value = ''
+      // Keep error statusText briefly visible via message.status / dramaJob panel
+      if (lastAssistant()?.dramaJob?.state !== 'error') {
+        statusText.value = ''
+      }
       activeStreamId.value = null
       pendingApproval.value = null
       approvalBusy.value = false
@@ -361,6 +414,24 @@ export function useChat(deps) {
     if (msg.disliked) msg.liked = false
   }
 
+  async function resumeAfterMessagesLoad(sessionId) {
+    const list = messages.value || []
+    stashSessionMessages(sessionId || deps.getSessionId?.() || '', list)
+    const had = await resumeDramaProgressForMessages(list, {
+      sessionId: sessionId || deps.getSessionId?.() || '',
+      onStatus: (text) => {
+        const last = [...list].reverse().find((m) => m.role === 'assistant' && (m.dramaJob || m.isStreaming))
+        if (last) last.status = text || last.status || ''
+        statusText.value = text || ''
+      },
+    })
+    return had
+  }
+
+  function stashCurrent(sessionId) {
+    stashSessionMessages(sessionId || deps.getSessionId?.() || '', messages.value || [])
+  }
+
   return {
     messages,
     userInput,
@@ -379,5 +450,7 @@ export function useChat(deps) {
     regenerateResponse,
     toggleLike,
     toggleDislike,
+    stashCurrent,
+    resumeAfterMessagesLoad,
   }
 }

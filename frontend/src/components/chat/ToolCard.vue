@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   tool: {
@@ -10,6 +10,13 @@ const props = defineProps({
 })
 
 const open = ref(false)
+watch(
+  () => props.tool.status,
+  (s) => {
+    if (s === 'error') open.value = true
+  },
+  { immediate: true },
+)
 
 const previewArgs = computed(() => {
   const raw = props.tool.arguments || ''
@@ -29,6 +36,20 @@ const previewResult = computed(() => {
   }
 })
 
+const errorSummary = computed(() => {
+  if (props.tool.status !== 'error') return ''
+  const raw = props.tool.result
+  if (raw == null || raw === '') return ''
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const err = parsed && typeof parsed === 'object' ? parsed.error : null
+    if (typeof err !== 'string' || !err) return ''
+    return err.length > 120 ? `${err.slice(0, 120)}…` : err
+  } catch {
+    return ''
+  }
+})
+
 const statusLabel = computed(() => {
   if (props.tool.status === 'running') return '运行中'
   if (props.tool.status === 'awaiting_approval') return '等待审批'
@@ -44,15 +65,18 @@ const statusLabel = computed(() => {
     <button type="button" class="tool-card-header" @click="open = !open">
       <span class="tool-card-icon">
         {{
-          tool.status === 'awaiting_approval'
-            ? '🛡️'
-            : tool.status === 'running'
-              ? '⏳'
-              : '🔧'
+          tool.status === 'error'
+            ? '❌'
+            : tool.status === 'awaiting_approval'
+              ? '🛡️'
+              : tool.status === 'running'
+                ? '⏳'
+                : '🔧'
         }}
       </span>
       <span class="tool-card-name">{{ tool.name || 'tool' }}</span>
       <span class="tool-card-status">{{ statusLabel }}</span>
+      <span v-if="errorSummary" class="tool-card-error-hint">{{ errorSummary }}</span>
       <span class="tool-card-chevron" :class="{ open }">▾</span>
     </button>
     <div v-if="open" class="tool-card-body">
@@ -132,6 +156,15 @@ const statusLabel = computed(() => {
   margin-left: auto;
   font-size: 12px;
   color: #9ca3af;
+}
+
+.tool-card-error-hint {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #dc2626;
 }
 
 .tool-card-chevron {

@@ -126,6 +126,13 @@ export function generateScript(slug, episode, premise) {
   )
 }
 
+export function refineScript(slug, episode, content, instruction) {
+  return request(
+    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script/refine`,
+    { method: 'POST', body: JSON.stringify({ content, instruction }) },
+  )
+}
+
 export function rerenderDirty(slug, episode) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/rerender-dirty`,

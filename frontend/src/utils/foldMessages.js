@@ -42,6 +42,7 @@ export function foldMessagesForUi(rawMessages = []) {
         try {
           const parsed = JSON.parse(hit.result)
           if (parsed && parsed.error) hit.status = 'error'
+          else if (parsed && parsed.job_id && !parsed.play_url) hit.status = 'running'
         } catch {
           /* plain text result */
         }
@@ -59,6 +60,26 @@ export function foldMessagesForUi(rawMessages = []) {
         isStreaming: false,
         liked: !!m.liked,
         disliked: !!m.disliked,
+      }
+      // Restore in-progress produce UI from tool job_id
+      for (const tool of msg.toolCalls || []) {
+        try {
+          const parsed = JSON.parse(tool.result || '')
+          if (parsed?.job_id && !parsed?.play_url && !parsed?.error && parsed?.ok !== false) {
+            tool.status = 'running'
+            msg.isStreaming = true
+            msg.status = '成片生成中，正在恢复进度…'
+            msg.dramaJob = {
+              state: 'running',
+              jobId: String(parsed.job_id),
+              slug: parsed.slug || '',
+              episode: parsed.episode || 1,
+              line: '成片生成中，正在恢复进度…',
+            }
+          }
+        } catch {
+          /* ignore */
+        }
       }
       enrichMessageWithDramaMedia(msg)
       out.push(msg)

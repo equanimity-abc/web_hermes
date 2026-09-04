@@ -17,7 +17,6 @@ const emit = defineEmits([
   'set-view',
   'select-project',
   'delete-project',
-  'open-settings',
 ])
 </script>
 
@@ -102,18 +101,6 @@ const emit = defineEmits([
     </div>
 
     <div class="sidebar-footer">
-      <button type="button" class="btn-settings" @click="emit('open-settings')">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M6.5 2.5h3l.4 1.4a4.5 4.5 0 0 1 1.2.7l1.4-.3.5.9-1 .9c.1.4.1.7 0 1.1l1 .9-.5.9-1.4-.3a4.5 4.5 0 0 1-1.2.7L9.5 13.5h-3l-.4-1.4a4.5 4.5 0 0 1-1.2-.7l-1.4.3-.5-.9 1-.9a4.6 4.6 0 0 1 0-1.1l-1-.9.5-.9 1.4.3c.3-.3.7-.5 1.2-.7L6.5 2.5Z"
-            stroke="currentColor"
-            stroke-width="1.2"
-            stroke-linejoin="round"
-          />
-          <circle cx="8" cy="8" r="1.6" stroke="currentColor" stroke-width="1.2" />
-        </svg>
-        <span>API 设置</span>
-      </button>
       <div class="sidebar-user">
         <div class="user-avatar">👤</div>
         <span class="user-name">{{ userName }}</span>

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import ToolCard from './ToolCard.vue'
 import DramaVideoCard from './DramaVideoCard.vue'
+import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -21,8 +22,46 @@ const htmlContent = computed(() => {
 
 const toolCalls = computed(() => props.message.toolCalls || [])
 const mediaItems = computed(() => props.message.media || [])
+const dramaJob = computed(() => props.message.dramaJob || null)
+const showDramaProgress = computed(() => {
+  const j = dramaJob.value
+  if (!j) return false
+  return j.state === 'running' || j.state === 'pending' || j.state === 'error' || (j.state === 'done' && j.line)
+})
+const dramaPct = computed(() => {
+  const p = dramaJob.value?.pct
+  if (p == null || Number.isNaN(Number(p))) {
+    if (dramaJob.value?.state === 'running' || dramaJob.value?.state === 'pending') return 8
+    if (dramaJob.value?.state === 'done') return 100
+    return 0
+  }
+  return Math.max(0, Math.min(100, Number(p)))
+})
+const dramaProgressStatus = computed(() => {
+  const s = dramaJob.value?.state
+  if (s === 'pending') return 'running'
+  return s || 'idle'
+})
+const dramaProgressTitle = computed(() => {
+  const s = dramaJob.value?.state
+  if (s === 'error') return '渲染失败'
+  if (s === 'done') return '成片完成'
+  return '成片进行中'
+})
+const dramaProgressMessage = computed(() => {
+  const j = dramaJob.value
+  const line = j?.line || props.message.status || ''
+  if (j?.state === 'error' && j.shot != null) {
+    return `${line}${line ? ' · ' : ''}问题镜头：第 ${j.shot} 镜`
+  }
+  return line || '就绪'
+})
 const showStatus = computed(
-  () => Boolean(props.message.isStreaming && props.message.status),
+  () =>
+    Boolean(
+      (props.message.isStreaming && props.message.status) ||
+        (dramaJob.value && (dramaJob.value.state === 'running' || dramaJob.value.state === 'pending') && props.message.status),
+    ),
 )
 const showMarkdown = computed(() => {
   if (props.message.content) return true
@@ -76,6 +115,15 @@ const showMarkdown = computed(() => {
             <ToolCard v-for="(tool, i) in toolCalls" :key="tool.id || i" :tool="tool" />
           </div>
 
+          <DramaProgressStatusBar
+            v-if="showDramaProgress"
+            class="drama-chat-job-bar-wrap"
+            :pct="dramaPct"
+            :status="dramaProgressStatus"
+            :title="dramaProgressTitle"
+            :message="dramaProgressMessage"
+          />
+
           <div v-if="mediaItems.length" class="chat-media-cards">
             <DramaVideoCard
               v-for="(item, i) in mediaItems"
@@ -91,7 +139,13 @@ const showMarkdown = computed(() => {
           </div>
 
           <div
-            v-else-if="showMarkdown"
+            v-if="message.content && (!message.isStreaming || dramaJob?.state === 'error')"
+            class="markdown-body"
+            :class="message.isStreaming ? 'streaming-text' : 'ai-text'"
+            v-html="htmlContent"
+          />
+          <div
+            v-else-if="showMarkdown && !showStatus"
             class="markdown-body"
             :class="message.isStreaming ? 'streaming-text' : 'ai-text'"
             v-html="htmlContent"
@@ -163,3 +217,10 @@ const showMarkdown = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.drama-chat-job-bar-wrap {
+  margin: 0 0 10px;
+  max-width: 520px;
+}
+</style>
