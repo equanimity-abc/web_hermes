@@ -567,15 +567,48 @@ def _hq_process_one_shot(
     for attempt in range(max(0, identity_retries) + 1):
         if cancel_check:
             cancel_check()
-        info = render_shot_layers(
-            slug,
-            n,
-            shot,
-            layers,
-            title=ep_title,
-            candidate_count=1,
-            seed_jitter=attempt * 10007,
-        )
+        if attempt > 0 and (shot.get("layer_assets") or {}).get("plate"):
+            # P2：已有分层资产时只重做失败角色层并再融合。
+            from tools.drama_layers import regenerate_failing_layers
+            from tools.drama_shots import shot_stem
+            from tools.workspace import resolve_safe as _resolve
+
+            scene_rel = str((shot.get("assets") or {}).get("scene") or "")
+            if not scene_rel:
+                scene_rel = f"dramas/{slug}/videos/ep{n:02d}/{shot_stem(int(shot.get('n') or sn))}_scene.png"
+            dest = _resolve(scene_rel)
+            regen = regenerate_failing_layers(
+                slug,
+                n,
+                shot,
+                identity_last,
+                dest,
+                title=ep_title,
+                seed=attempt * 10007,
+            )
+            if regen.get("ok"):
+                shot.setdefault("assets", {})["scene"] = scene_rel.replace("\\", "/")
+                info = {"degrades": [], "rebuilt": ["scene"], "layered_retry": regen.get("regenerated")}
+            else:
+                info = render_shot_layers(
+                    slug,
+                    n,
+                    shot,
+                    ["scene"],
+                    title=ep_title,
+                    candidate_count=1,
+                    seed_jitter=attempt * 10007,
+                )
+        else:
+            info = render_shot_layers(
+                slug,
+                n,
+                shot,
+                layers,
+                title=ep_title,
+                candidate_count=1,
+                seed_jitter=attempt * 10007,
+            )
         degrades.extend(info.get("degrades") or [])
         merge_save_shot(slug, n, shot)
         from tools.drama_qc import qc_shot_identity
@@ -621,11 +654,21 @@ def _hq_process_one_shot(
 
     if not identity_ok:
         role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
+        hint = str(identity_last.get("hint") or "")
         raise RuntimeError(
             f"第{sn}镜角色「{role}」身份相似度未达阈值"
-            f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}），请重抽或提高定妆质量"
+            f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
+            f"{('；' + hint) if hint else ''}），请重抽或提高定妆质量"
         )
 
+    # P2：通过后写入跨镜轨迹
+    try:
+        from tools.drama_track import record_shot_identity_pass
+
+        record_shot_identity_pass(slug, n, shot, identity_last)
+    except Exception:
+        pass
+    merge_save_shot(slug, n, shot)
     if cancel_check:
         cancel_check()
 

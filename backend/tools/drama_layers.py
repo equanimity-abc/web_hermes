@@ -219,3 +219,123 @@ def generate_layered_scene(
     shot["scene_source"] = "layered"
     shot["layer_assets"] = layer_assets
     return {"ok": True, "layer_assets": layer_assets, "path": str(dest)}
+
+
+def _failing_character_ids(identity: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    subject = str(identity.get("character_id") or "")
+    threshold = float(identity.get("threshold") or 0.75)
+    for row in identity.get("matches") or []:
+        cid = str(row.get("character_id") or "")
+        if not cid:
+            continue
+        role = str(row.get("role") or "support")
+        is_subject = cid == subject or role == "identity"
+        cos = row.get("cosine")
+        bad = (not row.get("matched")) or (cos is not None and float(cos) < threshold)
+        if is_subject and bad:
+            ids.append(cid)
+        elif (not is_subject) and row.get("matched") and bad:
+            ids.append(cid)
+    return list(dict.fromkeys(ids))
+
+
+def regenerate_failing_layers(
+    slug: str,
+    episode: int,
+    shot: dict[str, Any],
+    identity: dict[str, Any],
+    dest: Path,
+    *,
+    title: str = "",
+    seed: int = 0,
+) -> dict[str, Any]:
+    """仅重生成身份失败的角色层并重新融合；无分层资产时返回 ok=False。"""
+    from tools.drama_characters import character_anchor_prompt, ref_exists
+    from tools.drama_qc import _char_ref_path
+    from tools.drama_video import ZOOM_H, ZOOM_W, _generate_scene_image, _prepare_frame
+    from PIL import Image
+
+    layer_assets = dict(shot.get("layer_assets") or {})
+    plate_rel = str(layer_assets.get("plate") or (shot.get("assets") or {}).get("plate") or "")
+    if not plate_rel:
+        return {"ok": False, "reason": "no_plate"}
+    try:
+        plate_path = resolve_safe(plate_rel)
+    except ValueError:
+        return {"ok": False, "reason": "bad_plate"}
+    if not plate_path.is_file():
+        return {"ok": False, "reason": "missing_plate"}
+
+    plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else {}
+    if not plan:
+        plan = build_spatial_plan(slug, shot)
+    fail_ids = set(_failing_character_ids(identity))
+    if not fail_ids:
+        sid = str((plan or {}).get("identity_subject_id") or identity.get("character_id") or "")
+        if sid:
+            fail_ids.add(sid)
+    if not fail_ids:
+        return {"ok": False, "reason": "no_failing_ids"}
+
+    cards = load_characters(slug)
+    n = int(shot.get("n") or 0)
+    for i, cid in enumerate(sorted(fail_ids)):
+        slot = next((s for s in (plan.get("slots") or []) if str(s.get("character_id") or "") == cid), None)
+        char = _char_by_id(cards, cid)
+        if not slot or not char:
+            continue
+        ref = _char_ref_path(slug, char)
+        if not ref or not ref_exists(slug, char):
+            continue
+        name = str(char.get("name") or cid)
+        anchor = str(slot.get("anchor") or "center_front")
+        ap = character_anchor_prompt(char)
+        layer_rel_path = layer_rel(slug, episode, n, "character", cid)
+        layer_path = resolve_safe(layer_rel_path)
+        layer_prompt = (
+            f"竖屏9:16单人角色层，{name}，{ap}，"
+            f"角色位于{anchor}，半身特写五官清晰，"
+            "简洁浅色背景，同一张脸同一套服装，条漫插画，无文字无水印，只有这一个角色"
+        )
+        ok_layer = bool(
+            _generate_scene_image(
+                layer_prompt,
+                layer_path,
+                seed=(seed + 5003 * (i + 1)) & 0x7FFFFFFF,
+                slug=slug,
+                shot=shot,
+                refs=(ref,),
+                width=ZOOM_W,
+                height=ZOOM_H,
+            )
+        )
+        if not ok_layer:
+            return {"ok": False, "reason": f"layer_retry_failed:{cid}"}
+        layer_assets[f"layer_{cid}"] = layer_rel_path
+
+    canvas = _prepare_frame(Image.open(plate_path).convert("RGB"), ZOOM_W, ZOOM_H).convert("RGBA")
+    for slot in _occlusion_ordered_slots(plan):
+        cid = str(slot.get("character_id") or "")
+        rel = str(layer_assets.get(f"layer_{cid}") or "")
+        if not rel:
+            continue
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        layer_img = _prepare_frame(Image.open(path).convert("RGB"), ZOOM_W, ZOOM_H)
+        _paste_layer_into_slot(canvas, layer_img, list(slot.get("bbox_norm") or [0.2, 0.15, 0.8, 0.8]))
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _prepare_frame(canvas.convert("RGB"), ZOOM_W, ZOOM_H).save(dest, "PNG")
+    shot["layer_assets"] = layer_assets
+    shot["scene_source"] = "layered"
+    assets = shot.setdefault("assets", {})
+    assets["plate"] = plate_rel
+    for k, v in layer_assets.items():
+        if k.startswith("layer_"):
+            assets[k] = v
+    return {"ok": True, "layer_assets": layer_assets, "regenerated": sorted(fail_ids)}
