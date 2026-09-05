@@ -167,6 +167,118 @@ def _arcface_singleton() -> Any:
         return _arcface_app
 
 
+def _arcface_faces(path: Path) -> tuple[list[dict[str, Any]], str]:
+    """检测图中全部人脸：[{emb, bbox, area}]。"""
+    try:
+        import insightface.app  # type: ignore  # noqa: F401
+    except ImportError:
+        return [], "no_insightface"
+    try:
+        app = _arcface_singleton()
+        from PIL import Image
+        import numpy as np
+
+        if app is None:
+            return [], "no_insightface"
+        img = np.array(Image.open(path).convert("RGB"))
+        h, w = img.shape[:2]
+        faces = app.get(img)
+        if not faces:
+            return [], "no_face"
+        out: list[dict[str, Any]] = []
+        for face in faces:
+            emb = getattr(face, "normed_embedding", None)
+            if emb is None:
+                emb = getattr(face, "embedding", None)
+            bbox = getattr(face, "bbox", None)
+            if emb is None or bbox is None:
+                continue
+            try:
+                box = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
+                area = max(0.0, (box[2] - box[0]) * (box[3] - box[1]))
+            except Exception:
+                continue
+            out.append(
+                {
+                    "emb": [float(x) for x in list(emb)],
+                    "bbox": box,
+                    "area": area,
+                    "img_w": int(w),
+                    "img_h": int(h),
+                }
+            )
+        if not out:
+            return [], "no_embedding"
+        return out, "arcface"
+    except Exception:
+        return [], "arcface_error"
+
+
+def match_faces_to_refs(
+    ref_items: list[dict[str, Any]],
+    scene_faces: list[dict[str, Any]],
+    *,
+    match_floor: float = 0.35,
+) -> list[dict[str, Any]]:
+    """贪心一对一匹配：ref_items=[{character_id, character_name, emb, ...}]。
+
+    返回每条：character_id, cosine, face_index, bbox, matched。
+    """
+    unused = set(range(len(scene_faces)))
+    # 所有边按相似度降序
+    edges: list[tuple[float, int, int]] = []
+    for ri, ref in enumerate(ref_items):
+        remb = ref.get("emb")
+        if not remb:
+            continue
+        for fi in unused:
+            cos = _cosine(list(remb), list(scene_faces[fi]["emb"]))
+            edges.append((cos, ri, fi))
+    edges.sort(key=lambda e: e[0], reverse=True)
+    assigned_ref: set[int] = set()
+    assigned_face: set[int] = set()
+    picked: dict[int, tuple[float, int]] = {}
+    for cos, ri, fi in edges:
+        if cos < match_floor:
+            break
+        if ri in assigned_ref or fi in assigned_face:
+            continue
+        assigned_ref.add(ri)
+        assigned_face.add(fi)
+        picked[ri] = (cos, fi)
+
+    results: list[dict[str, Any]] = []
+    for ri, ref in enumerate(ref_items):
+        row = {
+            "character_id": ref.get("character_id") or "",
+            "character_name": ref.get("character_name") or "",
+            "role": ref.get("role") or "support",
+            "matched": False,
+            "cosine": None,
+            "face_index": None,
+            "bbox": None,
+            "face_ratio": None,
+            "in_slot": None,
+        }
+        if ri in picked:
+            cos, fi = picked[ri]
+            face = scene_faces[fi]
+            img_w = float(face.get("img_w") or 1)
+            img_h = float(face.get("img_h") or 1)
+            area = float(face.get("area") or 0)
+            row.update(
+                {
+                    "matched": True,
+                    "cosine": round(float(cos), 4),
+                    "face_index": fi,
+                    "bbox": face.get("bbox"),
+                    "face_ratio": round(area / max(img_w * img_h, 1.0), 4),
+                }
+            )
+        results.append(row)
+    return results
+
+
 def _arcface_embedding(
     path: Path,
     *,
@@ -177,51 +289,14 @@ def _arcface_embedding(
     - ``match_to`` 有值：在多人脸中选与之余弦最高的一张（双人镜避免拿错脸）。
     - 否则：取检测框面积最大的脸（比 ``faces[0]`` 顺序更稳）。
     """
-    try:
-        import insightface.app  # type: ignore  # noqa: F401 — availability probe
-    except ImportError:
-        return None, "no_insightface"
-    try:
-        app = _arcface_singleton()
-        from PIL import Image
-        import numpy as np
-
-        if app is None:
-            return None, "no_insightface"
-        img = np.array(Image.open(path).convert("RGB"))
-        faces = app.get(img)
-        if not faces:
-            return None, "no_face"
-
-        def _face_emb(face: Any) -> list[float] | None:
-            emb = getattr(face, "normed_embedding", None)
-            if emb is None:
-                emb = getattr(face, "embedding", None)
-            if emb is None:
-                return None
-            return [float(x) for x in list(emb)]
-
-        scored: list[tuple[float, list[float]]] = []
-        for face in faces:
-            vec = _face_emb(face)
-            if vec is None:
-                continue
-            bbox = getattr(face, "bbox", None)
-            try:
-                area = float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) if bbox is not None else 0.0
-            except Exception:
-                area = 0.0
-            if match_to is not None:
-                score = _cosine(match_to, vec)
-            else:
-                score = area
-            scored.append((score, vec))
-        if not scored:
-            return None, "no_embedding"
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return scored[0][1], "arcface"
-    except Exception:
-        return None, "arcface_error"
+    faces, method = _arcface_faces(path)
+    if not faces:
+        return None, method
+    if match_to is not None:
+        best = max(faces, key=lambda f: _cosine(match_to, f["emb"]))
+        return list(best["emb"]), "arcface"
+    best = max(faces, key=lambda f: float(f.get("area") or 0))
+    return list(best["emb"]), "arcface"
 
 
 def validate_character_ref(ref_path: Path | None) -> dict[str, Any]:
@@ -336,24 +411,9 @@ def score_pair(
 
 
 def _subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
-    from tools.drama_characters import character_requires_face_identity
+    from tools.drama_spatial import identity_subject_character
 
-    cards = load_characters(slug)
-    speaker = infer_speaker(shot)
-    if speaker:
-        hit = find_character(cards, speaker)
-        if hit is None:
-            from tools.drama_characters import match_character_token
-
-            hit = match_character_token(speaker, cards)
-        if hit and character_requires_face_identity(hit):
-            return hit
-        # 说话人是剪影卡时，尽量回退到同镜可锁脸角色
-    cast = resolve_shot_characters(shot, cards)
-    for char in cast:
-        if character_requires_face_identity(char):
-            return char
-    return cast[0] if cast else None
+    return identity_subject_character(slug, shot)
 
 
 def locked_ref_path(slug: str, shot: dict[str, Any]) -> Path | None:
@@ -474,51 +534,15 @@ def qc_shot_identity(
 ) -> dict[str, Any]:
     threshold = identity_threshold(slug)
     scene = _scene_path(shot)
-    ref = locked_ref_path(slug, shot)
     prev = previous_same_character(slug, episode, shot)
     prev_scene = _scene_path(prev) if prev else None
     char = _subject_character(slug, shot)
     char_name = str((char or {}).get("name") or "").strip() or str(infer_speaker(shot) or "").strip()
-    checks: list[dict[str, Any]] = []
-    if ref is not None and scene is not None:
-        left_emb: list[float] | None = None
-        cid = str((char or {}).get("id") or "").strip()
-        if cid:
-            try:
-                from tools.drama_series import (
-                    load_character_embedding,
-                    save_character_embedding,
-                )
-
-                left_emb = load_character_embedding(slug, cid)
-                if left_emb is None:
-                    emb, emb_method = _arcface_embedding(ref)
-                    if emb is not None:
-                        save_character_embedding(
-                            slug,
-                            cid,
-                            emb,
-                            method=emb_method,
-                            ref_rel=str((char or {}).get("ref") or ref_rel(slug, cid)),
-                        )
-                        left_emb = emb
-            except Exception:
-                left_emb = None
-        pair = score_pair(ref, scene, left_emb=left_emb)
-        pair["kind"] = "ref"
-        pair["label"] = "锁参考图 vs 本镜画面"
-        checks.append(pair)
-    if prev is not None and prev_scene is not None and scene is not None:
-        pair = score_pair(prev_scene, scene)
-        pair["kind"] = "consecutive"
-        pair["label"] = f"Shot {prev.get('n')} vs Shot {shot.get('n')} 同角色"
-        pair["prev_shot"] = int(prev.get("n") or 0)
-        checks.append(pair)
-
     kind = infer_kind(shot)
-    from tools.drama_characters import character_requires_face_identity
+    from tools.drama_characters import character_requires_face_identity, load_characters, resolve_shot_characters
+    from tools.drama_spatial import MATCH_FLOOR, face_center_in_slot, slot_for_character
 
-    if char is not None and not character_requires_face_identity(char) and not checks:
+    if char is not None and not character_requires_face_identity(char):
         result = {
             "status": "n/a",
             "pass": False,
@@ -531,6 +555,7 @@ def qc_shot_identity(
             "character_id": (char or {}).get("id") or "",
             "character_name": char_name,
             "checks": [],
+            "matches": [],
             "kind": kind,
         }
         if apply:
@@ -551,6 +576,7 @@ def qc_shot_identity(
             "character_id": "",
             "character_name": char_name,
             "checks": [],
+            "matches": [],
             "kind": kind,
         }
         if apply:
@@ -558,19 +584,20 @@ def qc_shot_identity(
         shot["identity"] = result
         return result
 
-    if not checks:
+    if scene is None:
         result = {
             "status": "skipped",
             "pass": False,
             "required": True,
-            "reason": "no_locked_ref" if scene and not ref else "no_scene",
+            "reason": "no_scene",
             "method": "",
             "cosine": None,
             "threshold": threshold,
-            "hint": "需要锁定角色参考图和本镜画面才能抽检身份",
+            "hint": "本镜缺少画面，无法抽检身份",
             "character_id": (char or {}).get("id") or infer_speaker(shot),
             "character_name": char_name,
             "checks": [],
+            "matches": [],
             "kind": kind,
         }
         if apply:
@@ -578,63 +605,262 @@ def qc_shot_identity(
         shot["identity"] = result
         return result
 
-    ok_checks = [c for c in checks if c.get("status") == "ok" and c.get("cosine") is not None]
-    if not ok_checks:
-        fail_reason = str((checks[0].get("reason") if checks else "no_score") or "no_score")
-        if fail_reason == "proxy_identity":
-            fail_hint_text = "身份模型 ArcFace 不可用（直方图代理不得过关）；请安装 insightface 并就绪 buffalo_l"
-        elif fail_reason == "no_face":
-            fail_hint_text = "本镜画面未检测到可用人脸，无法做身份比对（可重抽画面）"
-        elif fail_reason == "no_embedding":
-            fail_hint_text = "本镜画面未能提取人脸嵌入，无法做身份比对（可重抽画面）"
-        elif fail_reason in ("no_embedder", "no_insightface", "arcface_error"):
-            fail_hint_text = "身份嵌入依赖缺失或调用失败，专业档不得记为通过"
-        elif fail_reason in ("missing_left", "missing_right"):
-            fail_hint_text = "定妆参考图或本镜画面文件缺失/过小"
-        else:
-            fail_hint_text = "身份脚本未能出分（缺依赖或无人脸），不得记为通过"
+    # 组装本镜需验角色：spatial_plan.slots 优先，否则 subject + 可锁脸 cast
+    cards = load_characters(slug)
+    cast = resolve_shot_characters(shot, cards)
+    plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else {}
+    slots = list((plan or {}).get("slots") or [])
+    identity_chars: list[dict[str, Any]] = []
+    if slots:
+        by_id = {str(c.get("id") or ""): c for c in cast}
+        for slot in slots:
+            cid = str(slot.get("character_id") or "")
+            c = by_id.get(cid)
+            if c is None:
+                c = next((x for x in cards if str(x.get("id") or "") == cid), None)
+            if c and character_requires_face_identity(c) and _char_ref_path(slug, c):
+                identity_chars.append({**c, "_slot_role": slot.get("role") or "support"})
+    if not identity_chars and char and _char_ref_path(slug, char):
+        identity_chars.append({**char, "_slot_role": "identity"})
+    for c in cast:
+        if not character_requires_face_identity(c):
+            continue
+        if not _char_ref_path(slug, c):
+            continue
+        cid = str(c.get("id") or "")
+        if any(str(x.get("id") or "") == cid for x in identity_chars):
+            continue
+        # 未入 plan 的可锁脸角色：出席则验（support）
+        identity_chars.append({**c, "_slot_role": "support"})
+
+    if not identity_chars:
         result = {
             "status": "skipped",
             "pass": False,
             "required": True,
-            "reason": fail_reason,
-            "method": checks[0].get("method") if checks else "",
+            "reason": "no_locked_ref",
+            "method": "",
             "cosine": None,
             "threshold": threshold,
-            "hint": fail_hint_text,
+            "hint": "需要锁定角色参考图和本镜画面才能抽检身份",
             "character_id": (char or {}).get("id") or infer_speaker(shot),
             "character_name": char_name,
-            "checks": checks,
-            "kind": infer_kind(shot),
+            "checks": [],
+            "matches": [],
+            "kind": kind,
         }
         if apply:
             shot["identity_hint"] = str(result.get("hint") or "")
         shot["identity"] = result
         return result
 
-    # Ref check is authoritative when present; consecutive is always recorded.
-    ref_check = next((c for c in ok_checks if c.get("kind") == "ref"), None)
-    primary = ref_check or ok_checks[0]
-    cosine = float(primary["cosine"])
-    passed = cosine >= threshold
+    # 取定妆嵌入
+    ref_items: list[dict[str, Any]] = []
+    for c in identity_chars:
+        cid = str(c.get("id") or "")
+        path = _char_ref_path(slug, c)
+        if not path:
+            continue
+        try:
+            from tools.drama_series import load_character_embedding, save_character_embedding
+
+            emb = load_character_embedding(slug, cid)
+            if emb is None:
+                emb, emb_method = _arcface_embedding(resolve_safe(path))
+                if emb is not None:
+                    save_character_embedding(
+                        slug,
+                        cid,
+                        emb,
+                        method=emb_method,
+                        ref_rel=str(c.get("ref") or ref_rel(slug, cid)),
+                    )
+        except Exception:
+            emb, _ = _arcface_embedding(resolve_safe(path))
+        if emb is None:
+            continue
+        ref_items.append(
+            {
+                "character_id": cid,
+                "character_name": str(c.get("name") or cid),
+                "role": c.get("_slot_role") or "support",
+                "emb": emb,
+                "ref": path,
+            }
+        )
+
+    scene_faces, face_method = _arcface_faces(scene)
+    checks: list[dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
+
+    if not ref_items:
+        result = {
+            "status": "skipped",
+            "pass": False,
+            "required": True,
+            "reason": "no_embedding",
+            "method": face_method,
+            "cosine": None,
+            "threshold": threshold,
+            "hint": "定妆参考图未能提取人脸嵌入",
+            "character_id": (char or {}).get("id") or "",
+            "character_name": char_name,
+            "checks": [],
+            "matches": [],
+            "kind": kind,
+        }
+        if apply:
+            shot["identity_hint"] = str(result.get("hint") or "")
+        shot["identity"] = result
+        return result
+
+    if not scene_faces:
+        result = {
+            "status": "skipped",
+            "pass": False,
+            "required": True,
+            "reason": face_method or "no_face",
+            "method": face_method,
+            "cosine": None,
+            "threshold": threshold,
+            "hint": "本镜画面未检测到可用人脸，无法做身份比对（可重抽画面）",
+            "character_id": (char or {}).get("id") or "",
+            "character_name": char_name,
+            "checks": [],
+            "matches": [],
+            "kind": kind,
+        }
+        if apply:
+            shot["identity_hint"] = str(result.get("hint") or "")
+            _mark_identity_fail(shot, threshold)
+        shot["identity"] = result
+        return result
+
+    matches = match_faces_to_refs(ref_items, scene_faces, match_floor=MATCH_FLOOR)
+    # 槽位对齐
+    for row in matches:
+        if not row.get("matched") or not row.get("bbox"):
+            continue
+        slot = slot_for_character(plan, str(row.get("character_id") or ""))
+        if not slot:
+            row["in_slot"] = None
+            continue
+        face = next((f for i, f in enumerate(scene_faces) if i == row.get("face_index")), None)
+        if not face:
+            row["in_slot"] = None
+            continue
+        row["in_slot"] = face_center_in_slot(
+            list(row["bbox"]),
+            slot,
+            img_w=int(face.get("img_w") or 1),
+            img_h=int(face.get("img_h") or 1),
+        )
+        min_ratio = float(slot.get("min_face_ratio") or 0)
+        row["min_face_ratio"] = min_ratio
+        row["face_ratio_ok"] = float(row.get("face_ratio") or 0) >= min_ratio if min_ratio > 0 else True
+
+    subject_id = str((char or {}).get("id") or (plan or {}).get("identity_subject_id") or "")
+    subject_row = next((m for m in matches if m.get("character_id") == subject_id), None)
+    if subject_row is None and matches:
+        subject_row = next((m for m in matches if m.get("role") == "identity"), matches[0])
+
+    for row in matches:
+        status = "ok" if row.get("matched") and row.get("cosine") is not None else "skipped"
+        reason = ""
+        if not row.get("matched"):
+            reason = "unmatched_face"
+        checks.append(
+            {
+                "status": status,
+                "reason": reason,
+                "method": "arcface" if status == "ok" else face_method,
+                "cosine": row.get("cosine"),
+                "kind": "ref",
+                "label": f"{row.get('character_name') or row.get('character_id')} 定妆 vs 画面",
+                "character_id": row.get("character_id"),
+                "character_name": row.get("character_name"),
+                "role": row.get("role"),
+                "in_slot": row.get("in_slot"),
+                "face_ratio": row.get("face_ratio"),
+            }
+        )
+
+    if prev is not None and prev_scene is not None and subject_row and subject_row.get("matched"):
+        # 邻镜同角色：用主体匹配脸 vs 上一镜最大相似
+        pair = score_pair(prev_scene, scene, left_emb=None)
+        # 用主体定妆对上一镜选脸更稳
+        subj_ref = next((r for r in ref_items if r.get("character_id") == subject_row.get("character_id")), None)
+        if subj_ref and subj_ref.get("emb"):
+            pair = score_pair(prev_scene, scene, left_emb=list(subj_ref["emb"]))
+        pair["kind"] = "consecutive"
+        pair["label"] = f"Shot {prev.get('n')} vs Shot {shot.get('n')} 同角色"
+        pair["prev_shot"] = int(prev.get("n") or 0)
+        checks.append(pair)
+
+    # 硬闸：identity/subject 必须匹配且过阈值；support 若匹配到也要过阈值
+    failures: list[str] = []
+    primary_cosine = None
+    for row in matches:
+        role = str(row.get("role") or "support")
+        is_subject = str(row.get("character_id") or "") == subject_id or role == "identity"
+        name = str(row.get("character_name") or row.get("character_id") or "?")
+        if is_subject:
+            if not row.get("matched"):
+                failures.append(f"{name}: 未匹配到人脸")
+                continue
+            cos = float(row.get("cosine") or 0)
+            primary_cosine = cos if primary_cosine is None else primary_cosine
+            if subject_id and str(row.get("character_id") or "") == subject_id:
+                primary_cosine = cos
+            if cos < threshold:
+                failures.append(f"{name}: cosine={cos}<{threshold}")
+            if row.get("face_ratio_ok") is False:
+                failures.append(f"{name}: 脸面积不足")
+        else:
+            if row.get("matched"):
+                cos = float(row.get("cosine") or 0)
+                if cos < threshold:
+                    failures.append(f"{name}: cosine={cos}<{threshold}")
+
+    passed = not failures
+    if primary_cosine is None and subject_row and subject_row.get("cosine") is not None:
+        primary_cosine = float(subject_row["cosine"])
+
+    if not passed:
+        reason = "unmatched_face" if any("未匹配" in f for f in failures) else "below_threshold"
+        hint = "；".join(failures) if failures else fail_hint(threshold)
+    else:
+        reason = ""
+        hint = ""
+
     result = {
-        "status": "ok",
+        "status": "ok" if (subject_row and subject_row.get("matched")) or passed else "skipped",
         "pass": passed,
         "required": True,
-        "reason": "" if passed else "below_threshold",
-        "method": primary.get("method") or "proxy",
-        "cosine": cosine,
+        "reason": reason if not passed else "",
+        "method": "arcface",
+        "cosine": round(float(primary_cosine), 4) if primary_cosine is not None else None,
         "threshold": threshold,
-        "hint": "" if passed else fail_hint(threshold),
-        "character_id": (char or {}).get("id") or infer_speaker(shot),
+        "hint": hint if not passed else "",
+        "character_id": (char or {}).get("id") or subject_id,
         "character_name": char_name,
         "checks": checks,
-        "kind": infer_kind(shot),
+        "matches": matches,
+        "kind": kind,
         "dirtied": [],
+        "failures": failures,
     }
+    # 主体完全没匹配时 status 用 skipped 更贴切
+    if subject_row is not None and not subject_row.get("matched"):
+        result["status"] = "skipped"
+        result["reason"] = result["reason"] or "unmatched_face"
+    elif subject_row is not None and subject_row.get("matched"):
+        result["status"] = "ok"
+
     if apply and not passed:
         result["dirtied"] = _mark_identity_fail(shot, threshold)
-        result["hint"] = shot.get("identity_hint") or fail_hint(threshold)
+        shot["identity_hint"] = hint or fail_hint(threshold)
+        result["hint"] = shot.get("identity_hint") or hint
     elif apply:
         shot["identity_hint"] = ""
     shot["identity"] = result

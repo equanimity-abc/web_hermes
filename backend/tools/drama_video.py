@@ -603,11 +603,16 @@ def _scene_prompt(
         from tools.drama_styles import style_prompt_clause
 
         style_clause = style_prompt_clause(slug, shot, episode=episode)
+    from tools.drama_spatial import spatial_prompt_clause
+
+    plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
+    spatial_clause = spatial_prompt_clause(plan)
     bits = [
         "竖屏9:16竖屏短剧关键帧",
         title or "短剧",
         scene,
         char_clause,
+        spatial_clause,
         kinetic,
     ]
     if needs_face and speaker:
@@ -966,6 +971,9 @@ def generate_shot_candidates(
     cast = resolve_shot_characters(shot, cards)
     # Full project cards for alias → name/voice/face match (N speakers)
     # 每次出图重算运镜：避免旧误判（如「天花板」→rise）锁死在 shot.camera 上。
+    from tools.drama_spatial import build_spatial_plan
+
+    build_spatial_plan(slug, shot)
     shot["camera"] = _camera_style(shot)
     shot["_episode"] = episode
     prompt = _scene_prompt(title, shot, cast, slug=slug)

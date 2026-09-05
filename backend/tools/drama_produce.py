@@ -493,7 +493,7 @@ def _identity_scene_retryable(result: dict[str, Any]) -> bool:
     if status == "skipped":
         reason = str(result.get("reason") or "")
         # no_face / no_embedding：锁定前已保证定妆有脸，抽检阶段基本是本镜画面问题。
-        return reason in ("no_scene", "missing_right", "no_face", "no_embedding")
+        return reason in ("no_scene", "missing_right", "no_face", "no_embedding", "unmatched_face", "below_threshold")
     return False
 
 
@@ -602,6 +602,8 @@ def _hq_process_one_shot(
                 detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
             elif identity_reason == "no_face":
                 detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；请重抽该镜画面）"
+            elif identity_reason == "unmatched_face":
+                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '请重抽并保证说话人露脸'}）"
             elif identity_reason == "no_embedding":
                 detail = f"角色「{role}」本镜画面未能提取人脸嵌入，请重抽该镜画面"
             elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
@@ -737,9 +739,11 @@ def produce_episode_hq(
     from tools.drama_series import apply_dual_speaker_notes_doc, ensure_cast_embeddings
     from tools.drama_shots import save_doc
     from tools.drama_snapshots import take_snapshot
+    from tools.drama_spatial import ensure_spatial_plans_doc
 
     dual_count = apply_dual_speaker_notes_doc(doc)
-    if dual_count > 0:
+    spatial_count = ensure_spatial_plans_doc(slug, doc)
+    if dual_count > 0 or spatial_count > 0:
         save_doc(doc)
     clock.end("sync")
 
