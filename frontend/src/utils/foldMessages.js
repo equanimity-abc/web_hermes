@@ -42,7 +42,17 @@ export function foldMessagesForUi(rawMessages = []) {
         try {
           const parsed = JSON.parse(hit.result)
           if (parsed && parsed.error) hit.status = 'error'
-          else if (parsed && parsed.job_id && !parsed.play_url) hit.status = 'running'
+          else if (
+            parsed &&
+            parsed.job_id &&
+            !parsed.play_url &&
+            parsed.ok !== false &&
+            parsed.status !== 'gone' &&
+            parsed.status !== 'error' &&
+            parsed.status !== 'cancelled'
+          ) {
+            hit.status = 'running'
+          }
         } catch {
           /* plain text result */
         }
@@ -65,7 +75,15 @@ export function foldMessagesForUi(rawMessages = []) {
       for (const tool of msg.toolCalls || []) {
         try {
           const parsed = JSON.parse(tool.result || '')
-          if (parsed?.job_id && !parsed?.play_url && !parsed?.error && parsed?.ok !== false) {
+          if (
+            parsed?.job_id &&
+            !parsed?.play_url &&
+            !parsed?.error &&
+            parsed?.ok !== false &&
+            parsed?.status !== 'gone' &&
+            parsed?.status !== 'error' &&
+            parsed?.status !== 'cancelled'
+          ) {
             tool.status = 'running'
             msg.isStreaming = true
             msg.status = '成片生成中，正在恢复进度…'

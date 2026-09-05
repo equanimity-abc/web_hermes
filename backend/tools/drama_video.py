@@ -545,18 +545,59 @@ def _scene_prompt(
 ) -> str:
     scene = _scene_text_for_prompt(shot.get("画面") or "")
     style = _camera_style(shot)
-    kinetic = {
+    # 身份锁镜：极端仰/俯/渺小全景会把 ArcFace 打到 0.3x；保留运动感但强制可辨脸。
+    needs_face = bool(characters) and str(shot.get("kind") or "") not in (
+        "establishing",
+        "crowd",
+        "insert",
+    )
+    from tools.drama_models import infer_speaker
+
+    speaker = infer_speaker(shot).strip()
+    if needs_face:
+        # 「远景+配角拎主体」会只画出配角正脸；文案与运镜一并收到中近景。
+        scene = re.sub(r"竖屏远景", "竖屏中近景", scene)
+        scene = re.sub(r"(?<![中近])远景", "中近景", scene)
+        if style == "pull_out":
+            style = "punch_in"
+    kinetic_map = {
         "punch_in": "动态姿态，隐含运动感，衣摆飘动",
         "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
         "pan_right": "宽幅移动场景，人物行进中，拖影动感",
         "pan_left": "宽幅追逐场景，尘土与速度线",
-        "rise": "低角度仰拍，高耸建筑，云层涌动",
-        "fall": "高角度俯冲，地面急速靠近",
-        "pull_out": "宏大定场镜头，开阔景致，渺小人影",
-    }.get(style, "电影感调度，鲜明剪影")
+        "rise": (
+            "镜头上移纵深、云层涌动，平视或微仰、面部五官清晰可见，禁止极端低角度仰拍遮脸"
+            if needs_face
+            else "低角度仰拍，高耸建筑，云层涌动"
+        ),
+        "fall": (
+            "下坠纵深感，平视或微俯、面部五官清晰可见，禁止极端俯拍遮脸"
+            if needs_face
+            else "高角度俯冲，地面急速靠近"
+        ),
+        "pull_out": (
+            "开阔景致但仍以角色中近景为主，面部清晰可辨"
+            if needs_face
+            else "宏大定场镜头，开阔景致，渺小人影"
+        ),
+    }
+    kinetic = kinetic_map.get(style, "电影感调度，鲜明剪影")
     slug = slug or str(shot.get("slug") or "")
     episode = int(shot.get("_episode") or 0) or None
-    char_clause = character_prompt_clause(characters or [], slug=slug)
+    # 说话人定妆描述放最前，避免「嫦娥拎玉兔」类双人镜只锁到配角脸。
+    ordered_chars = list(characters or [])
+    if speaker and ordered_chars:
+        head = [c for c in ordered_chars if speaker in (str(c.get("name") or ""), str(c.get("id") or ""))]
+        if not head:
+            head = [
+                c
+                for c in ordered_chars
+                if speaker in str(c.get("name") or "") or speaker in str(c.get("aliases") or "")
+            ]
+        if head:
+            hid = str(head[0].get("id") or "")
+            ordered_chars = head + [c for c in ordered_chars if str(c.get("id") or "") != hid]
+    char_clause = character_prompt_clause(ordered_chars, slug=slug)
     style_clause = ""
     if slug:
         from tools.drama_styles import style_prompt_clause
@@ -569,6 +610,11 @@ def _scene_prompt(
         char_clause,
         kinetic,
     ]
+    if needs_face and speaker:
+        bits.append(
+            f"身份锁角色「{speaker}」必须清晰露脸并占本镜主要人脸位置，"
+            f"禁止只画其他角色正脸而把「{speaker}」画成背影、过小剪影或看不清五官"
+        )
     if style_clause:
         bits.append(style_clause)
     bits.append(
@@ -586,18 +632,20 @@ def _camera_style(shot: dict[str, Any]) -> str:
     scene_for_action = scene
     for phrase in ("打来", "打算", "打扮", "打开", "打电话", "打招呼", "拍打", "打字", "打印"):
         scene_for_action = scene_for_action.replace(phrase, "")
+    # 特写/脸优先：否则「天花板」里的「天」会误判成 rise → 极端仰拍毁脸。
+    if any(k in scene for k in ("近", "特写", "脸", "眼", "瞳")):
+        return "punch_in"
     if re.search(r"(打架|打斗|殴打|棒|怒|砸|爆炸|劈|战场|挥拳|一脚|一拳)", scene_for_action):
         return "punch_shake"
     if any(k in scene for k in ("冲", "追", "跑", "逃", "飞", "射")):
         return "pan_right" if n % 2 else "pan_left"
-    if any(k in scene for k in ("天", "宫", "云", "升", "凌空")):
+    # 勿用单字「天/宫/云/升」：天花板、宫殿门、乌云压顶、升起窗帘 等误伤太多。
+    if any(k in scene for k in ("天空", "天宫", "天际", "云霄", "云层", "升空", "凌空", "飞升")):
         return "rise"
     if any(k in scene for k in ("坠", "落", "俯冲", "砸向")):
         return "fall"
     if any(k in scene for k in ("远", "全景", "俯瞰", "建立")):
         return "pull_out"
-    if any(k in scene for k in ("近", "特写", "脸", "眼")):
-        return "punch_in"
     return ("punch_in", "pan_right", "rise", "pull_out", "pan_left")[(n - 1) % 5]
 
 
@@ -772,11 +820,16 @@ def _image_provider_chain(
             chain.append(p)
 
     if refs:
-        # Locked character refs need img2img-capable providers (Kling uploads ref PNGs).
+        # 有定妆参考：优先项目配置的出图路由（Seedream 已支持 image），再兜底可灵等。
+        add(primary)
+        add("seedream")
+        add("ark")
+        add("doubao-image")
         add("kling-image")
         add("kling")
         add("jimeng")
-    add(primary)
+    else:
+        add(primary)
     if str((shot or {}).get("kind") or "") == "character_ref":
         from tools.drama_styles import default_character_ref_image_route
 
@@ -786,12 +839,11 @@ def _image_provider_chain(
         add("kling")
         add("wanx")
         add("dashscope")
-    else:
+    elif not refs:
         fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-        if not refs:
-            add(fb)
-            if fb != "pollinations":
-                add("pollinations")
+        add(fb)
+        if fb != "pollinations":
+            add("pollinations")
     return chain
 
 
@@ -905,6 +957,7 @@ def generate_shot_candidates(
     *,
     title: str = "",
     count: int = CANDIDATE_COUNT,
+    seed_jitter: int = 0,
 ) -> list[dict[str, Any]]:
     """Fill the candidate wall. Does not overwrite a locked scene.png."""
     count = max(1, min(int(count or CANDIDATE_COUNT), 4))
@@ -912,12 +965,13 @@ def generate_shot_candidates(
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     # Full project cards for alias → name/voice/face match (N speakers)
-    shot["camera"] = shot.get("camera") or _camera_style(shot)
+    # 每次出图重算运镜：避免旧误判（如「天花板」→rise）锁死在 shot.camera 上。
+    shot["camera"] = _camera_style(shot)
     shot["_episode"] = episode
     prompt = _scene_prompt(title, shot, cast, slug=slug)
     shot.pop("_episode", None)
     shot["prompt"] = prompt
-    base_seed = character_seed(slug, cast, int(shot.get("n") or 1))
+    base_seed = (character_seed(slug, cast, int(shot.get("n") or 1)) + int(seed_jitter or 0)) & 0x7FFFFFFF
     ids = next_candidate_ids(shot, count)
     created: list[dict[str, Any]] = []
     used_ai = False
@@ -933,7 +987,20 @@ def generate_shot_candidates(
     def _render_one(i: int, cid: str) -> dict[str, Any]:
         """Generate one candidate (thread-safe; writes its own dest file)."""
         seed = _candidate_seed(base_seed, cid, i)
-        varied_prompt = _candidate_prompt(prompt, cid, i)
+        # 单图+定妆锁脸：不要再叠「候选方案」风格扰动，否则和身份锚打架。
+        if refs and count <= 1:
+            varied_prompt = prompt
+            if int(seed_jitter or 0) > 0:
+                from tools.drama_models import infer_speaker
+
+                who = infer_speaker(shot).strip() or "说话人"
+                # 身份重试：进一步压极端机位，优先可 ArcFace 打分的露脸构图。
+                varied_prompt = (
+                    f"{prompt}。身份重抽：以「{who}」平视或微侧脸特写优先，五官清晰可辨，"
+                    f"禁止极端仰拍/俯拍/背影/遮脸，禁止只画其他角色而忽略「{who}」"
+                )
+        else:
+            varied_prompt = _candidate_prompt(prompt, cid, i)
         rel = candidate_rel(slug, episode, n, cid)
         dest = resolve_safe(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1858,11 +1925,13 @@ def render_shot_layers(
     *,
     title: str,
     candidate_count: int | None = None,
+    seed_jitter: int = 0,
 ) -> dict[str, Any]:
     """Rebuild selected layers for one shot. Unspecified layers are reused on disk.
 
     candidate_count: scene wall size. Autopilot passes 1 (single plate, no 4-up wall);
     workbench fine-tune keeps default CANDIDATE_COUNT (4).
+    seed_jitter: identity 重试时加大偏移，避免同种子反复抽到同一张不像的脸。
     """
     if not ffmpeg_available():
         raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
@@ -1895,7 +1964,9 @@ def render_shot_layers(
 
     if "scene" in wanted:
         wall_n = CANDIDATE_COUNT if candidate_count is None else max(1, min(int(candidate_count), 4))
-        generated = generate_shot_candidates(slug, episode, shot, title=title, count=wall_n)
+        generated = generate_shot_candidates(
+            slug, episode, shot, title=title, count=wall_n, seed_jitter=int(seed_jitter or 0)
+        )
         used_ai = any(item.get("source") == "ai" for item in generated)
         if not used_ai:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})

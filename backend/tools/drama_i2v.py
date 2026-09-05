@@ -706,4 +706,11 @@ def generate_shot_i2v(
             "deferred": bool(shot.get("i2v_deferred")),
             "provider": shot.get("i2v_provider") or "",
         }
-    return {"tried": True, "i2v_source": "none", "motion": None, "fallback": "still_zoompan"}
+    return {
+        "tried": True,
+        "i2v_source": "none",
+        "motion": None,
+        "fallback": "still_zoompan",
+        "provider": shot.get("i2v_provider") or "",
+        "reason": str(shot.get("i2v_error") or "provider_returned_none"),
+    }

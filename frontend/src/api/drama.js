@@ -2,6 +2,15 @@
  * Drama workbench REST (does not go through the agent loop).
  */
 
+export class DramaApiError extends Error {
+  constructor(message, { status = 0, data = null } = {}) {
+    super(message)
+    this.name = 'DramaApiError'
+    this.status = Number(status) || 0
+    this.data = data
+  }
+}
+
 async function request(path, options = {}) {
   const method = (options.method || 'GET').toUpperCase()
   const headers = { ...(options.headers || {}) }
@@ -21,7 +30,10 @@ async function request(path, options = {}) {
   }
   if (!resp.ok) {
     const detail = data.detail || data.error || text || `HTTP ${resp.status}`
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    throw new DramaApiError(typeof detail === 'string' ? detail : JSON.stringify(detail), {
+      status: resp.status,
+      data,
+    })
   }
   return data
 }

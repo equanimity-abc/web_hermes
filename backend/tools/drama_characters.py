@@ -288,6 +288,79 @@ def normalize_roles(raw: Any) -> list[str]:
     return out
 
 
+# 舞台说明：仅影子/剪影等——不是可锁脸的独立角色，应收束到本名。
+_ROLE_STAGE_NOTE_RE = re.compile(r"[（(][^）)]{0,32}[）)]")
+_FACE_EXEMPT_MARKERS = (
+    "仅影子",
+    "纯影子",
+    "剪影",
+    "纯黑剪影",
+    "无五官",
+    "仅背影",
+    "silhouette",
+    "shadow only",
+    "shadow-only",
+)
+
+
+def canonical_role_name(token: str) -> str:
+    """``后羿（仅影子）`` → ``后羿``；无括号则原样返回。"""
+    raw = str(token or "").strip()
+    if not raw:
+        return ""
+    stripped = _ROLE_STAGE_NOTE_RE.sub("", raw).strip()
+    return stripped or raw
+
+
+def role_token_face_exempt(token: str) -> bool:
+    """角色 token / 名称是否表示剪影、影子等无需人脸身份锚。"""
+    s = str(token or "").strip().lower()
+    if not s:
+        return False
+    return any(m.lower() in s for m in _FACE_EXEMPT_MARKERS)
+
+
+def is_shadow_stage_card(char: dict[str, Any] | None) -> bool:
+    """是否为不应存在的「影子/剪影」角色卡（按名称判定，不看 look）。"""
+    if not isinstance(char, dict):
+        return False
+    if normalize_category(char.get("category")) != "character":
+        return False
+    return role_token_face_exempt(str(char.get("name") or ""))
+
+
+def character_requires_face_identity(char: dict[str, Any] | None) -> bool:
+    """是否需要定妆人脸 + ArcFace 身份闸。剪影/仅影子角色返回 False。"""
+    if not isinstance(char, dict):
+        return False
+    if normalize_category(char.get("category")) != "character":
+        return False
+    if is_shadow_stage_card(char):
+        return False
+    blob = f"{char.get('name') or ''} {char.get('look') or ''}"
+    return not role_token_face_exempt(blob)
+
+
+def purge_shadow_character_cards(slug: str) -> list[str]:
+    """删除项目中已存在的影子/剪影角色卡；返回被删 cid。
+
+    影子是镜头表现，不是角色资产。已锁定也强制移除（政策卡，非用户误锁）。
+    """
+    cards = load_characters(slug)
+    keep: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for rec in cards:
+        if is_shadow_stage_card(rec):
+            cid = str(rec.get("id") or "")
+            if cid:
+                removed.append(cid)
+            continue
+        keep.append(rec)
+    if removed:
+        save_characters(slug, keep)
+    return removed
+
+
 def roles_key(raw: Any) -> str:
     return ",".join(normalize_roles(raw))
 
@@ -360,6 +433,8 @@ _LOOK_WEAK_MARKERS = (
 def look_needs_expand(look: str) -> bool:
     """空洞/模板 look 需要扩写后再用于定妆与分镜。"""
     s = str(look or "").strip()
+    if role_token_face_exempt(s):
+        return False  # 剪影/影子不扩写成「无五官」后再做人脸闸
     if len(s) < 48:
         return True
     hits = sum(1 for m in _LOOK_WEAK_MARKERS if m in s)
@@ -433,6 +508,8 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
             continue
         cid = str(rec.get("id") or "")
         if not cid:
+            continue
+        if not character_requires_face_identity(rec):
             continue
         look = str(rec.get("look") or "")
         if not look_needs_expand(look):
@@ -591,6 +668,19 @@ def find_character(characters: list[dict[str, Any]], cid: str) -> dict[str, Any]
 def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     name = str(patch.get("name") or "").strip()
     raw_id = str(patch.get("id") or "").strip()
+    # 影子/剪影禁止建卡：应写进分镜画面，归并到本名角色（若有）。
+    if role_token_face_exempt(name) or role_token_face_exempt(raw_id):
+        base = canonical_role_name(name or raw_id)
+        if not base or role_token_face_exempt(base):
+            raise CharacterError(
+                "剪影/影子是镜头表现，不能单独建角色卡；请用本名角色，影子写在分镜「画面」里"
+            )
+        # 若误传「后羿（仅影子）」且项目已有「后羿」，直接落到本名卡上更新。
+        name = base
+        patch = {**patch, "name": base}
+        if raw_id and role_token_face_exempt(raw_id):
+            raw_id = ""
+            patch = {**patch, "id": None}
     if raw_id and _ID_RE.match(raw_id):
         cid = parse_character_id(raw_id)
     else:
@@ -598,18 +688,29 @@ def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         # Fall back to a deterministic ascii id derived from the name.
         cid = suggest_character_id(name or raw_id or "c")
     cards = load_characters(slug)
+    # 已有同名正脸卡时，合并到该卡，避免影子 id 残留。
+    by_name = match_character_token(name, cards) if name else None
+    if by_name and not is_shadow_stage_card(by_name):
+        cid = str(by_name.get("id") or cid)
     existing_rec = find_character(cards, cid)
     is_new = existing_rec is None
     existing = existing_rec or {"id": cid}
     merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}
     merged["id"] = cid
+    merged["name"] = name or str(merged.get("name") or cid)
     # 新建角色未显式指定音色时，按性别自动挑选（避免所有角色都落 DEFAULT_VOICE）
     if is_new and not str(merged.get("voice") or "").strip():
         merged["voice"] = pick_default_voice(slug, normalize_gender(merged.get("gender")), cards)
     rec = normalize_character(slug, merged)
+    if is_shadow_stage_card(rec):
+        raise CharacterError(
+            "剪影/影子是镜头表现，不能单独建角色卡；请用本名角色，影子写在分镜「画面」里"
+        )
     next_cards = [rec if c.get("id") == cid else c for c in cards]
     if not find_character(next_cards, cid):
         next_cards.append(rec)
+    # 写入时顺带丢掉其它影子卡
+    next_cards = [c for c in next_cards if not is_shadow_stage_card(c)]
     save_characters(slug, next_cards)
     return rec
 
@@ -694,15 +795,35 @@ def match_character_token(token: str, characters: list[dict[str, Any]]) -> dict[
     needle = str(token or "").strip()
     if not needle:
         return None
-    for char in characters:
-        for name in _names_of(char):
-            if needle == name:
-                return char
-    for char in characters:
-        for name in _names_of(char):
-            if needle in name or name in needle:
-                return char
-    return None
+    candidates = [needle]
+    base = canonical_role_name(needle)
+    if base and base not in candidates:
+        candidates.append(base)
+
+    def _prefer(hit: dict[str, Any] | None, other: dict[str, Any]) -> dict[str, Any]:
+        """同名时优先可锁脸的实体卡（后羿 优于 后羿（仅影子））。"""
+        if hit is None:
+            return other
+        if character_requires_face_identity(other) and not character_requires_face_identity(hit):
+            return other
+        return hit
+
+    best: dict[str, Any] | None = None
+    for cand in candidates:
+        for char in characters:
+            for name in _names_of(char):
+                if cand == name:
+                    best = _prefer(best, char)
+                    break
+    if best is not None:
+        return best
+    for cand in candidates:
+        for char in characters:
+            for name in _names_of(char):
+                if cand in name or name in cand:
+                    best = _prefer(best, char)
+                    break
+    return best
 
 
 def resolve_role_ids(raw: Any, characters: list[dict[str, Any]]) -> list[str]:
@@ -738,7 +859,11 @@ def infer_roles_from_dialogue(dialogue: str, characters: list[dict[str, Any]]) -
 
 
 def resolve_shot_characters(shot: dict[str, Any], characters: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cast_cards = [c for c in characters if normalize_category(c.get("category")) == "character"]
+    cast_cards = [
+        c
+        for c in characters
+        if normalize_category(c.get("category")) == "character" and not is_shadow_stage_card(c)
+    ]
     tokens = normalize_roles(shot.get("角色"))
     if not tokens:
         tokens = infer_roles_from_dialogue(str(shot.get("字幕") or shot.get("对白") or ""), cast_cards)
@@ -746,7 +871,11 @@ def resolve_shot_characters(shot: dict[str, Any], characters: list[dict[str, Any
     seen: set[str] = set()
     for token in tokens:
         hit = match_character_token(token, cast_cards) or find_character(cast_cards, token)
-        if not hit or hit["id"] in seen:
+        if hit is None:
+            base = canonical_role_name(str(token or ""))
+            if base and base != token:
+                hit = match_character_token(base, cast_cards)
+        if not hit or hit["id"] in seen or is_shadow_stage_card(hit):
             continue
         seen.add(hit["id"])
         out.append(hit)

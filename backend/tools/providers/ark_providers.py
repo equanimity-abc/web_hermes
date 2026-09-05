@@ -50,24 +50,13 @@ def _download(url: str, dest: Path) -> bool:
 _MAX_SEEDREAM_REFS = 3
 
 
-def _local_ref_to_data_uri(rel: str, *, max_side: int = 1536) -> str | None:
-    """把工作区内的定妆/参考图编成 Seedream ``image`` 可用的 data URI。"""
+def _image_path_to_data_uri(path: Path, *, max_side: int = 1536) -> str | None:
+    """本地图片 → JPEG data URI（压缩边长，避免 Seedream/Seedance 请求体过大）。"""
     import base64
     from io import BytesIO
 
     from PIL import Image
 
-    from tools.workspace import resolve_safe
-
-    rel = str(rel or "").strip().replace("\\", "/")
-    if not rel:
-        return None
-    if rel.startswith(("http://", "https://", "data:image/")):
-        return rel
-    try:
-        path = resolve_safe(rel)
-    except ValueError:
-        return None
     if not path.is_file() or path.stat().st_size < 32:
         return None
     try:
@@ -81,13 +70,41 @@ def _local_ref_to_data_uri(rel: str, *, max_side: int = 1536) -> str | None:
                 Image.Resampling.LANCZOS,
             )
         buf = BytesIO()
-        # JPEG 显著小于 PNG，避免 data URI 撑爆请求体。
         img.save(buf, format="JPEG", quality=90, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return f"data:image/jpeg;base64,{b64}"
     except Exception as e:
-        log.warning("ark ref encode failed (%s): %s", rel, e)
+        log.warning("ark image encode failed (%s): %s", path, e)
         return None
+
+
+def _local_ref_to_data_uri(rel: str, *, max_side: int = 1536) -> str | None:
+    """把工作区内的定妆/参考图编成 Seedream ``image`` 可用的 data URI。"""
+    from tools.workspace import resolve_safe
+
+    rel = str(rel or "").strip().replace("\\", "/")
+    if not rel:
+        return None
+    if rel.startswith(("http://", "https://", "data:image/")):
+        return rel
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        return None
+    return _image_path_to_data_uri(path, max_side=max_side)
+
+
+def _seedance_duration(seconds: float | int | None) -> int:
+    """Seedance 2.x 要求整数秒且最短 4s（2.5: 4–30；2.0: 4–15）。
+
+    管线 ``i2v_seconds`` 默认 2.5 → round 成 2/3，原逻辑会提交 duration=2 被 API 400。
+    """
+    try:
+        raw = float(seconds if seconds is not None else 5)
+    except (TypeError, ValueError):
+        raw = 5.0
+    sec = int(round(raw)) if raw > 0 else 5
+    return max(4, min(sec, 12))
 
 
 def _seedream_image_payload(refs: tuple[str, ...]) -> str | list[str] | None:
@@ -118,8 +135,9 @@ def _prompt_with_identity_refs(prompt: str, *, ref_count: int) -> str:
         )
     else:
         clause = (
-            f"参考图共{ref_count}张，均为出场角色定妆立绘（按图1、图2…顺序对应）；"
-            "严格保持各角色面部五官、发型与服装一致；"
+            f"参考图共{ref_count}张定妆立绘：图1为身份锁（本镜说话人/主体），"
+            "必须与图1同一张脸、同一发型与服装；"
+            "图2起为同镜其它角色外形参考；"
             "生成本镜全新构图与姿势，不要复制定妆立绘构图"
         )
     if not base:
@@ -174,7 +192,8 @@ def _ark_image(
     body: dict[str, Any] = {
         "model": model,
         "prompt": final_prompt,
-        "size": size,
+        # 官方图生图示例用 size="2K"；带参考图时跟官方走，像素串易削弱锁脸。
+        "size": "2K" if image_payload is not None else size,
         "response_format": "url",
         "output_format": "png",
         "watermark": False,
@@ -182,6 +201,7 @@ def _ark_image(
     }
     if image_payload is not None:
         body["image"] = image_payload
+        log.info("ark seedream i2i refs=%s size=2K", ref_count)
     if seed:
         body["seed"] = int(seed) % 2147483647
 
@@ -230,15 +250,16 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     """Seedance 图生视频（异步任务）。"""
     key = _ark_key()
     if not key:
+        if isinstance(shot, dict):
+            shot["i2v_error"] = "missing_ARK_API_KEY"
         return "none"
 
     try:
         from tools.drama_parallel import acquire_lane
+
         acquire_lane("ark")
     except Exception:
         pass
-
-    import base64
 
     from tools.drama_i2v import _motion_prompt
 
@@ -246,22 +267,54 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     prompt = _motion_prompt(shot)
     scene_path = Path(scene)
     if not scene_path.is_file():
+        if isinstance(shot, dict):
+            shot["i2v_error"] = "missing_scene"
         return "none"
 
-    # Prefer data URL for first frame when public upload is unavailable.
-    mime = "image/png" if scene_path.suffix.lower() == ".png" else "image/jpeg"
-    b64 = base64.b64encode(scene_path.read_bytes()).decode("ascii")
-    image_url = f"data:{mime};base64,{b64}"
-    duration = max(2, min(int(round(float(seconds) or 5)), 12))
+    # 与 Seedream refs 相同：JPEG 压缩，避免 4K PNG base64 撑爆 / 超时。
+    image_url = _image_path_to_data_uri(scene_path, max_side=1536)
+    if not image_url:
+        if isinstance(shot, dict):
+            shot["i2v_error"] = "scene_encode_failed"
+        return "none"
+    duration = _seedance_duration(seconds)
 
     body = {
         "model": model,
         "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image_url}},
+            {
+                "type": "image_url",
+                "image_url": {"url": image_url},
+                "role": "first_frame",
+            },
         ],
         "duration": duration,
+        # Seedance 2.5 首帧/首尾帧任务强制 ratio=adaptive，传 9:16 会 400。
+        "ratio": "adaptive",
+        "generate_audio": False,
     }
+
+    def _remember_error(msg: str) -> None:
+        if isinstance(shot, dict):
+            shot["i2v_error"] = str(msg or "")[:240]
+
+    def _format_http_error(resp: httpx.Response) -> str:
+        text = (resp.text or "").strip()
+        try:
+            data = resp.json()
+            err = data.get("error") if isinstance(data, dict) else None
+            if isinstance(err, dict):
+                code = err.get("code") or err.get("type") or ""
+                message = err.get("message") or err.get("msg") or ""
+                detail = f"{code}: {message}".strip(": ").strip()
+                if detail:
+                    return f"HTTP {resp.status_code}: {detail}"[:240]
+            if isinstance(data, dict) and data.get("message"):
+                return f"HTTP {resp.status_code}: {data.get('message')}"[:240]
+        except Exception:
+            pass
+        return f"HTTP {resp.status_code}: {text[:200]}"
 
     try:
         with httpx.Client(timeout=300.0, follow_redirects=True) as client:
@@ -270,7 +323,10 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 headers=_ark_headers(),
                 json=body,
             )
-            submit.raise_for_status()
+            if submit.status_code >= 400:
+                _remember_error(_format_http_error(submit))
+                log.warning("ark i2v submit failed: %s", submit.text[:500])
+                return "none"
             job = submit.json()
             task_id = str(job.get("id") or job.get("task_id") or "").strip()
             if not task_id:
@@ -281,8 +337,11 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                     or ""
                 )
                 if video_url and _download(video_url, Path(dest)):
+                    if isinstance(shot, dict):
+                        shot.pop("i2v_error", None)
                     return "ai"
                 log.warning("ark i2v no task id: %s", job)
+                _remember_error("no_task_id")
                 return "none"
 
             deadline = time.monotonic() + float(getattr(config, "I2V_POLL_TIMEOUT", 300) or 300)
@@ -292,7 +351,9 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                     f"{_ark_base()}/contents/generations/tasks/{task_id}",
                     headers=_ark_headers(),
                 )
-                poll.raise_for_status()
+                if poll.status_code >= 400:
+                    _remember_error(_format_http_error(poll))
+                    return "none"
                 info = poll.json()
                 status = str(info.get("status") or info.get("task_status") or "").lower()
                 if status in ("succeeded", "success", "completed", "done"):
@@ -304,15 +365,24 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                         or ""
                     )
                     if video_url and _download(str(video_url), Path(dest)):
+                        if isinstance(shot, dict):
+                            shot.pop("i2v_error", None)
                         return "ai"
+                    _remember_error("succeeded_but_no_video_url")
                     return "none"
                 if status in ("failed", "error", "cancelled"):
+                    err = info.get("error") or info.get("message") or info
                     log.warning("ark i2v task failed: %s", info)
+                    _remember_error(f"task_{status}: {err}"[:240])
                     return "none"
             log.warning("ark i2v timeout task=%s", task_id)
+            _remember_error(f"timeout task={task_id}")
             return "none"
     except Exception as e:
         log.warning("ark i2v failed: %s", e)
+        # 保留已解析的 HTTP 业务错误，不被通用异常文案覆盖。
+        if isinstance(shot, dict) and not shot.get("i2v_error"):
+            _remember_error(str(e))
         return "none"
 
 

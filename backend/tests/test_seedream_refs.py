@@ -20,7 +20,7 @@ def test_prompt_with_identity_refs():
     one = ark_providers._prompt_with_identity_refs("竖屏近景嫦娥", ref_count=1)
     assert "定妆" in one and "全新构图" in one
     two = ark_providers._prompt_with_identity_refs("双人镜", ref_count=2)
-    assert "图1" in two and "图2" in two
+    assert "图1" in two and "身份锁" in two and "图2" in two
     none = ark_providers._prompt_with_identity_refs("空镜", ref_count=0)
     assert none == "空镜"
 

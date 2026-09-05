@@ -295,10 +295,12 @@ def ensure_hq_preset(slug: str) -> str:
 def ensure_characters_from_shots(slug: str, doc: dict[str, Any]) -> list[str]:
     """Create minimal character cards for shot roles that have no card yet."""
     from tools.drama_characters import (
+        canonical_role_name,
         infer_roles_from_dialogue,
         load_characters,
         match_character_token,
         normalize_roles,
+        role_token_face_exempt,
         upsert_character,
     )
 
@@ -311,11 +313,18 @@ def ensure_characters_from_shots(slug: str, doc: dict[str, Any]) -> list[str]:
         if not tokens:
             tokens = infer_roles_from_dialogue(str(shot.get("字幕") or ""), cast)
         for token in tokens:
-            t = str(token or "").strip()
+            raw = str(token or "").strip()
+            if not raw:
+                continue
+            # 「后羿（仅影子）」→ 归并到「后羿」，避免再建无人脸卡去撞身份闸。
+            t = canonical_role_name(raw)
             if not t or t in seen:
                 continue
             seen.add(t)
-            if match_character_token(t, cast):
+            if match_character_token(t, cast) or match_character_token(raw, cast):
+                continue
+            # 收束后仍是剪影说明本身（如角色列只有「剪影」）→ 不成卡
+            if role_token_face_exempt(t):
                 continue
             needed.append(t)
 
@@ -352,6 +361,7 @@ def ensure_character_refs(
     import zlib
 
     from tools.drama_characters import (
+        character_requires_face_identity,
         find_character,
         load_characters,
         ref_exists,
@@ -373,6 +383,9 @@ def ensure_character_refs(
             continue
         cid = str(rec.get("id") or "")
         if not cid:
+            continue
+        # 剪影/仅影子：不做 ArcFace 定妆闸（无人脸是预期，不是失败）。
+        if not character_requires_face_identity(rec):
             continue
         if not str(rec.get("look") or "").strip():
             continue
@@ -490,13 +503,11 @@ def _assert_identity_deps_ready(slug: str) -> None:
     存在角色卡（可能需要抽身份）但 ArcFace 未就绪时直接失败，避免白烧图像模型；
     无角色（整集定场/标题，身份全部 n/a）则跳过。
     """
-    from tools.drama_characters import load_characters
+    from tools.drama_characters import character_requires_face_identity, load_characters
     from tools.drama_qc import _arcface_ready
 
     cards = load_characters(slug)
-    needs_identity = any(
-        str(c.get("category") or "character") == "character" for c in cards
-    )
+    needs_identity = any(character_requires_face_identity(c) for c in cards)
     if needs_identity and not _arcface_ready():
         raise RuntimeError(
             "身份模型 ArcFace 未就绪（insightface 未安装或 buffalo_l 模型未缓存），"
@@ -557,7 +568,13 @@ def _hq_process_one_shot(
         if cancel_check:
             cancel_check()
         info = render_shot_layers(
-            slug, n, shot, layers, title=ep_title, candidate_count=1
+            slug,
+            n,
+            shot,
+            layers,
+            title=ep_title,
+            candidate_count=1,
+            seed_jitter=attempt * 10007,
         )
         degrades.extend(info.get("degrades") or [])
         merge_save_shot(slug, n, shot)
@@ -620,8 +637,13 @@ def _hq_process_one_shot(
     kind = infer_kind(shot)
     if planned not in ("L0",) and kind not in ("establishing", "insert", "crowd", "title"):
         if src not in ("ai", "keys"):
+            detail = str(shot.get("i2v_error") or i2v.get("reason") or "").strip()
+            provider = str(shot.get("i2v_provider") or i2v.get("provider") or "").strip()
+            extra = ""
+            if provider or detail:
+                extra = f"（provider={provider or '?'}{('；' + detail) if detail else ''}）"
             raise RuntimeError(
-                f"Shot {sn} 需要真 I2V（计划 {planned}），但得到 {src or 'none'}；"
+                f"Shot {sn} 需要真 I2V（计划 {planned}），但得到 {src or 'none'}{extra}；"
                 "专业档禁止 Ken Burns/mock 顶替"
             )
     merge_save_shot(slug, n, shot)
@@ -722,9 +744,10 @@ def produce_episode_hq(
     clock.end("sync")
 
     clock.start("cast")
-    created_chars = ensure_characters_from_shots(slug, doc)
-    from tools.drama_characters import ensure_character_looks_expanded
+    from tools.drama_characters import ensure_character_looks_expanded, purge_shadow_character_cards
 
+    purged_shadows = purge_shadow_character_cards(slug)
+    created_chars = ensure_characters_from_shots(slug, doc)
     expanded_looks = ensure_character_looks_expanded(slug)
     _assert_identity_deps_ready(slug)
     ref_chars = ensure_character_refs(
@@ -735,11 +758,17 @@ def produce_episode_hq(
         on_progress,
         stage="cast",
         message=(
-            f"角色 {len(created_chars)} 新建 · look 扩写 {len(expanded_looks)} · "
-            f"定妆 {len(ref_chars)} 生成"
+            f"角色 {len(created_chars)} 新建 · 清除影子卡 {len(purged_shadows)} · "
+            f"look 扩写 {len(expanded_looks)} · 定妆 {len(ref_chars)} 生成"
         ),
     )
-    clock.end("cast", characters=len(created_chars), refs=len(ref_chars), looks=len(expanded_looks))
+    clock.end(
+        "cast",
+        characters=len(created_chars),
+        refs=len(ref_chars),
+        looks=len(expanded_looks),
+        shadows_purged=len(purged_shadows),
+    )
 
     shots = list(doc.get("shots") or [])
     total = len(shots)
@@ -748,6 +777,7 @@ def produce_episode_hq(
         "quality_profile": profile,
         "research": research_backlog(),
         "characters_created": created_chars,
+        "shadows_purged": purged_shadows,
         "looks_expanded": expanded_looks,
         "refs_generated": ref_chars,
         "embeddings": emb_cids,

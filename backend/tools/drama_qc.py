@@ -167,7 +167,16 @@ def _arcface_singleton() -> Any:
         return _arcface_app
 
 
-def _arcface_embedding(path: Path) -> tuple[list[float] | None, str]:
+def _arcface_embedding(
+    path: Path,
+    *,
+    match_to: list[float] | None = None,
+) -> tuple[list[float] | None, str]:
+    """取图中 ArcFace 嵌入。
+
+    - ``match_to`` 有值：在多人脸中选与之余弦最高的一张（双人镜避免拿错脸）。
+    - 否则：取检测框面积最大的脸（比 ``faces[0]`` 顺序更稳）。
+    """
     try:
         import insightface.app  # type: ignore  # noqa: F401 — availability probe
     except ImportError:
@@ -183,13 +192,34 @@ def _arcface_embedding(path: Path) -> tuple[list[float] | None, str]:
         faces = app.get(img)
         if not faces:
             return None, "no_face"
-        # 不能用 ``a or b``：numpy 向量的真值会抛 ValueError，被误报成 arcface_error。
-        emb = getattr(faces[0], "normed_embedding", None)
-        if emb is None:
-            emb = getattr(faces[0], "embedding", None)
-        if emb is None:
+
+        def _face_emb(face: Any) -> list[float] | None:
+            emb = getattr(face, "normed_embedding", None)
+            if emb is None:
+                emb = getattr(face, "embedding", None)
+            if emb is None:
+                return None
+            return [float(x) for x in list(emb)]
+
+        scored: list[tuple[float, list[float]]] = []
+        for face in faces:
+            vec = _face_emb(face)
+            if vec is None:
+                continue
+            bbox = getattr(face, "bbox", None)
+            try:
+                area = float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) if bbox is not None else 0.0
+            except Exception:
+                area = 0.0
+            if match_to is not None:
+                score = _cosine(match_to, vec)
+            else:
+                score = area
+            scored.append((score, vec))
+        if not scored:
             return None, "no_embedding"
-        return [float(x) for x in list(emb)], "arcface"
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return scored[0][1], "arcface"
     except Exception:
         return None, "arcface_error"
 
@@ -260,7 +290,10 @@ def score_pair(
         vec_a, method = [float(x) for x in left_emb], "arcface"
     else:
         vec_a, method = _arcface_embedding(left)
-    vec_b, method_b = _arcface_embedding(right) if vec_a is not None else (None, method)
+    # 右图（本镜画面）按左图定妆嵌入选脸，避免双人镜拿错成配角。
+    vec_b, method_b = (
+        _arcface_embedding(right, match_to=vec_a) if vec_a is not None else (None, method)
+    )
 
     if vec_a is not None and vec_b is not None and method_b == "arcface":
         cosine = round(_cosine(vec_a, vec_b), 4)
@@ -303,13 +336,23 @@ def score_pair(
 
 
 def _subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
+    from tools.drama_characters import character_requires_face_identity
+
     cards = load_characters(slug)
     speaker = infer_speaker(shot)
     if speaker:
         hit = find_character(cards, speaker)
-        if hit:
+        if hit is None:
+            from tools.drama_characters import match_character_token
+
+            hit = match_character_token(speaker, cards)
+        if hit and character_requires_face_identity(hit):
             return hit
+        # 说话人是剪影卡时，尽量回退到同镜可锁脸角色
     cast = resolve_shot_characters(shot, cards)
+    for char in cast:
+        if character_requires_face_identity(char):
+            return char
     return cast[0] if cast else None
 
 
@@ -337,11 +380,29 @@ def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
 
 
 def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
-    """All locked reference-image paths for characters in this shot (R4 refs)."""
+    """本镜锁定定妆路径，供出图 ``image`` 参考。
+
+    顺序：身份主体（说话人/主角色）永远在前作为图1，再跟同镜其它可锁脸角色。
+    Seedream 多图融合时图1权重最高；若把配角放图1，主体脸会被冲淡，身份 QC 易挂。
+    """
+    from tools.drama_characters import character_requires_face_identity
+
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
-    refs: list[str] = []
+    subject = _subject_character(slug, shot)
+    ordered: list[dict[str, Any]] = []
+    if subject and character_requires_face_identity(subject):
+        ordered.append(subject)
     for char in cast:
+        if not character_requires_face_identity(char):
+            continue
+        cid = str(char.get("id") or "")
+        if any(str(x.get("id") or "") == cid for x in ordered):
+            continue
+        ordered.append(char)
+
+    refs: list[str] = []
+    for char in ordered:
         path = _char_ref_path(slug, char)
         if path and path not in refs:
             refs.append(path)
@@ -455,6 +516,28 @@ def qc_shot_identity(
         checks.append(pair)
 
     kind = infer_kind(shot)
+    from tools.drama_characters import character_requires_face_identity
+
+    if char is not None and not character_requires_face_identity(char) and not checks:
+        result = {
+            "status": "n/a",
+            "pass": False,
+            "required": False,
+            "reason": "silhouette",
+            "method": "",
+            "cosine": None,
+            "threshold": threshold,
+            "hint": "本镜主体为剪影/影子角色，不抽检人脸身份",
+            "character_id": (char or {}).get("id") or "",
+            "character_name": char_name,
+            "checks": [],
+            "kind": kind,
+        }
+        if apply:
+            shot["identity_hint"] = ""
+        shot["identity"] = result
+        return result
+
     if char is None and not infer_speaker(shot) and kind in ("establishing", "crowd", "title", "insert"):
         result = {
             "status": "n/a",

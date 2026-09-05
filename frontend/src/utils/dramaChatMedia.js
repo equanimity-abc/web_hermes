@@ -406,8 +406,33 @@ export async function awaitPendingDramaVideos(
               if (playUrl && isVideoUrl(playUrl)) ready.set(epNo, playUrl)
               jobId = ''
             }
-          } catch {
-            /* keep polling */
+          } catch (err) {
+            // 后端重启后内存 job 会丢：404 应立刻停轮询，避免刷屏。
+            const status = Number(err?.status || 0)
+            if (status === 404 || /404|not found|找不到/i.test(String(err?.message || ''))) {
+              terminalError = `后台任务已失效（${pollJobId || jobId}），可能因服务重启丢失，请重新发起渲染`
+              tool.status = 'error'
+              tool.result = JSON.stringify({
+                ...(data || {}),
+                ok: false,
+                error: terminalError,
+                status: 'gone',
+                job_id: pollJobId || jobId,
+              })
+              setMessageDramaJob(message, {
+                state: 'error',
+                jobId: pollJobId || jobId,
+                line: terminalError,
+                error: terminalError,
+                pct: lastProgress.pct || 0,
+              })
+              onStatus?.(terminalError)
+              message.content = terminalError
+              lastError = terminalError
+              jobId = ''
+              break
+            }
+            /* 其它瞬时错误：继续轮询 */
           }
         }
 
@@ -512,9 +537,12 @@ export function findPendingDramaJobIds(message) {
   const ids = []
   for (const tool of message?.toolCalls || []) {
     if (String(tool.name || '') !== 'tiktok_drama') continue
+    if (tool.status === 'error') continue
     try {
       const data = JSON.parse(tool.result || '')
-      if (data?.job_id && !data?.play_url && data?.ok !== false) ids.push(String(data.job_id))
+      if (data?.ok === false) continue
+      if (data?.status === 'gone' || data?.status === 'error' || data?.status === 'cancelled') continue
+      if (data?.job_id && !data?.play_url) ids.push(String(data.job_id))
     } catch {
       /* */
     }
@@ -534,6 +562,7 @@ export async function resumeDramaProgressForMessages(messages, opts = {}) {
       if (String(tool.name || '') !== 'tiktok_drama') continue
       try {
         const data = JSON.parse(tool.result || '')
+        if (data?.ok === false || data?.status === 'gone' || data?.status === 'error') continue
         if (data?.job_id && !data?.play_url) {
           tool.status = tool.status === 'error' ? 'error' : 'running'
           if (!message.dramaJob) {

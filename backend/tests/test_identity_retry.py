@@ -11,7 +11,7 @@ from tools.drama_qc import validate_character_ref
 def test_qc_defaults_include_identity_retry_limits():
     qc = default_models()["qc"]
     assert qc["identity_ref_retries"] == 2
-    assert qc["identity_scene_retries"] == 1
+    assert qc["identity_scene_retries"] == 2
 
 
 def test_validate_character_ref_missing_file_not_retryable():

@@ -74,8 +74,19 @@ export function useDramaJobs({ onTerminal } = {}) {
         try {
           latest = await dramaApi.getJob(job.job_id)
           upsertJob(latest)
-        } catch {
-          /* keep polling */
+        } catch (err) {
+          const status = Number(err?.status || 0)
+          if (status === 404 || /404|not found|找不到/i.test(String(err?.message || ''))) {
+            const gone = {
+              ...(latest || job),
+              job_id: job.job_id,
+              status: 'error',
+              error: `后台任务已失效（${job.job_id}），可能因服务重启丢失`,
+            }
+            upsertJob(gone)
+            return gone
+          }
+          /* keep polling on transient errors */
         }
       }
       if (latest && TERMINAL.has(latest.status)) {
