@@ -748,11 +748,12 @@ def produce_episode_hq(
     clock.end("sync")
 
     clock.start("cast")
-    from tools.drama_characters import ensure_character_looks_expanded, purge_shadow_character_cards
+    from tools.drama_characters import ensure_character_looks_expanded, ensure_character_anchors, purge_shadow_character_cards
 
     purged_shadows = purge_shadow_character_cards(slug)
     created_chars = ensure_characters_from_shots(slug, doc)
     expanded_looks = ensure_character_looks_expanded(slug)
+    anchored = ensure_character_anchors(slug)
     _assert_identity_deps_ready(slug)
     ref_chars = ensure_character_refs(
         slug, on_progress=on_progress, identity_ref_retries=identity_ref_retries
@@ -763,7 +764,7 @@ def produce_episode_hq(
         stage="cast",
         message=(
             f"角色 {len(created_chars)} 新建 · 清除影子卡 {len(purged_shadows)} · "
-            f"look 扩写 {len(expanded_looks)} · 定妆 {len(ref_chars)} 生成"
+            f"look 扩写 {len(expanded_looks)} · 特征锚 {len(anchored)} · 定妆 {len(ref_chars)} 生成"
         ),
     )
     clock.end(
@@ -771,6 +772,7 @@ def produce_episode_hq(
         characters=len(created_chars),
         refs=len(ref_chars),
         looks=len(expanded_looks),
+        anchors=len(anchored),
         shadows_purged=len(purged_shadows),
     )
 

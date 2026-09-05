@@ -492,6 +492,44 @@ def expand_character_look(
     return out[:400]
 
 
+def character_anchor_prompt(char: dict[str, Any] | None) -> str:
+    """冻结的角色特征锚短句：出图层时必注入，优先已写入的 anchor_prompt。"""
+    if not char:
+        return ""
+    frozen = str(char.get("anchor_prompt") or "").strip()
+    if frozen:
+        return frozen
+    name = str(char.get("name") or char.get("id") or "").strip() or "角色"
+    look = str(char.get("look") or "").strip()
+    if look:
+        # 控制长度，避免冲淡构图指令
+        short = look if len(look) <= 160 else look[:157] + "…"
+        return f"{name}：{short}。同一张脸同一发型同一套服装"
+    return f"{name}：保持定妆同一张脸同一发型同一套服装"
+
+
+def ensure_character_anchors(slug: str) -> list[str]:
+    """为可锁脸角色写入缺失的 anchor_prompt；返回更新的 cid。"""
+    updated: list[str] = []
+    cards = load_characters(slug)
+    for rec in cards:
+        if normalize_category(rec.get("category")) != "character":
+            continue
+        if not character_requires_face_identity(rec):
+            continue
+        cid = str(rec.get("id") or "")
+        if not cid:
+            continue
+        if str(rec.get("anchor_prompt") or "").strip():
+            continue
+        prompt = character_anchor_prompt(rec)
+        if not prompt:
+            continue
+        upsert_character(slug, {"id": cid, "anchor_prompt": prompt})
+        updated.append(cid)
+    return updated
+
+
 def ensure_character_looks_expanded(slug: str) -> list[str]:
     """对项目内过薄的角色 look 做一次扩写并写回角色卡；返回被更新的 cid。"""
     bible = ""
@@ -731,6 +769,8 @@ def set_ref_locked(slug: str, cid: str, locked: bool) -> dict[str, Any]:
     if rec is None:
         raise CharacterError(f"找不到角色：{cid}")
     rec["ref_locked"] = bool(locked)
+    if locked and not str(rec.get("anchor_prompt") or "").strip():
+        rec["anchor_prompt"] = character_anchor_prompt(rec)
     return upsert_character(slug, rec)
 
 
@@ -1002,8 +1042,11 @@ def character_prompt_clause(characters: list[dict[str, Any]], *, slug: str = "")
     for char in characters:
         name = char.get("name") or char.get("id")
         look = str(char.get("look") or "").strip() or "保持原作角色设计一致"
+        anchor = str(char.get("anchor_prompt") or "").strip()
         colors = palette_phrase(slug, char) if slug else str(char.get("colors") or "")
         bit = f"{name}：{look}"
+        if anchor and anchor not in bit:
+            bit += f"。特征锚：{anchor}"
         if colors:
             bit += f"，配色：{colors}"
         if char.get("ref_locked") and look:

@@ -1012,21 +1012,41 @@ def generate_shot_candidates(
         rel = candidate_rel(slug, episode, n, cid)
         dest = resolve_safe(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        ai_ok = bool(
-            retry_call(
-                _generate_scene_image,
-                varied_prompt,
-                dest,
-                seed=seed,
-                refs=refs,
-                slug=slug,
-                shot=shot,
-                episode=episode,
+
+        ai_ok = False
+        source = "fallback"
+        # P1：有空间槽 + 定妆时优先分层生成（一层一角色再融合）。
+        plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
+        if refs and count <= 1 and plan and (plan.get("slots") or []):
+            try:
+                from tools.drama_layers import generate_layered_scene
+
+                layered = generate_layered_scene(
+                    slug, episode, shot, dest, title=title, seed=seed
+                )
+                if layered.get("ok") and dest.is_file() and dest.stat().st_size > 1000:
+                    ai_ok = True
+                    source = "layered"
+            except Exception:
+                ai_ok = False
+        if not ai_ok:
+            ai_ok = bool(
+                retry_call(
+                    _generate_scene_image,
+                    varied_prompt,
+                    dest,
+                    seed=seed,
+                    refs=refs,
+                    slug=slug,
+                    shot=shot,
+                    episode=episode,
+                )
             )
-        )
+            source = "ai" if ai_ok else "fallback"
         if not ai_ok:
             _draw_fallback_scene(shot, dest, cast, seed=seed)
-        return {"id": cid, "path": rel, "source": "ai" if ai_ok else "fallback", "seed": seed, "ai": ai_ok}
+            source = "fallback"
+        return {"id": cid, "path": rel, "source": source, "seed": seed, "ai": ai_ok or source == "layered"}
 
     # S4: 候选墙并发出图，受 DRAMA_MAX_WORKERS 约束（保留 ids 顺序）。
     from concurrent.futures import ThreadPoolExecutor
@@ -1042,7 +1062,7 @@ def generate_shot_candidates(
     if "shot" not in locked and "scene" not in locked and created:
         apply_candidate_to_scene(shot, created[0])
         if used_ai:
-            shot["scene_source"] = "ai"
+            shot["scene_source"] = str(created[0].get("source") or "ai")
         shot["dirty"] = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
         if "clip" not in (shot.get("dirty") or []) and "clip" not in locked:
             shot.setdefault("dirty", []).append("clip")
