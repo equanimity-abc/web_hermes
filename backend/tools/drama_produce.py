@@ -668,6 +668,13 @@ def _hq_process_one_shot(
         record_shot_identity_pass(slug, n, shot, identity_last)
     except Exception:
         pass
+    # P3：通过帧入库，供后续镜检索构图记忆
+    try:
+        from tools.drama_frame_memory import add_passed_frame
+
+        add_passed_frame(slug, episode=n, shot=shot, identity=identity_last)
+    except Exception:
+        pass
     merge_save_shot(slug, n, shot)
     if cancel_check:
         cancel_check()

@@ -607,12 +607,19 @@ def _scene_prompt(
 
     plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
     spatial_clause = spatial_prompt_clause(plan)
+    memory_clause = ""
+    hits = shot.get("_memory_hits")
+    if isinstance(hits, list) and hits:
+        from tools.drama_frame_memory import memory_prompt_clause
+
+        memory_clause = memory_prompt_clause(hits)
     bits = [
         "竖屏9:16竖屏短剧关键帧",
         title or "短剧",
         scene,
         char_clause,
         spatial_clause,
+        memory_clause,
         kinetic,
     ]
     if needs_face and speaker:
@@ -974,10 +981,31 @@ def generate_shot_candidates(
     from tools.drama_spatial import build_spatial_plan
 
     build_spatial_plan(slug, shot)
+    # P3：检索历史通过帧作构图记忆（不定妆，只进 prompt）
+    try:
+        from tools.drama_frame_memory import search_similar_frames
+
+        plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else {}
+        cids = [str(s.get("character_id") or "") for s in (plan.get("slots") or []) if s.get("character_id")]
+        if not cids:
+            cids = [str(c.get("id") or "") for c in cast if c.get("id")]
+        hits = search_similar_frames(
+            slug,
+            character_ids=cids,
+            plan_hash=str(plan.get("hash") or ""),
+            identity_subject_id=str(plan.get("identity_subject_id") or ""),
+            exclude_episode=episode,
+            exclude_shot=int(shot.get("n") or 0),
+            limit=2,
+        )
+        shot["_memory_hits"] = hits
+    except Exception:
+        shot["_memory_hits"] = []
     shot["camera"] = _camera_style(shot)
     shot["_episode"] = episode
     prompt = _scene_prompt(title, shot, cast, slug=slug)
     shot.pop("_episode", None)
+    shot.pop("_memory_hits", None)
     shot["prompt"] = prompt
     base_seed = (character_seed(slug, cast, int(shot.get("n") or 1)) + int(seed_jitter or 0)) & 0x7FFFFFFF
     ids = next_candidate_ids(shot, count)
