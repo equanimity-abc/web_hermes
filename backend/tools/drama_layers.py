@@ -222,6 +222,7 @@ def generate_layered_scene(
 
 
 def _failing_character_ids(identity: dict[str, Any]) -> list[str]:
+    """仅主体身份失败需要层重生；配角低分不列入（与 QC 硬闸一致）。"""
     ids: list[str] = []
     subject = str(identity.get("character_id") or "")
     threshold = float(identity.get("threshold") or 0.75)
@@ -231,11 +232,11 @@ def _failing_character_ids(identity: dict[str, Any]) -> list[str]:
             continue
         role = str(row.get("role") or "support")
         is_subject = cid == subject or role == "identity"
+        if not is_subject:
+            continue
         cos = row.get("cosine")
         bad = (not row.get("matched")) or (cos is not None and float(cos) < threshold)
-        if is_subject and bad:
-            ids.append(cid)
-        elif (not is_subject) and row.get("matched") and bad:
+        if bad:
             ids.append(cid)
     return list(dict.fromkeys(ids))
 

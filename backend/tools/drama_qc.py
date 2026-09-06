@@ -130,9 +130,9 @@ _arcface_lock = threading.RLock()
 # 竖屏漫剧常用 1080×1920 / 1620×2880；det=640 易漏检二次元小脸。
 _ARCFACE_DET_SIZE = (960, 960)
 _ARCFACE_DET_SIZE_FALLBACK = (1280, 1280)
-# 竖屏漫剧常用 1080×1920 / 1620×2880；640 易漏检二次元小脸，默认 960。
-_ARCFACE_DET_SIZE = (960, 960)
-_ARCFACE_DET_SIZE_FALLBACK = (1280, 1280)
+_ARCFACE_DET_SIZE_LARGE = (1600, 1600)
+_ARCFACE_DET_THRESH_DEFAULT = 0.5
+_ARCFACE_DET_THRESH_RELAXED = (0.35, 0.25)
 
 
 def _arcface_ready() -> bool:
@@ -176,7 +176,8 @@ def _arcface_singleton() -> Any:
 def _arcface_faces(path: Path) -> tuple[list[dict[str, Any]], str]:
     """检测图中全部人脸：[{emb, bbox, area}]。
 
-    InsightFace 期望 BGR；对高分辨率图在 0 脸时再升一档 det_size（只加强检测，不换图）。
+    InsightFace 期望 BGR；0 脸时降 det_thresh、升 det_size，必要时轻量放大再检
+    （二次元/侧脸/小脸常见漏检，不换模型、不改图语义）。
     """
     try:
         import insightface.app  # type: ignore  # noqa: F401
@@ -215,17 +216,77 @@ def _arcface_faces(path: Path) -> tuple[list[dict[str, Any]], str]:
                 )
             return out
 
+        def _scale_boxes(rows: list[dict[str, Any]], sx: float, sy: float) -> list[dict[str, Any]]:
+            scaled: list[dict[str, Any]] = []
+            for row in rows:
+                box = list(row.get("bbox") or [])
+                if len(box) != 4:
+                    continue
+                nb = [box[0] / sx, box[1] / sy, box[2] / sx, box[3] / sy]
+                area = max(0.0, (nb[2] - nb[0]) * (nb[3] - nb[1]))
+                scaled.append(
+                    {
+                        **row,
+                        "bbox": nb,
+                        "area": area,
+                        "img_w": w,
+                        "img_h": h,
+                    }
+                )
+            return scaled
+
         # get + 偶发升档 prepare 需串行，避免并行镜互相改 det_size
         with _arcface_lock:
             app = _arcface_singleton()
             if app is None:
                 return [], "no_insightface"
             rows = _collect(app.get(img))
-            if not rows and max(h, w) >= 1024:
-                app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE_FALLBACK)
-                try:
+            if not rows:
+                attempts: list[tuple[tuple[int, int], float]] = [
+                    (_ARCFACE_DET_SIZE_FALLBACK, _ARCFACE_DET_THRESH_DEFAULT),
+                    (_ARCFACE_DET_SIZE_FALLBACK, _ARCFACE_DET_THRESH_RELAXED[0]),
+                    (_ARCFACE_DET_SIZE_LARGE, _ARCFACE_DET_THRESH_RELAXED[0]),
+                    (_ARCFACE_DET_SIZE_LARGE, _ARCFACE_DET_THRESH_RELAXED[1]),
+                ]
+                for size, thresh in attempts:
+                    try:
+                        app.prepare(ctx_id=-1, det_size=size, det_thresh=thresh)
+                    except TypeError:
+                        app.prepare(ctx_id=-1, det_size=size)
                     rows = _collect(app.get(img))
-                finally:
+                    if rows:
+                        break
+                if not rows and max(h, w) < 1600:
+                    # 小图二次元：放大后再检，bbox 映射回原图
+                    scale = 1600.0 / float(max(h, w))
+                    nh, nw = max(1, int(round(h * scale))), max(1, int(round(w * scale)))
+                    try:
+                        from PIL import Image as _PILImage
+
+                        big_rgb = np.asarray(
+                            _PILImage.fromarray(rgb).resize((nw, nh), _PILImage.Resampling.BICUBIC)
+                        )
+                    except Exception:
+                        big_rgb = np.asarray(
+                            Image.fromarray(rgb).resize((nw, nh), Image.BICUBIC)
+                        )
+                    big = np.ascontiguousarray(big_rgb[:, :, ::-1])
+                    try:
+                        app.prepare(
+                            ctx_id=-1,
+                            det_size=_ARCFACE_DET_SIZE_FALLBACK,
+                            det_thresh=_ARCFACE_DET_THRESH_RELAXED[1],
+                        )
+                    except TypeError:
+                        app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE_FALLBACK)
+                    rows = _scale_boxes(_collect(app.get(big)), scale, scale)
+                try:
+                    app.prepare(
+                        ctx_id=-1,
+                        det_size=_ARCFACE_DET_SIZE,
+                        det_thresh=_ARCFACE_DET_THRESH_DEFAULT,
+                    )
+                except TypeError:
                     app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE)
         if not rows:
             return [], "no_face"
@@ -239,33 +300,50 @@ def match_faces_to_refs(
     scene_faces: list[dict[str, Any]],
     *,
     match_floor: float = 0.35,
+    subject_id: str = "",
 ) -> list[dict[str, Any]]:
-    """贪心一对一匹配：ref_items=[{character_id, character_name, emb, ...}]。
+    """一对一匹配。若指定 subject_id，先给主体锁最佳脸，再给配角分剩余脸。
 
-    返回每条：character_id, cosine, face_index, bbox, matched。
+    避免「嫦娥拎玉兔」大脸被配角定妆抢走，主体只分到残脸而误杀。
     """
-    unused = set(range(len(scene_faces)))
-    # 所有边按相似度降序
-    edges: list[tuple[float, int, int]] = []
-    for ri, ref in enumerate(ref_items):
-        remb = ref.get("emb")
-        if not remb:
-            continue
-        for fi in unused:
-            cos = _cosine(list(remb), list(scene_faces[fi]["emb"]))
-            edges.append((cos, ri, fi))
-    edges.sort(key=lambda e: e[0], reverse=True)
+    unused_faces = set(range(len(scene_faces)))
     assigned_ref: set[int] = set()
     assigned_face: set[int] = set()
     picked: dict[int, tuple[float, int]] = {}
-    for cos, ri, fi in edges:
-        if cos < match_floor:
-            break
-        if ri in assigned_ref or fi in assigned_face:
-            continue
-        assigned_ref.add(ri)
-        assigned_face.add(fi)
-        picked[ri] = (cos, fi)
+
+    def _best_edges(ref_indices: list[int]) -> list[tuple[float, int, int]]:
+        edges: list[tuple[float, int, int]] = []
+        for ri in ref_indices:
+            remb = ref_items[ri].get("emb")
+            if not remb:
+                continue
+            for fi in unused_faces:
+                cos = _cosine(list(remb), list(scene_faces[fi]["emb"]))
+                edges.append((cos, ri, fi))
+        edges.sort(key=lambda e: e[0], reverse=True)
+        return edges
+
+    def _assign(edges: list[tuple[float, int, int]]) -> None:
+        for cos, ri, fi in edges:
+            if cos < match_floor:
+                break
+            if ri in assigned_ref or fi in assigned_face:
+                continue
+            assigned_ref.add(ri)
+            assigned_face.add(fi)
+            unused_faces.discard(fi)
+            picked[ri] = (cos, fi)
+
+    subj = str(subject_id or "").strip()
+    subj_indices = [
+        i
+        for i, ref in enumerate(ref_items)
+        if subj and str(ref.get("character_id") or "") == subj
+    ]
+    other_indices = [i for i in range(len(ref_items)) if i not in subj_indices]
+    if subj_indices:
+        _assign(_best_edges(subj_indices))
+    _assign(_best_edges(other_indices if subj_indices else list(range(len(ref_items)))))
 
     results: list[dict[str, Any]] = []
     for ri, ref in enumerate(ref_items):
@@ -626,19 +704,17 @@ def qc_shot_identity(
         shot["identity"] = result
         return result
 
-    # 组装本镜需验角色：spatial_plan.slots 优先，否则 subject + 可锁脸 cast
+    # 组装本镜需验角色：仅限本镜 cast；禁止用全项目卡补齐槽位（否则脏 plan 会把玉兔验进嫦娥镜）
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else {}
     slots = list((plan or {}).get("slots") or [])
     identity_chars: list[dict[str, Any]] = []
+    by_id = {str(c.get("id") or ""): c for c in cast}
     if slots:
-        by_id = {str(c.get("id") or ""): c for c in cast}
         for slot in slots:
             cid = str(slot.get("character_id") or "")
             c = by_id.get(cid)
-            if c is None:
-                c = next((x for x in cards if str(x.get("id") or "") == cid), None)
             if c and character_requires_face_identity(c) and _char_ref_path(slug, c):
                 identity_chars.append({**c, "_slot_role": slot.get("role") or "support"})
     if not identity_chars and char and _char_ref_path(slug, char):
@@ -757,7 +833,12 @@ def qc_shot_identity(
         shot["identity"] = result
         return result
 
-    matches = match_faces_to_refs(ref_items, scene_faces, match_floor=MATCH_FLOOR)
+    matches = match_faces_to_refs(
+        ref_items,
+        scene_faces,
+        match_floor=MATCH_FLOOR,
+        subject_id=str((char or {}).get("id") or ""),
+    )
     # 槽位对齐
     for row in matches:
         if not row.get("matched") or not row.get("bbox"):
@@ -780,7 +861,12 @@ def qc_shot_identity(
         row["min_face_ratio"] = min_ratio
         row["face_ratio_ok"] = float(row.get("face_ratio") or 0) >= min_ratio if min_ratio > 0 else True
 
-    subject_id = str((char or {}).get("id") or (plan or {}).get("identity_subject_id") or "")
+    subject_id = str((char or {}).get("id") or "").strip()
+    if not subject_id:
+        # plan 主体必须也在本镜 cast 内，否则视为脏数据忽略
+        plan_sid = str((plan or {}).get("identity_subject_id") or "").strip()
+        if plan_sid and any(str(c.get("id") or "") == plan_sid for c in cast):
+            subject_id = plan_sid
     subject_row = next((m for m in matches if m.get("character_id") == subject_id), None)
     # 禁止用配角匹配顶替主体：speaker 标错 / 主体未入 ref 时，旧逻辑会误放行。
 
@@ -817,16 +903,19 @@ def qc_shot_identity(
         pair["prev_shot"] = int(prev.get("n") or 0)
         checks.append(pair)
 
-    # 硬闸：identity/subject 必须匹配且过阈值；support 若匹配到也要过阈值。
-    # 脸面积：仅在身份分未过时作为失败原因；已过 cosine 则只警告（避免 MCU 合法镜被 8% 面积误杀）。
+    # 硬闸：仅 identity/subject 必须匹配且过阈值。
+    # 配角匹配失败或低于阈值只警告——双人镜里配角常被遮挡/侧脸，不应整镜 Fail Loud。
+    # 脸面积：仅在身份分未过时作为失败原因；已过 cosine 则只警告。
     failures: list[str] = []
     warnings: list[str] = []
     primary_cosine = None
     if subject_id and subject_row is None:
         failures.append(f"{char_name or subject_id}: 未匹配到人脸")
     for row in matches:
-        role = str(row.get("role") or "support")
-        is_subject = str(row.get("character_id") or "") == subject_id or role == "identity"
+        # 仅 character_id==subject 算主体；不得因脏 plan 的 role=identity 误杀配角/串戏角色
+        is_subject = bool(subject_id) and str(row.get("character_id") or "") == subject_id
+        if not subject_id:
+            is_subject = str(row.get("role") or "") == "identity"
         name = str(row.get("character_name") or row.get("character_id") or "?")
         if is_subject:
             if not row.get("matched"):
@@ -846,10 +935,12 @@ def qc_shot_identity(
                 )
                 row["face_ratio_warn"] = True
         else:
-            if row.get("matched"):
+            if not row.get("matched"):
+                warnings.append(f"{name}: 配角未匹配到人脸（可忽略）")
+            else:
                 cos = float(row.get("cosine") or 0)
                 if cos < threshold:
-                    failures.append(f"{name}: cosine={cos}<{threshold}")
+                    warnings.append(f"{name}: 配角 cosine={cos}<{threshold}（不挡过闸）")
 
     passed = not failures
     if primary_cosine is None and subject_row and subject_row.get("cosine") is not None:

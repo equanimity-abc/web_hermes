@@ -107,9 +107,11 @@ def infer_size(shot: dict[str, Any]) -> str:
 
 
 def infer_speaker(shot: dict[str, Any]) -> str:
-    existing = str(shot.get("speaker") or "").strip()
-    if existing:
-        return existing
+    """从字幕署名优先解析说话人；字段 speaker 仅作无字幕时的回退。
+
+    若先信脏 speaker，会出现「字幕=玉兔 / speaker=嫦娥」：出图身份锁钉错人，
+    ArcFace 再对玉兔定妆检脸 → no_face。
+    """
     dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
     if dialogue:
         m = re.search(
@@ -124,6 +126,9 @@ def infer_speaker(shot: dict[str, Any]) -> str:
         )
         if m2:
             return m2.group(1).strip()
+    existing = str(shot.get("speaker") or "").strip()
+    if existing:
+        return existing
     roles = shot.get("角色") or []
     if isinstance(roles, list) and roles:
         return str(roles[0] or "").strip()
@@ -143,10 +148,8 @@ def apply_shot_class(shot: dict[str, Any], *, force: bool = False) -> dict[str, 
         seed = {**shot, "kind": "" if force else shot.get("kind"), "size": "" if force else shot.get("size")}
         shot["kind"] = infer_kind(seed)
         shot["size"] = infer_size({**seed, "kind": shot["kind"]})
-    if not str(shot.get("speaker") or "").strip():
-        shot["speaker"] = infer_speaker({**shot, "speaker": ""})
-    else:
-        shot["speaker"] = str(shot.get("speaker") or "").strip()
+    # 始终按字幕/角色重推说话人，纠正脏 speaker（如玉兔镜误标嫦娥）
+    shot["speaker"] = infer_speaker(shot)
     return shot
 
 

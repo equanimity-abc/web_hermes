@@ -539,6 +539,12 @@ def _hq_process_one_shot(
     degrades = list(info.get("degrades") or [])
     merge_save_shot(slug, n, shot)
 
+    # 出图后按字幕/角色重算说话人与空间主体，再验身份（避免脏 plan/speaker 串戏）
+    from tools.drama_models import apply_shot_class
+    from tools.drama_spatial import build_spatial_plan
+
+    apply_shot_class(shot, force=False)
+    build_spatial_plan(slug, shot)
     identity_last = qc_shot_identity(slug, n, shot, apply=True)
     merge_save_shot(slug, n, shot)
 
@@ -756,6 +762,8 @@ def produce_episode_hq(
     shot_ns = [int(s.get("n") or 0) for s in shots if int(s.get("n") or 0) > 0]
     done_lock = __import__("threading").Lock()
     done_count = {"n": 0}
+    ok_count = {"n": 0}
+    fail_count = {"n": 0}
 
     def _worker(sn: int) -> dict[str, Any]:
         _progress(
@@ -763,6 +771,8 @@ def produce_episode_hq(
             stage="shot",
             shot=sn,
             total=total,
+            current=ok_count["n"],
+            finished=done_count["n"],
             message=f"Shot {sn} 画面/配音/口型/I2V（并行）",
         )
         return _hq_process_one_shot(
@@ -777,25 +787,36 @@ def produce_episode_hq(
     def _on_done(_i: int, sn: int, result: Any) -> None:
         with done_lock:
             done_count["n"] += 1
-            cur = done_count["n"]
-        if isinstance(result, BaseException):
+            finished = done_count["n"]
+            if isinstance(result, BaseException):
+                fail_count["n"] += 1
+                ok = ok_count["n"]
+                failed = fail_count["n"]
+                _progress(
+                    on_progress,
+                    stage="shot",
+                    shot=sn,
+                    current=ok,
+                    total=total,
+                    finished=finished,
+                    failed=failed,
+                    ok=ok,
+                    message=f"Shot {sn} 失败：{result}",
+                )
+                return
+            ok_count["n"] += 1
+            ok = ok_count["n"]
             _progress(
                 on_progress,
                 stage="shot",
                 shot=sn,
-                current=cur,
+                current=ok,
                 total=total,
-                message=f"Shot {sn} 失败：{result}",
+                finished=finished,
+                failed=fail_count["n"],
+                ok=ok,
+                message=f"Shot {sn} 完成 ({ok}/{total} 成功，已结束 {finished}/{total})",
             )
-            return
-        _progress(
-            on_progress,
-            stage="shot",
-            shot=sn,
-            current=cur,
-            total=total,
-            message=f"Shot {sn} 完成 ({cur}/{total})",
-        )
 
     clock.start("shots")
     shot_results = parallel_map(

@@ -27,10 +27,9 @@ def _cname(char: dict[str, Any]) -> str:
 
 
 def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
-    """在场角色优先：字幕说话人 ∈ 角色栏 > speaker ∈ 角色栏 > 角色栏首卡 > 全局 speaker。
+    """在场角色优先：字幕说话人 > 对白轨/voice_turns > 画面特写锁 > speaker > 覆盖 > 角色栏首卡。
 
-    重要：``identity_subject`` 覆盖若指向「本镜角色栏以外」的卡，视为过期脏数据并忽略
-    （否则第 1 镜可能被错误钉死成玉兔等其它镜主体，进而报「缺定妆」）。
+    双人「嫦娥拎玉兔」且字幕为玉兔时，绝不能因角色栏把嫦娥排第一就验嫦娥。
     """
     from tools.drama_characters import find_character, match_character_token
 
@@ -56,9 +55,42 @@ def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any
                 return c
         return None
 
+    tokens: list[str] = []
+
+    # 1) 字幕署名
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
+    if dialogue:
+        tokens.append(infer_speaker({**shot, "speaker": ""}))
+
+    # 2) 对白轨 / voice_turns（产线合成后更准）
+    track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else {}
+    primary = str(track.get("primary_speaker") or "").strip()
+    if primary:
+        tokens.append(primary)
+    for turn in track.get("turns") or []:
+        if isinstance(turn, dict):
+            tokens.append(str(turn.get("character_name") or turn.get("speaker") or ""))
+            break
+    for turn in shot.get("voice_turns") or []:
+        if isinstance(turn, dict):
+            tokens.append(str(turn.get("character_name") or turn.get("speaker") or ""))
+            break
+
+    # 3) 画面里的特写/身份锁（rewrite 后常见）
+    scene = str(shot.get("画面") or "")
+    for m in re.finditer(r"(?:特写|身份锁)\s*「([^」]{1,16})」", scene):
+        tokens.append(m.group(1).strip())
+
+    # 4) speaker 字段
+    tokens.append(infer_speaker(shot))
+
+    for token in tokens:
+        hit = _in_face_cast(_from_token(token))
+        if hit:
+            return hit
+
     override = str(shot.get("identity_subject") or "").strip()
     if override:
-        # 仅当覆盖落在本镜在场角色时才采纳；否则清掉脏钉死，避免跨镜串主体。
         for char in face_cast:
             if _cid(char) == override or _cname(char) == override:
                 return char
@@ -69,20 +101,10 @@ def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any
             if hit:
                 return hit
 
-    # 字幕署名优先于可能过期的 speaker 字段（「玉兔：…」却 speaker=嫦娥）
-    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
-    dialogue_speaker = ""
-    if dialogue:
-        dialogue_speaker = infer_speaker({**shot, "speaker": ""})
-    for token in (dialogue_speaker, infer_speaker(shot)):
-        hit = _in_face_cast(_from_token(token))
-        if hit:
-            return hit
-
     if face_cast:
         return face_cast[0]
 
-    for token in (dialogue_speaker, infer_speaker(shot)):
+    for token in tokens:
         hit = _from_token(token)
         if hit:
             return hit

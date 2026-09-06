@@ -111,7 +111,10 @@ def search_similar_frames(
     exclude_shot: int | None = None,
     limit: int = 2,
 ) -> list[dict[str, Any]]:
-    """按角色集合 / plan_hash / 主体优先检索历史通过帧。"""
+    """按角色集合 / plan_hash / 主体优先检索历史通过帧。
+
+    主体加分必须同时有角色交集，避免「shot2 误标 identity=嫦娥」被 shot1 当构图参考。
+    """
     want = set(str(c).strip() for c in character_ids if str(c).strip())
     cast_key = _cast_key(list(want))
     subj = str(identity_subject_id or "").strip()
@@ -122,16 +125,20 @@ def search_similar_frames(
         if exclude_episode is not None and exclude_shot is not None:
             if ep == int(exclude_episode) and sn == int(exclude_shot):
                 continue
+        have = set(str(x) for x in (frame.get("character_ids") or []) if str(x).strip())
+        overlap = want & have
         score = 0
         if cast_key and str(frame.get("cast_key") or "") == cast_key:
             score += 50
         else:
-            have = set(str(x) for x in (frame.get("character_ids") or []))
-            score += 10 * len(want & have)
+            score += 10 * len(overlap)
         if plan_hash and str(frame.get("plan_hash") or "") == plan_hash:
             score += 30
-        if subj and str(frame.get("identity_subject_id") or "") == subj:
+        if subj and str(frame.get("identity_subject_id") or "") == subj and overlap:
             score += 20
+        # 无角色交集则丢弃（防止串戏构图）
+        if want and not overlap:
+            continue
         if score <= 0:
             continue
         scored.append((score, frame))

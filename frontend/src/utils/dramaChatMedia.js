@@ -49,6 +49,8 @@ export function formatDramaJobProgress(job) {
   const p = job?.progress || {}
   const current = Math.max(0, Number(p.current) || 0)
   const total = Math.max(0, Number(p.total) || 0)
+  const finished = Math.max(0, Number(p.finished) || 0)
+  const failed = Math.max(0, Number(p.failed) || 0)
   const pct =
     total > 0 ? Math.min(100, Math.round((current / total) * 100)) : job?.status === 'done' ? 100 : null
   const shot = p.shot != null && p.shot !== '' ? Number(p.shot) || p.shot : null
@@ -56,7 +58,11 @@ export function formatDramaJobProgress(job) {
   const message = String(p.message || '').trim()
   const parts = []
   if (pct != null) parts.push(`${pct}%`)
-  if (total > 0) parts.push(`${current}/${total} 镜`)
+  if (total > 0) {
+    parts.push(`成功 ${current}/${total} 镜`)
+    if (failed > 0) parts.push(`失败 ${failed}`)
+    else if (finished > current) parts.push(`已结束 ${finished}/${total}`)
+  }
   if (shot != null) parts.push(`第 ${shot} 镜`)
   if (stage && stage !== 'shot' && stage !== 'done') parts.push(stage)
   if (message) parts.push(message)
@@ -71,6 +77,8 @@ export function formatDramaJobProgress(job) {
     pct,
     current,
     total,
+    finished,
+    failed,
     shot,
     stage,
     message,
@@ -88,20 +96,31 @@ export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
   const pct = progress?.pct
   const current = progress?.current
   const total = progress?.total
+  const finished = progress?.finished
+  const failed = progress?.failed
 
   const progressBits = []
   if (pct != null) progressBits.push(`${pct}%`)
-  if (total > 0) progressBits.push(`已完成 ${current}/${total} 镜`)
-  if (shot != null) progressBits.push(`卡在第 ${shot} 镜`)
+  if (total > 0) {
+    progressBits.push(`成功 ${current ?? 0}/${total} 镜`)
+    if (failed > 0) progressBits.push(`失败 ${failed}`)
+    else if (finished != null && finished > (current ?? 0)) {
+      progressBits.push(`已结束回调 ${finished}/${total}`)
+    }
+  }
+  if (shot != null) progressBits.push(`失败于第 ${shot} 镜`)
 
   let reason = raw
   let tip = ''
   if (/缺少本镜画面/.test(raw)) {
     tip =
       '请打开漫剧工作台 →「画面」页为该镜生成并锁定候选图，再重新渲染。'
-  } else if (/身份验收|定妆|identity/i.test(raw)) {
+  } else if (/未达阈值|手工重抽|cosine=/i.test(raw)) {
     tip =
-      '请打开漫剧工作台 →「角色」页生成并锁定定妆图，然后对该镜头或整集重新渲染。'
+      '定妆多半已锁定。请打开漫剧工作台 → 该镜「画面」候选墙手工重抽/换图（保证说话人正脸清晰），再重新渲染该镜。'
+  } else if (/身份验收|定妆|identity|未检测到人脸/i.test(raw)) {
+    tip =
+      '请打开漫剧工作台：若角色定妆未锁定则先到「角色」页锁定；若已锁定则到该镜「画面」页手工重抽后重新渲染。'
   } else if (/缺少可用模型 Key|ARK_API_KEY|专业档缺少/i.test(raw)) {
     tip = '请在设置里配置对应模型 API Key 后重试。'
   } else if (/QC 硬闸|响度/i.test(raw)) {
@@ -110,11 +129,17 @@ export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
     tip = '请检查 Seedance/I2V 密钥与配额后重试该镜。'
   }
 
+  const parallelNote =
+    total > 1
+      ? '说明：镜头并行渲染；某一镜失败后其余镜可能未跑完或未计入成功数，请到工作台逐镜查看资产/状态。'
+      : null
+
   const lines = [
     ep != null ? `❌ 第 ${ep} 集渲染失败` : '❌ 成片渲染失败',
     progressBits.length ? `进度：${progressBits.join(' · ')}` : null,
     `原因：${reason}`,
     tip ? `下一步：${tip}` : null,
+    parallelNote,
     slug ? `项目：${slug}` : null,
   ].filter(Boolean)
   return lines.join('\n')

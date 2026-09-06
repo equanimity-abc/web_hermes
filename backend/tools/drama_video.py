@@ -553,7 +553,29 @@ def _scene_prompt(
     )
     from tools.drama_models import infer_speaker
 
-    speaker = infer_speaker(shot).strip()
+    slug = slug or str(shot.get("slug") or "")
+    episode = int(shot.get("_episode") or 0) or None
+
+    # 身份锁用空间主体名（与 QC 一致），避免脏 speaker 把玉兔镜锁成嫦娥
+    speaker = ""
+    plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
+    if plan:
+        sid = str(plan.get("identity_subject_id") or "").strip()
+        for slot in plan.get("slots") or []:
+            if str(slot.get("character_id") or "") == sid:
+                speaker = str(slot.get("character_name") or "").strip()
+                break
+    if not speaker and slug:
+        try:
+            from tools.drama_spatial import identity_subject_character
+
+            subj = identity_subject_character(slug, shot)
+            if subj:
+                speaker = str(subj.get("name") or subj.get("id") or "").strip()
+        except Exception:
+            speaker = ""
+    if not speaker:
+        speaker = infer_speaker(shot).strip()
     if needs_face:
         # 「远景+配角拎主体」会只画出配角正脸；文案与运镜一并收到中近景。
         scene = re.sub(r"竖屏远景", "竖屏中近景", scene)
@@ -582,8 +604,6 @@ def _scene_prompt(
         ),
     }
     kinetic = kinetic_map.get(style, "电影感调度，鲜明剪影")
-    slug = slug or str(shot.get("slug") or "")
-    episode = int(shot.get("_episode") or 0) or None
     # 说话人定妆描述放最前，避免「嫦娥拎玉兔」类双人镜只锁到配角脸。
     ordered_chars = list(characters or [])
     if speaker and ordered_chars:
@@ -605,7 +625,6 @@ def _scene_prompt(
         style_clause = style_prompt_clause(slug, shot, episode=episode)
     from tools.drama_spatial import spatial_prompt_clause
 
-    plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
     spatial_clause = spatial_prompt_clause(plan)
     memory_clause = ""
     hits = shot.get("_memory_hits")
@@ -980,8 +999,10 @@ def generate_shot_candidates(
     cast = resolve_shot_characters(shot, cards)
     # Full project cards for alias → name/voice/face match (N speakers)
     # 每次出图重算运镜：避免旧误判（如「天花板」→rise）锁死在 shot.camera 上。
+    from tools.drama_models import apply_shot_class
     from tools.drama_spatial import build_spatial_plan
 
+    apply_shot_class(shot, force=False)
     build_spatial_plan(slug, shot)
     # P3：检索历史通过帧作构图记忆（不定妆，只进 prompt）
     try:
