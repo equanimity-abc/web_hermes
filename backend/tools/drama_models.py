@@ -365,8 +365,6 @@ def default_models() -> dict[str, Any]:
             "true_peak_dbtp": -1,
             "lse_c_min": 0.15,
             "lse_d_max": 0.9,
-            "identity_ref_retries": 2,
-            "identity_scene_retries": 2,
         },
         "preset": DEFAULT_PRESET,
         "quality_profile": "studio",

@@ -11,7 +11,6 @@ import {
   awaitPendingDramaVideos,
   enrichMessageWithDramaMedia,
   extractDramaVideoFromToolResult,
-  resumeDramaProgressForMessages,
 } from '@/utils/dramaChatMedia'
 import { stashSessionMessages } from '@/composables/useDramaChatProgress'
 
@@ -415,17 +414,70 @@ export function useChat(deps) {
   }
 
   async function resumeAfterMessagesLoad(sessionId) {
+    // 仅缓存当前消息；历史任务不再自动轮询（改由 refreshDramaJob 手动查询）
     const list = messages.value || []
     stashSessionMessages(sessionId || deps.getSessionId?.() || '', list)
-    const had = await resumeDramaProgressForMessages(list, {
-      sessionId: sessionId || deps.getSessionId?.() || '',
-      onStatus: (text) => {
-        const last = [...list].reverse().find((m) => m.role === 'assistant' && (m.dramaJob || m.isStreaming))
-        if (last) last.status = text || last.status || ''
-        statusText.value = text || ''
-      },
-    })
-    return had
+    return false
+  }
+
+  async function refreshDramaJob(index) {
+    const list = messages.value || []
+    const msg = list[index]
+    if (!msg || msg.role !== 'assistant') return false
+    const job = msg.dramaJob
+    if (!job?.jobId || job.refreshing) return false
+
+    msg.dramaJob = {
+      ...job,
+      refreshing: true,
+      state: job.state === 'error' ? 'error' : 'running',
+      line: '正在查询任务进度…',
+    }
+    msg.isStreaming = true
+    msg.status = '正在查询任务进度…'
+    for (const tool of msg.toolCalls || []) {
+      if (String(tool.name || '') !== 'tiktok_drama') continue
+      if (tool.status === 'error') continue
+      try {
+        const data = JSON.parse(tool.result || '')
+        if (data?.job_id && !data?.play_url) tool.status = 'running'
+      } catch {
+        /* */
+      }
+    }
+
+    try {
+      const had = await awaitPendingDramaVideos(msg, {
+        sessionId: deps.getSessionId?.() || '',
+        forcePoll: true,
+        onStatus: (text) => {
+          msg.status = text || msg.status || ''
+          statusText.value = text || ''
+        },
+      })
+      if (msg.dramaJob) {
+        msg.dramaJob.refreshing = false
+        msg.dramaJob.canRefresh =
+          msg.dramaJob.state === 'error' ||
+          msg.dramaJob.state === 'idle' ||
+          (msg.dramaJob.state !== 'done' && !msg.media?.length)
+      }
+      if (!msg.dramaJob || (msg.dramaJob.state !== 'running' && msg.dramaJob.state !== 'pending')) {
+        msg.isStreaming = false
+      }
+      stashCurrent(deps.getSessionId?.() || '')
+      scrollToBottom()
+      return had
+    } catch (e) {
+      if (msg.dramaJob) {
+        msg.dramaJob.refreshing = false
+        msg.dramaJob.state = 'error'
+        msg.dramaJob.line = e?.message || '查询失败'
+        msg.dramaJob.canRefresh = true
+      }
+      msg.isStreaming = false
+      throw e
+    }
   }
 
   function stashCurrent(sessionId) {
@@ -452,5 +504,6 @@ export function useChat(deps) {
     toggleDislike,
     stashCurrent,
     resumeAfterMessagesLoad,
+    refreshDramaJob,
   }
 }

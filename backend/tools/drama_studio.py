@@ -1050,7 +1050,6 @@ def produce_episode(
     force: bool = False,
     style_id: str = "",
     catalog_bgm: str = "",
-    identity_ref_retries: int | None = None,
 ) -> dict[str, Any]:
     """One-shot HQ pipeline: cast → scene/voice/lip → I2V → BGM → export mp4."""
     slug = parse_slug(slug)
@@ -1061,8 +1060,6 @@ def produce_episode(
         params["style_id"] = style_id
     if catalog_bgm:
         params["catalog_bgm"] = catalog_bgm
-    if identity_ref_retries is not None:
-        params["identity_ref_retries"] = int(identity_ref_retries)
     if background:
         return enqueue_job(slug, n, "produce_episode", params=params)
     from tools.drama_produce import produce_episode_hq
@@ -1074,8 +1071,6 @@ def produce_episode(
         "catalog_bgm": catalog_bgm or "rebirth_resolve",
         "allow_qc_fail_export": False,
     }
-    if identity_ref_retries is not None:
-        kwargs["identity_ref_retries"] = int(identity_ref_retries)
     try:
         result = produce_episode_hq(slug, n, **kwargs)
     except (ValueError, RuntimeError, FileNotFoundError) as e:

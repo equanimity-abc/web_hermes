@@ -27,26 +27,64 @@ def _cname(char: dict[str, Any]) -> str:
 
 
 def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
-    """显式 identity_subject > speaker > 首个可锁脸角色。"""
+    """在场角色优先：字幕说话人 ∈ 角色栏 > speaker ∈ 角色栏 > 角色栏首卡 > 全局 speaker。
+
+    重要：``identity_subject`` 覆盖若指向「本镜角色栏以外」的卡，视为过期脏数据并忽略
+    （否则第 1 镜可能被错误钉死成玉兔等其它镜主体，进而报「缺定妆」）。
+    """
+    from tools.drama_characters import find_character, match_character_token
+
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
-    override = str(shot.get("identity_subject") or "").strip()
-    if override:
-        for char in cast:
-            if _cid(char) == override or _cname(char) == override:
-                if character_requires_face_identity(char):
-                    return char
-        from tools.drama_characters import find_character, match_character_token
+    face_cast = [c for c in cast if character_requires_face_identity(c)]
 
-        hit = find_character(cards, override) or match_character_token(override, cards)
+    def _from_token(token: str) -> dict[str, Any] | None:
+        raw = str(token or "").strip()
+        if not raw:
+            return None
+        hit = find_character(cards, raw) or match_character_token(raw, cards)
         if hit and character_requires_face_identity(hit):
             return hit
-    speaker = infer_speaker(shot)
-    if speaker:
-        from tools.drama_characters import find_character, match_character_token
+        return None
 
-        hit = find_character(cards, speaker) or match_character_token(speaker, cards)
-        if hit and character_requires_face_identity(hit):
+    def _in_face_cast(char: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not char:
+            return None
+        sid = _cid(char)
+        for c in face_cast:
+            if _cid(c) == sid:
+                return c
+        return None
+
+    override = str(shot.get("identity_subject") or "").strip()
+    if override:
+        # 仅当覆盖落在本镜在场角色时才采纳；否则清掉脏钉死，避免跨镜串主体。
+        for char in face_cast:
+            if _cid(char) == override or _cname(char) == override:
+                return char
+        if face_cast:
+            shot["identity_subject"] = ""
+        else:
+            hit = _from_token(override)
+            if hit:
+                return hit
+
+    # 字幕署名优先于可能过期的 speaker 字段（「玉兔：…」却 speaker=嫦娥）
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
+    dialogue_speaker = ""
+    if dialogue:
+        dialogue_speaker = infer_speaker({**shot, "speaker": ""})
+    for token in (dialogue_speaker, infer_speaker(shot)):
+        hit = _in_face_cast(_from_token(token))
+        if hit:
+            return hit
+
+    if face_cast:
+        return face_cast[0]
+
+    for token in (dialogue_speaker, infer_speaker(shot)):
+        hit = _from_token(token)
+        if hit:
             return hit
     for char in cast:
         if character_requires_face_identity(char):
@@ -75,7 +113,7 @@ def _default_slots(
                 "role": "identity" if cid == subject_id else "support",
                 "anchor": "center_front",
                 "bbox_norm": [0.18, 0.12, 0.82, 0.78],
-                "min_face_ratio": 0.08 if cid == subject_id else 0.04,
+                "min_face_ratio": 0.015 if cid == subject_id else 0.008,
             }
         )
         return slots
@@ -108,14 +146,14 @@ def _default_slots(
                 "role": "identity" if is_subj else "support",
                 "anchor": anchor,
                 "bbox_norm": bbox,
-                "min_face_ratio": 0.08 if is_subj else 0.04,
+                "min_face_ratio": 0.015 if is_subj else 0.008,
             }
         )
     # 保证主体 role=identity 且只有一个
     for slot in slots:
         if slot["character_id"] == subject_id:
             slot["role"] = "identity"
-            slot["min_face_ratio"] = max(float(slot.get("min_face_ratio") or 0), 0.08)
+            slot["min_face_ratio"] = max(float(slot.get("min_face_ratio") or 0), 0.015)
         elif slot.get("role") == "identity":
             slot["role"] = "support"
     return slots
@@ -193,8 +231,11 @@ def build_spatial_plan(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
 
     plan["hash"] = plan_hash(plan)
     shot["spatial_plan"] = plan
-    if subject_id and not str(shot.get("identity_subject") or "").strip():
+    # 始终回写与本镜一致的身份主体，覆盖跨镜串过来的脏 identity_subject
+    if subject_id:
         shot["identity_subject"] = subject_id
+    else:
+        shot["identity_subject"] = ""
     return plan
 
 

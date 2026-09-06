@@ -51,7 +51,8 @@ export function foldMessagesForUi(rawMessages = []) {
             parsed.status !== 'error' &&
             parsed.status !== 'cancelled'
           ) {
-            hit.status = 'running'
+            // 历史加载不标 running，避免 UI 误以为仍在自动轮询
+            hit.status = 'done'
           }
         } catch {
           /* plain text result */
@@ -71,29 +72,39 @@ export function foldMessagesForUi(rawMessages = []) {
         liked: !!m.liked,
         disliked: !!m.disliked,
       }
-      // Restore in-progress produce UI from tool job_id
+      // 历史会话：未完成/失败任务只展示，不自动轮询；需用户点「查询进度」
       for (const tool of msg.toolCalls || []) {
         try {
           const parsed = JSON.parse(tool.result || '')
-          if (
-            parsed?.job_id &&
-            !parsed?.play_url &&
-            !parsed?.error &&
-            parsed?.ok !== false &&
-            parsed?.status !== 'gone' &&
-            parsed?.status !== 'error' &&
-            parsed?.status !== 'cancelled'
-          ) {
-            tool.status = 'running'
-            msg.isStreaming = true
-            msg.status = '成片生成中，正在恢复进度…'
+          if (!parsed?.job_id) continue
+          const failed =
+            parsed?.ok === false ||
+            !!parsed?.error ||
+            parsed?.status === 'error' ||
+            parsed?.status === 'cancelled' ||
+            parsed?.status === 'gone'
+          if (failed) {
+            tool.status = 'error'
             msg.dramaJob = {
-              state: 'running',
+              state: 'error',
               jobId: String(parsed.job_id),
               slug: parsed.slug || '',
               episode: parsed.episode || 1,
-              line: '成片生成中，正在恢复进度…',
+              line: String(parsed.error || parsed.message || '任务失败'),
+              canRefresh: true,
             }
+            continue
+          }
+          if (parsed?.play_url) continue
+          tool.status = tool.status === 'error' ? 'error' : 'done'
+          msg.isStreaming = false
+          msg.dramaJob = {
+            state: 'idle',
+            jobId: String(parsed.job_id),
+            slug: parsed.slug || '',
+            episode: parsed.episode || 1,
+            line: '历史任务未完成，可手动查询进度',
+            canRefresh: true,
           }
         } catch {
           /* ignore */
@@ -106,17 +117,52 @@ export function foldMessagesForUi(rawMessages = []) {
   }
 
   // Incomplete turn: tool_calls already persisted but final assistant text not yet.
+  // 重启后不自动轮询，留给手动「查询进度」
   if (pendingTools.length) {
+    let pendingJobId = ''
+    let pendingSlug = ''
+    let pendingEpisode = 1
     for (const t of pendingTools) {
-      if (!t.result) t.status = 'running'
+      if (!t.result) {
+        t.status = 'done'
+        continue
+      }
+      try {
+        const parsed = JSON.parse(t.result || '')
+        if (parsed?.job_id && !parsed?.play_url) {
+          pendingJobId = String(parsed.job_id)
+          pendingSlug = parsed.slug || pendingSlug
+          pendingEpisode = parsed.episode || pendingEpisode
+          if (parsed?.ok === false || parsed?.error || parsed?.status === 'error') {
+            t.status = 'error'
+          } else {
+            t.status = 'done'
+          }
+        } else if (t.status === 'running') {
+          t.status = 'done'
+        }
+      } catch {
+        if (t.status === 'running') t.status = 'done'
+      }
     }
-    const running = pendingTools.some((t) => t.status === 'running')
     const msg = {
       role: 'assistant',
       content: '',
       toolCalls: pendingTools,
-      isStreaming: running,
-      status: running ? '成片生成中，请稍候…完成后会自动出现在对话里' : '',
+      isStreaming: false,
+      status: '',
+      dramaJob: pendingJobId
+        ? {
+            state: pendingTools.some((t) => t.status === 'error') ? 'error' : 'idle',
+            jobId: pendingJobId,
+            slug: pendingSlug,
+            episode: pendingEpisode,
+            line: pendingTools.some((t) => t.status === 'error')
+              ? '历史任务失败，可手动查询进度'
+              : '历史任务未完成，可手动查询进度',
+            canRefresh: true,
+          }
+        : undefined,
     }
     enrichMessageWithDramaMedia(msg)
     out.push(msg)

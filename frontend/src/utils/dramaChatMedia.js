@@ -221,11 +221,16 @@ function setMessageDramaJob(message, patch) {
   const jobId = String(message.dramaJob.jobId || patch.jobId || '').trim()
   if (!jobId) return
   const state = String(message.dramaJob.state || '')
-  if (state === 'done') {
+  if (state === 'error') {
+    message.dramaJob.canRefresh = patch.canRefresh !== false
+  } else if (state === 'done') {
+    message.dramaJob.canRefresh = false
     // Keep brief done record then drop so banner disappears.
     upsertDramaChatJob(jobId, { ...message.dramaJob, state: 'done' })
     clearDramaChatJob(jobId)
     return
+  } else if (state === 'running' || state === 'pending') {
+    message.dramaJob.canRefresh = false
   }
   upsertDramaChatJob(jobId, {
     ...message.dramaJob,
@@ -245,6 +250,7 @@ export async function awaitPendingDramaVideos(
     timeoutMs = 45 * 60 * 1000,
     intervalMs = 2000,
     sessionId,
+    forcePoll = false,
   } = {},
 ) {
   if (!message || message.role !== 'assistant') {
@@ -261,8 +267,8 @@ export async function awaitPendingDramaVideos(
     const data = parseToolJson(tool.result)
     if (!data) continue
 
-    // Tool already failed synchronously — surface it.
-    if (data.ok === false || data.error) {
+    // Tool already failed synchronously — surface it (手动查询时可强制再 poll).
+    if (!forcePoll && (data.ok === false || data.error)) {
       const errText = humanizeDramaJobError(data.error || data.message || '成片失败', {
         episode: data.episode,
         slug: data.slug,
@@ -274,12 +280,26 @@ export async function awaitPendingDramaVideos(
         error: String(data.error || data.message || ''),
         line: errText,
         pct: null,
+        canRefresh: !!data.job_id,
       })
       onStatus?.(errText)
       message.content = errText
       lastError = errText
       waited = true
       continue
+    }
+
+    if (forcePoll && data.job_id && (data.ok === false || data.error || data.status === 'error')) {
+      // 清掉终端态，允许重新向后端查询
+      const cleaned = { ...data }
+      delete cleaned.error
+      delete cleaned.ok
+      cleaned.status = 'pending'
+      tool.result = JSON.stringify(cleaned)
+      tool.status = 'running'
+      Object.assign(data, cleaned)
+      delete data.error
+      delete data.ok
     }
 
     const action = String(data.action || '')

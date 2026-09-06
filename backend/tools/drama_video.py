@@ -969,9 +969,11 @@ def generate_shot_candidates(
     *,
     title: str = "",
     count: int = CANDIDATE_COUNT,
-    seed_jitter: int = 0,
 ) -> list[dict[str, Any]]:
-    """Fill the candidate wall. Does not overwrite a locked scene.png."""
+    """Fill the candidate wall. Does not overwrite a locked scene.png.
+
+    Autopilot 用 count=1 单图；工作台手工重抽用默认候选墙。禁止自动换种子重试。
+    """
     count = max(1, min(int(count or CANDIDATE_COUNT), 4))
     locked = set(shot.get("locked") or [])
     cards = load_characters(slug)
@@ -1007,7 +1009,7 @@ def generate_shot_candidates(
     shot.pop("_episode", None)
     shot.pop("_memory_hits", None)
     shot["prompt"] = prompt
-    base_seed = (character_seed(slug, cast, int(shot.get("n") or 1)) + int(seed_jitter or 0)) & 0x7FFFFFFF
+    base_seed = character_seed(slug, cast, int(shot.get("n") or 1)) & 0x7FFFFFFF
     ids = next_candidate_ids(shot, count)
     created: list[dict[str, Any]] = []
     used_ai = False
@@ -1026,15 +1028,6 @@ def generate_shot_candidates(
         # 单图+定妆锁脸：不要再叠「候选方案」风格扰动，否则和身份锚打架。
         if refs and count <= 1:
             varied_prompt = prompt
-            if int(seed_jitter or 0) > 0:
-                from tools.drama_models import infer_speaker
-
-                who = infer_speaker(shot).strip() or "说话人"
-                # 身份重试：进一步压极端机位，优先可 ArcFace 打分的露脸构图。
-                varied_prompt = (
-                    f"{prompt}。身份重抽：以「{who}」平视或微侧脸特写优先，五官清晰可辨，"
-                    f"禁止极端仰拍/俯拍/背影/遮脸，禁止只画其他角色而忽略「{who}」"
-                )
         else:
             varied_prompt = _candidate_prompt(prompt, cid, i)
         rel = candidate_rel(slug, episode, n, cid)
@@ -1981,13 +1974,11 @@ def render_shot_layers(
     *,
     title: str,
     candidate_count: int | None = None,
-    seed_jitter: int = 0,
 ) -> dict[str, Any]:
     """Rebuild selected layers for one shot. Unspecified layers are reused on disk.
 
     candidate_count: scene wall size. Autopilot passes 1 (single plate, no 4-up wall);
-    workbench fine-tune keeps default CANDIDATE_COUNT (4).
-    seed_jitter: identity 重试时加大偏移，避免同种子反复抽到同一张不像的脸。
+    workbench fine-tune keeps default CANDIDATE_COUNT (4) for manual redraw only.
     """
     if not ffmpeg_available():
         raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
@@ -2020,20 +2011,17 @@ def render_shot_layers(
 
     if "scene" in wanted:
         wall_n = CANDIDATE_COUNT if candidate_count is None else max(1, min(int(candidate_count), 4))
-        generated = generate_shot_candidates(
-            slug, episode, shot, title=title, count=wall_n, seed_jitter=int(seed_jitter or 0)
-        )
+        generated = generate_shot_candidates(slug, episode, shot, title=title, count=wall_n)
         used_ai = any(item.get("source") == "ai" for item in generated)
         if not used_ai:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})
         # Autopilot (count=1): always stamp the single plate onto scene unless locked.
-        # Fine-tune wall (count>1): only seed scene.png when missing.
+        # Fine-tune wall (count>1): only seed scene.png when missing（手工候选墙）。
         if generated and "scene" not in locked:
             if wall_n <= 1 or not _path_for(shot, "scene").is_file():
                 apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
-        # R4: auto identity hard gate. Failed identity marks scene/motion/clip
-        # dirty so retry (重抽) is the natural next step.
+        # 身份闸：不过则标脏，由工作台手工重抽；产线不会自动换种子再出。
         if used_ai:
             from tools.drama_qc import qc_shot_identity
 
@@ -2043,7 +2031,7 @@ def render_shot_layers(
                     {
                         "shot": int(shot.get("n") or 0),
                         "layer": "identity",
-                        "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏可重抽",
+                        "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏（请手工重抽）",
                     }
                 )
 

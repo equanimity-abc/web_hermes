@@ -31,7 +31,7 @@ def test_dual_shot_spatial_plan_and_rewrite():
                 "role": "identity",
                 "anchor": "right_front",
                 "bbox_norm": [0.28, 0.12, 0.92, 0.80],
-                "min_face_ratio": 0.08,
+                "min_face_ratio": 0.015,
             },
             {
                 "character_id": "ce",
@@ -39,7 +39,7 @@ def test_dual_shot_spatial_plan_and_rewrite():
                 "role": "support",
                 "anchor": "left_mid",
                 "bbox_norm": [0.05, 0.18, 0.48, 0.78],
-                "min_face_ratio": 0.04,
+                "min_face_ratio": 0.008,
             },
         ],
     }
@@ -50,6 +50,59 @@ def test_dual_shot_spatial_plan_and_rewrite():
     clause = spatial_prompt_clause(plan)
     assert "构图预规划" in clause
     assert "玉兔" in clause and "嫦娥" in clause
+
+
+def test_default_min_face_ratio_is_mcu_friendly():
+    from tools.drama_spatial import _default_slots
+
+    slots = _default_slots(
+        [{"id": "a", "name": "嫦娥", "look": "x", "category": "character"}],
+        subject_id="a",
+    )
+    assert slots and float(slots[0]["min_face_ratio"]) <= 0.02
+
+
+def test_identity_subject_prefers_on_screen_cast_over_offscreen_speaker(monkeypatch):
+    from tools import drama_spatial as sp
+
+    cards = [
+        {"id": "ce", "name": "嫦娥", "category": "character", "look": "a"},
+        {"id": "yt", "name": "玉兔", "category": "character", "look": "b"},
+    ]
+    monkeypatch.setattr(sp, "load_characters", lambda slug: cards)
+    monkeypatch.setattr(
+        sp,
+        "resolve_shot_characters",
+        lambda shot, characters: [c for c in characters if c["id"] == "yt"],
+    )
+    shot = {"speaker": "嫦娥", "角色": ["玉兔"], "字幕": "玉兔：不是我……"}
+    hit = sp.identity_subject_character("demo", shot)
+    assert hit and hit["id"] == "yt"
+
+
+def test_stale_identity_subject_outside_cast_is_ignored(monkeypatch):
+    """第1镜角色栏只有嫦娥时，不得被脏 identity_subject=玉兔钉死。"""
+    from tools import drama_spatial as sp
+
+    cards = [
+        {"id": "ce", "name": "嫦娥", "category": "character", "look": "a"},
+        {"id": "yt", "name": "玉兔", "category": "character", "look": "b"},
+    ]
+    monkeypatch.setattr(sp, "load_characters", lambda slug: cards)
+    monkeypatch.setattr(
+        sp,
+        "resolve_shot_characters",
+        lambda shot, characters: [c for c in characters if c["id"] == "ce"],
+    )
+    shot = {
+        "speaker": "嫦娥",
+        "角色": ["嫦娥"],
+        "字幕": "嫦娥：谁偷了我的不死药？！",
+        "identity_subject": "yt",
+    }
+    hit = sp.identity_subject_character("demo", shot)
+    assert hit and hit["id"] == "ce"
+    assert shot.get("identity_subject") in ("", None)
 
 
 def test_match_faces_greedy_one_to_one():

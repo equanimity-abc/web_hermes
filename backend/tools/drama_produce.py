@@ -349,17 +349,13 @@ def ensure_character_refs(
     slug: str,
     *,
     lock: bool = True,
-    identity_ref_retries: int = 2,
     on_progress: Callable[..., None] | None = None,
 ) -> list[str]:
-    """Generate a single portrait ref per character (no 4-up wall).
+    """Generate a single portrait ref per character (no 4-up wall, no auto-retry).
 
-    生成 → 身份就绪校验 → 才锁定：刚生成的定妆必须有可检测人脸 + 可计算 ArcFace
-    嵌入才会被锁；无人脸这类可重试失败会换种子重生成（最多 ``identity_ref_retries``
-    次），依赖缺失则快速失败。锁定后的定妆是稳定的身份锚点，下游不再改动它。
+    生成一次 → 身份就绪校验 → 才锁定。失败则 Fail Loud，由工作台手工重生成/上传。
+    锁定后的定妆是稳定的身份锚点，下游不再改动它。
     """
-    import zlib
-
     from tools.drama_characters import (
         character_requires_face_identity,
         find_character,
@@ -374,7 +370,6 @@ def ensure_character_refs(
     from tools.drama_studio import generate_character_ref
     from tools.workspace import resolve_safe
 
-    max_attempts = max(1, int(identity_ref_retries)) + 1  # 首次 + 重试次数
     generated: list[str] = []
     pending: list[tuple[str, str]] = []
     cards = load_characters(slug)
@@ -400,12 +395,6 @@ def ensure_character_refs(
         except ValueError:
             return None
 
-    def _seed_for(cid: str, attempt: int) -> int | None:
-        # 首次保持默认确定性种子；重试换种子，避免「重生成同一张没脸的图」。
-        if attempt == 0:
-            return None
-        return zlib.crc32(f"{slug}:{cid}:retry:{attempt}".encode()) & 0x7FFFFFFF
-
     def _lock_if_needed(rec: dict[str, Any]) -> None:
         if lock and not rec.get("ref_locked"):
             try:
@@ -424,37 +413,26 @@ def ensure_character_refs(
             if check["ok"]:
                 _lock_if_needed(rec)
                 return cid
-            if not check["retryable"]:
-                raise RuntimeError(
-                    f"角色「{name}」已有定妆未通过锁定前校验："
-                    f"{check.get('hint') or check.get('reason')}"
-                )
-        last_reason = "未检测到可用人脸"
-        for attempt in range(max_attempts):
-            _progress(on_progress, message=f"定妆 {name}（{attempt + 1}/{max_attempts}）")
-            try:
-                generate_character_ref(slug, cid, lock=False, seed=_seed_for(cid, attempt))
-            except Exception as exc:
-                raise RuntimeError(
-                    f"角色「{name}」定妆生成失败（第 {attempt + 1}/{max_attempts} 次）：{exc}"
-                ) from exc
-            invalidate_character_embedding(slug, cid)
-            rec = find_character(load_characters(slug), cid)
-            if rec is None:
-                raise RuntimeError(f"角色「{name}」（{cid}）定妆生成后角色卡丢失")
-            check = validate_character_ref(_ref_path(rec))
-            if check["ok"]:
-                _lock_if_needed(rec)
-                return cid
-            if not check["retryable"]:
-                raise RuntimeError(
-                    f"角色「{name}」定妆未通过锁定前校验："
-                    f"{check.get('hint') or check.get('reason')}"
-                )
-            last_reason = check.get("hint") or check.get("reason") or last_reason
+            raise RuntimeError(
+                f"角色「{name}」已有定妆未通过锁定前校验："
+                f"{check.get('hint') or check.get('reason')}；请在工作台手工重生成或上传"
+            )
+        _progress(on_progress, message=f"定妆 {name}")
+        try:
+            generate_character_ref(slug, cid, lock=False, seed=None)
+        except Exception as exc:
+            raise RuntimeError(f"角色「{name}」定妆生成失败：{exc}") from exc
+        invalidate_character_embedding(slug, cid)
+        rec = find_character(load_characters(slug), cid)
+        if rec is None:
+            raise RuntimeError(f"角色「{name}」（{cid}）定妆生成后角色卡丢失")
+        check = validate_character_ref(_ref_path(rec))
+        if check["ok"]:
+            _lock_if_needed(rec)
+            return cid
         raise RuntimeError(
-            f"角色「{name}」定妆重生成 {max_attempts} 次仍未通过身份就绪校验"
-            f"（{last_reason}），请在工作台手动上传或生成定妆"
+            f"角色「{name}」定妆未通过身份就绪校验"
+            f"（{check.get('hint') or check.get('reason')}）；请在工作台手工重生成或上传"
         )
 
     if pending:
@@ -478,23 +456,6 @@ def ensure_default_bgm(slug: str, episode: int, *, catalog_id: str = DEFAULT_CAT
         return False
     patch_mix(slug, episode, {"catalog_id": cid})
     return True
-
-
-def _identity_scene_retryable(result: dict[str, Any]) -> bool:
-    """身份失败是否可通过「重渲 scene 图层」补救。
-
-    只有画面侧问题在这里重试（分数太低 / 画面缺失 / 画面无人脸）。定妆侧问题
-    （no_locked_ref / missing_left / 定妆没人脸）已在「定妆锁定前校验」解决，
-    绝不在这里动已锁定的定妆；依赖类失败永远不可重试。
-    """
-    status = str((result or {}).get("status") or "")
-    if status == "ok":
-        return not bool(result.get("pass"))
-    if status == "skipped":
-        reason = str(result.get("reason") or "")
-        # no_face / no_embedding：锁定前已保证定妆有脸，抽检阶段基本是本镜画面问题。
-        return reason in ("no_scene", "missing_right", "no_face", "no_embedding", "unmatched_face", "below_threshold")
-    return False
 
 
 def _assert_identity_deps_ready(slug: str) -> None:
@@ -523,15 +484,19 @@ def _hq_process_one_shot(
     *,
     ep_title: str,
     force: bool,
-    identity_retries: int,
     cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Render one shot end-to-end for HQ produce (thread-safe via merge_save_shot)."""
+    """Render one shot end-to-end for HQ produce (thread-safe via merge_save_shot).
+
+    单次出图 + 身份验收：不通过则 Fail Loud。禁止自动重抽/换种子/分层重试；
+    候选墙仅供工作台手工重抽。
+    """
     import copy
 
     from tools.drama_i2v import generate_shot_i2v
     from tools.drama_models import effective_motion_ladder, infer_kind, models_with_overrides
     from tools.drama_parallel import acquire_provider_lanes_for_shot
+    from tools.drama_qc import qc_shot_identity
     from tools.drama_shots import episode_lock, find_shot, load_doc, merge_save_shot
     from tools.drama_video import render_shot_layers, rerender_shot
 
@@ -561,104 +526,57 @@ def _hq_process_one_shot(
     if force or not (shot.get("assets") or {}).get("clip"):
         layers = list(HQ_SHOT_LAYERS)
 
-    identity_ok = True
-    identity_last: dict[str, Any] = {}
-    degrades: list[Any] = []
-    for attempt in range(max(0, identity_retries) + 1):
-        if cancel_check:
-            cancel_check()
-        if attempt > 0 and (shot.get("layer_assets") or {}).get("plate"):
-            # P2：已有分层资产时只重做失败角色层并再融合。
-            from tools.drama_layers import regenerate_failing_layers
-            from tools.drama_shots import shot_stem
-            from tools.workspace import resolve_safe as _resolve
+    if cancel_check:
+        cancel_check()
+    info = render_shot_layers(
+        slug,
+        n,
+        shot,
+        layers,
+        title=ep_title,
+        candidate_count=1,
+    )
+    degrades = list(info.get("degrades") or [])
+    merge_save_shot(slug, n, shot)
 
-            scene_rel = str((shot.get("assets") or {}).get("scene") or "")
-            if not scene_rel:
-                scene_rel = f"dramas/{slug}/videos/ep{n:02d}/{shot_stem(int(shot.get('n') or sn))}_scene.png"
-            dest = _resolve(scene_rel)
-            regen = regenerate_failing_layers(
-                slug,
-                n,
-                shot,
-                identity_last,
-                dest,
-                title=ep_title,
-                seed=attempt * 10007,
-            )
-            if regen.get("ok"):
-                shot.setdefault("assets", {})["scene"] = scene_rel.replace("\\", "/")
-                info = {"degrades": [], "rebuilt": ["scene"], "layered_retry": regen.get("regenerated")}
-            else:
-                info = render_shot_layers(
-                    slug,
-                    n,
-                    shot,
-                    ["scene"],
-                    title=ep_title,
-                    candidate_count=1,
-                    seed_jitter=attempt * 10007,
-                )
+    identity_last = qc_shot_identity(slug, n, shot, apply=True)
+    merge_save_shot(slug, n, shot)
+
+    if str(identity_last.get("status") or "") == "skipped":
+        identity_reason = str(identity_last.get("reason") or "").strip()
+        identity_hint = str(identity_last.get("hint") or "").strip()
+        role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
+        if identity_reason == "no_locked_ref":
+            detail = f"角色「{role}」缺少锁定定妆图（角色卡参考图未锁定）"
+        elif identity_reason == "no_scene":
+            detail = f"角色「{role}」本镜缺少画面"
+        elif identity_reason == "proxy_identity":
+            detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
+        elif identity_reason == "no_face":
+            detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；请在工作台手工重抽该镜画面）"
+        elif identity_reason == "unmatched_face":
+            detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '请在工作台手工重抽并保证说话人露脸'}）"
+        elif identity_reason == "no_embedding":
+            detail = f"角色「{role}」本镜画面未能提取人脸嵌入，请在工作台手工重抽该镜画面"
+        elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
+            detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
+        elif identity_reason in ("missing_left", "missing_right"):
+            detail = f"角色「{role}」定妆参考图或本镜画面文件缺失"
+        elif identity_reason == "no_ok_checks":
+            detail = f"角色「{role}」无可打分画面（回退参考缺依赖）"
         else:
-            info = render_shot_layers(
-                slug,
-                n,
-                shot,
-                layers,
-                title=ep_title,
-                candidate_count=1,
-                seed_jitter=attempt * 10007,
-            )
-        degrades.extend(info.get("degrades") or [])
-        merge_save_shot(slug, n, shot)
-        from tools.drama_qc import qc_shot_identity
-
-        identity_last = qc_shot_identity(slug, n, shot, apply=True)
-        merge_save_shot(slug, n, shot)
-        failed = attempt < identity_retries and _identity_scene_retryable(identity_last)
-        if failed:
-            layers = ["scene"]
-            identity_ok = False
-            continue
-        identity_ok = not (
-            str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass")
+            detail = identity_hint or f"角色「{role}」缺少定妆或依赖"
+        raise RuntimeError(
+            f"第{sn}镜身份验收未通过（{detail}），专业档不得记为通过"
         )
-        if str(identity_last.get("status") or "") == "skipped":
-            identity_reason = str(identity_last.get("reason") or "").strip()
-            identity_hint = str(identity_last.get("hint") or "").strip()
-            role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
-            if identity_reason == "no_locked_ref":
-                detail = f"角色「{role}」缺少锁定定妆图（角色卡参考图未锁定）"
-            elif identity_reason == "no_scene":
-                detail = f"角色「{role}」本镜缺少画面"
-            elif identity_reason == "proxy_identity":
-                detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
-            elif identity_reason == "no_face":
-                detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；请重抽该镜画面）"
-            elif identity_reason == "unmatched_face":
-                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '请重抽并保证说话人露脸'}）"
-            elif identity_reason == "no_embedding":
-                detail = f"角色「{role}」本镜画面未能提取人脸嵌入，请重抽该镜画面"
-            elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
-                detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
-            elif identity_reason in ("missing_left", "missing_right"):
-                detail = f"角色「{role}」定妆参考图或本镜画面文件缺失"
-            elif identity_reason == "no_ok_checks":
-                detail = f"角色「{role}」无可打分画面（回退参考缺依赖）"
-            else:
-                detail = identity_hint or f"角色「{role}」缺少定妆或依赖"
-            raise RuntimeError(
-                f"第{sn}镜身份验收未通过（{detail}），专业档不得记为通过"
-            )
-        break
 
-    if not identity_ok:
+    if str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass"):
         role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
         hint = str(identity_last.get("hint") or "")
         raise RuntimeError(
             f"第{sn}镜角色「{role}」身份相似度未达阈值"
             f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
-            f"{('；' + hint) if hint else ''}），请重抽或提高定妆质量"
+            f"{('；' + hint) if hint else ''}），请在工作台手工重抽或提高定妆质量"
         )
 
     # P2：通过后写入跨镜轨迹
@@ -720,8 +638,6 @@ def produce_episode_hq(
     force: bool = False,
     style_id: str = "",
     catalog_bgm: str = DEFAULT_CATALOG_BGM,
-    identity_retries: int = 1,
-    identity_ref_retries: int | None = None,
     cancel_check: Callable[[], None] | None = None,
     on_progress: Callable[..., None] | None = None,
     allow_qc_fail_export: bool = False,
@@ -730,6 +646,7 @@ def produce_episode_hq(
 
     Phase A studio profile: Fail Loud — missing keys / identity fail / fake I2V /
     QC fail all raise. Agent must keep allow_qc_fail_export=False.
+    出图与定妆均为单次生成，禁止自动重抽；候选墙仅供工作台手工重抽。
 
     Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
     """
@@ -743,20 +660,6 @@ def produce_episode_hq(
     n = int(episode)
     clock = ProgressClock()
     preset = ensure_hq_preset(slug)
-    models = load_models(slug)
-    qc = models.get("qc") if isinstance(models.get("qc"), dict) else {}
-
-    def _qc_int(key: str, default: int) -> int:
-        try:
-            return max(0, int(qc.get(key, default)))
-        except (TypeError, ValueError):
-            return max(0, int(default))
-
-    identity_retries = _qc_int("identity_scene_retries", identity_retries)
-    if identity_ref_retries is None:
-        identity_ref_retries = _qc_int("identity_ref_retries", 2)
-    else:
-        identity_ref_retries = max(0, int(identity_ref_retries))
 
     profile = resolve_quality_profile(slug)
     assert_profile_allows_studio_gates(profile)
@@ -805,9 +708,7 @@ def produce_episode_hq(
     expanded_looks = ensure_character_looks_expanded(slug)
     anchored = ensure_character_anchors(slug)
     _assert_identity_deps_ready(slug)
-    ref_chars = ensure_character_refs(
-        slug, on_progress=on_progress, identity_ref_retries=identity_ref_retries
-    )
+    ref_chars = ensure_character_refs(slug, on_progress=on_progress)
     emb_cids = ensure_cast_embeddings(slug)
     _progress(
         on_progress,
@@ -870,7 +771,6 @@ def produce_episode_hq(
             sn,
             ep_title=ep_title,
             force=force,
-            identity_retries=identity_retries,
             cancel_check=cancel_check,
         )
 

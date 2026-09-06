@@ -178,6 +178,7 @@ const {
   removeSession,
   clearCurrentSession,
   setCurrentSessionId,
+  pickSessionToRestore,
 } = useSessions()
 
 const { sidebarWidth, startResize } = useSidebarResize()
@@ -200,7 +201,7 @@ const {
   toggleLike,
   toggleDislike,
   stashCurrent,
-  resumeAfterMessagesLoad,
+  refreshDramaJob,
 } = useChat({
   getSessionId: () => currentSessionId.value,
   setSessionId: (id) => {
@@ -258,6 +259,14 @@ function newChat() {
   nextTick(() => chatViewRef.value?.focusComposer?.())
 }
 
+function scrollChatToBottom() {
+  nextTick(() => {
+    nextTick(() => {
+      chatViewRef.value?.scrollToBottom?.()
+    })
+  })
+}
+
 async function switchSession(sessionId) {
   view.value = 'chat'
   // Mid-generate: reloading from disk would wipe live tool/status UI (session not flushed yet).
@@ -271,20 +280,25 @@ async function switchSession(sessionId) {
 
   setCurrentSessionId(sessionId)
   const cached = peekSessionMessages(sessionId)
+  // 仅复用非空缓存；空数组可能是切换竞态留下的，必须回源加载
   if (cached && cached.length) {
     setMessages(cached)
-    void resumeAfterMessagesLoad(sessionId)
-    nextTick(() => chatViewRef.value?.scrollToBottom?.())
+    stashCurrent(sessionId)
+    scrollChatToBottom()
     return
+  }
+  if (cached && !cached.length) {
+    clearSessionMessageCache(sessionId)
   }
   try {
     const list = await loadSessionMessages(sessionId)
     setMessages(list)
     // Cache the live array reference so later switches keep dramaJob updates
     stashCurrent(sessionId)
-    void resumeAfterMessagesLoad(sessionId)
+    scrollChatToBottom()
   } catch (e) {
     console.error('加载会话失败:', e)
+    showToast(e?.message || '加载会话失败')
   }
 }
 
@@ -375,12 +389,22 @@ function onEnterScriptStage() {
   ensureScriptChatSeed(firstUserContent.value)
 }
 
-onMounted(() => {
-  refreshSessionList()
-  if ((messages.value || []).length) {
-    void resumeAfterMessagesLoad(currentSessionId.value)
+onMounted(async () => {
+  await refreshSessionList({ retries: 5 })
+  const restoreId = pickSessionToRestore()
+  if (restoreId) {
+    await switchSession(restoreId)
   }
 })
+
+async function onRefreshDramaJob(index) {
+  try {
+    await refreshDramaJob(index)
+  } catch (e) {
+    console.error('查询任务进度失败:', e)
+    showToast(e?.message || '查询任务进度失败')
+  }
+}
 </script>
 
 <template>
@@ -416,6 +440,7 @@ onMounted(() => {
       @like="toggleLike"
       @dislike="toggleDislike"
       @open-drama="openDramaFromChat"
+      @refresh-drama="onRefreshDramaJob"
     />
 
     <DramaStudio

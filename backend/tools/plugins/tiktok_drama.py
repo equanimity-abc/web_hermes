@@ -1085,12 +1085,6 @@ def _action_produce_episode(args: dict) -> str:
     force = bool(args.get("force"))
     style_id = str(args.get("style_id") or "").strip()
     catalog_bgm = str(args.get("catalog_bgm") or "").strip()
-    identity_ref_retries = args.get("identity_ref_retries")
-    if identity_ref_retries is not None:
-        try:
-            identity_ref_retries = int(identity_ref_retries)
-        except (TypeError, ValueError):
-            identity_ref_retries = None
     try:
         if background:
             job = produce_episode(
@@ -1100,7 +1094,6 @@ def _action_produce_episode(args: dict) -> str:
                 force=force,
                 style_id=style_id,
                 catalog_bgm=catalog_bgm,
-                identity_ref_retries=identity_ref_retries,
             )
             return _ok(
                 action="produce_episode",
@@ -1117,7 +1110,6 @@ def _action_produce_episode(args: dict) -> str:
             force=force,
             style_id=style_id,
             catalog_bgm=catalog_bgm,
-            identity_ref_retries=identity_ref_retries,
         )
     except (DramaBadRequest, ValueError, RuntimeError, FileNotFoundError) as e:
         return _err(str(e), slug=slug, episode=n, action="produce_episode")

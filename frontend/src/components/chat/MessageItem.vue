@@ -10,7 +10,7 @@ const props = defineProps({
   index: { type: Number, required: true },
 })
 
-const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama', 'refresh-drama'])
 
 const htmlContent = computed(() => {
   const html = renderMarkdown(props.message.content)
@@ -26,7 +26,13 @@ const dramaJob = computed(() => props.message.dramaJob || null)
 const showDramaProgress = computed(() => {
   const j = dramaJob.value
   if (!j) return false
-  return j.state === 'running' || j.state === 'pending' || j.state === 'error' || (j.state === 'done' && j.line)
+  return (
+    j.state === 'running' ||
+    j.state === 'pending' ||
+    j.state === 'error' ||
+    j.state === 'idle' ||
+    (j.state === 'done' && j.line)
+  )
 })
 const dramaPct = computed(() => {
   const p = dramaJob.value?.pct
@@ -37,16 +43,24 @@ const dramaPct = computed(() => {
   }
   return Math.max(0, Math.min(100, Number(p)))
 })
-const dramaProgressStatus = computed(() => {
-  const s = dramaJob.value?.state
-  if (s === 'pending') return 'running'
-  return s || 'idle'
+const canRefreshDrama = computed(() => {
+  const j = dramaJob.value
+  if (!j?.jobId) return false
+  if (j.refreshing) return false
+  return j.canRefresh || j.state === 'idle' || j.state === 'error'
 })
 const dramaProgressTitle = computed(() => {
   const s = dramaJob.value?.state
   if (s === 'error') return '渲染失败'
   if (s === 'done') return '成片完成'
+  if (s === 'idle') return '历史任务'
   return '成片进行中'
+})
+const dramaProgressStatus = computed(() => {
+  const s = dramaJob.value?.state
+  if (s === 'pending') return 'running'
+  if (s === 'idle') return 'idle'
+  return s || 'idle'
 })
 const dramaProgressMessage = computed(() => {
   const j = dramaJob.value
@@ -115,14 +129,24 @@ const showMarkdown = computed(() => {
             <ToolCard v-for="(tool, i) in toolCalls" :key="tool.id || i" :tool="tool" />
           </div>
 
-          <DramaProgressStatusBar
-            v-if="showDramaProgress"
-            class="drama-chat-job-bar-wrap"
-            :pct="dramaPct"
-            :status="dramaProgressStatus"
-            :title="dramaProgressTitle"
-            :message="dramaProgressMessage"
-          />
+          <div v-if="showDramaProgress" class="drama-chat-job-row">
+            <DramaProgressStatusBar
+              class="drama-chat-job-bar-wrap"
+              :pct="dramaPct"
+              :status="dramaProgressStatus"
+              :title="dramaProgressTitle"
+              :message="dramaProgressMessage"
+            />
+            <button
+              v-if="canRefreshDrama"
+              type="button"
+              class="drama-refresh-btn"
+              :disabled="!!dramaJob?.refreshing"
+              @click="emit('refresh-drama', index)"
+            >
+              {{ dramaJob?.refreshing ? '查询中…' : '查询进度' }}
+            </button>
+          </div>
 
           <div v-if="mediaItems.length" class="chat-media-cards">
             <DramaVideoCard
@@ -219,8 +243,40 @@ const showMarkdown = computed(() => {
 </template>
 
 <style scoped>
-.drama-chat-job-bar-wrap {
+.drama-chat-job-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 0 10px;
+  max-width: 640px;
+  flex-wrap: wrap;
+}
+
+.drama-chat-job-bar-wrap {
+  margin: 0;
+  flex: 1;
+  min-width: 240px;
   max-width: 520px;
+}
+
+.drama-refresh-btn {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.drama-refresh-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.drama-refresh-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 </style>

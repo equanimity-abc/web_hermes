@@ -250,6 +250,7 @@ def regenerate_failing_layers(
     title: str = "",
     seed: int = 0,
 ) -> dict[str, Any]:
+    """按 identity.matches 只重做失败角色层并再融合（供工作台/工具手工调用，产线不自动重试）。"""
     """仅重生成身份失败的角色层并重新融合；无分层资产时返回 ok=False。"""
     from tools.drama_characters import character_anchor_prompt, ref_exists
     from tools.drama_qc import _char_ref_path

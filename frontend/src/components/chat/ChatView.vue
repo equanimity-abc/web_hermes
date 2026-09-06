@@ -21,6 +21,7 @@ const emit = defineEmits([
   'like',
   'dislike',
   'open-drama',
+  'refresh-drama',
 ])
 
 const welcomeRef = ref(null)
@@ -41,7 +42,7 @@ function focusComposer() {
 }
 
 function scrollToBottom() {
-  messageListRef.value?.scrollToBottom?.()
+  messageListRef.value?.scrollToBottom?.({ stickMs: 2800 })
 }
 
 watch(
@@ -81,6 +82,7 @@ defineExpose({ focusComposer, scrollToBottom })
         @like="emit('like', $event)"
         @dislike="emit('dislike', $event)"
         @open-drama="emit('open-drama', $event)"
+        @refresh-drama="emit('refresh-drama', $event)"
       />
 
       <div class="input-area">

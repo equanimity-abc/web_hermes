@@ -126,7 +126,13 @@ def _hist_embedding(path: Path) -> list[float] | None:
 
 
 _arcface_app: Any = None
-_arcface_lock = threading.Lock()
+_arcface_lock = threading.RLock()
+# 竖屏漫剧常用 1080×1920 / 1620×2880；det=640 易漏检二次元小脸。
+_ARCFACE_DET_SIZE = (960, 960)
+_ARCFACE_DET_SIZE_FALLBACK = (1280, 1280)
+# 竖屏漫剧常用 1080×1920 / 1620×2880；640 易漏检二次元小脸，默认 960。
+_ARCFACE_DET_SIZE = (960, 960)
+_ARCFACE_DET_SIZE_FALLBACK = (1280, 1280)
 
 
 def _arcface_ready() -> bool:
@@ -163,53 +169,67 @@ def _arcface_singleton() -> Any:
             from insightface.app import FaceAnalysis  # type: ignore
 
             _arcface_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            _arcface_app.prepare(ctx_id=-1, det_size=(640, 640))
+            _arcface_app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE)
         return _arcface_app
 
 
 def _arcface_faces(path: Path) -> tuple[list[dict[str, Any]], str]:
-    """检测图中全部人脸：[{emb, bbox, area}]。"""
+    """检测图中全部人脸：[{emb, bbox, area}]。
+
+    InsightFace 期望 BGR；对高分辨率图在 0 脸时再升一档 det_size（只加强检测，不换图）。
+    """
     try:
         import insightface.app  # type: ignore  # noqa: F401
     except ImportError:
         return [], "no_insightface"
     try:
-        app = _arcface_singleton()
         from PIL import Image
         import numpy as np
 
-        if app is None:
-            return [], "no_insightface"
-        img = np.array(Image.open(path).convert("RGB"))
-        h, w = img.shape[:2]
-        faces = app.get(img)
-        if not faces:
+        rgb = np.asarray(Image.open(path).convert("RGB"))
+        img = np.ascontiguousarray(rgb[:, :, ::-1])  # BGR
+        h, w = int(img.shape[0]), int(img.shape[1])
+
+        def _collect(raw_faces: Any) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for face in raw_faces or []:
+                emb = getattr(face, "normed_embedding", None)
+                if emb is None:
+                    emb = getattr(face, "embedding", None)
+                bbox = getattr(face, "bbox", None)
+                if emb is None or bbox is None:
+                    continue
+                try:
+                    box = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
+                    area = max(0.0, (box[2] - box[0]) * (box[3] - box[1]))
+                except Exception:
+                    continue
+                out.append(
+                    {
+                        "emb": [float(x) for x in list(emb)],
+                        "bbox": box,
+                        "area": area,
+                        "img_w": w,
+                        "img_h": h,
+                    }
+                )
+            return out
+
+        # get + 偶发升档 prepare 需串行，避免并行镜互相改 det_size
+        with _arcface_lock:
+            app = _arcface_singleton()
+            if app is None:
+                return [], "no_insightface"
+            rows = _collect(app.get(img))
+            if not rows and max(h, w) >= 1024:
+                app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE_FALLBACK)
+                try:
+                    rows = _collect(app.get(img))
+                finally:
+                    app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE)
+        if not rows:
             return [], "no_face"
-        out: list[dict[str, Any]] = []
-        for face in faces:
-            emb = getattr(face, "normed_embedding", None)
-            if emb is None:
-                emb = getattr(face, "embedding", None)
-            bbox = getattr(face, "bbox", None)
-            if emb is None or bbox is None:
-                continue
-            try:
-                box = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
-                area = max(0.0, (box[2] - box[0]) * (box[3] - box[1]))
-            except Exception:
-                continue
-            out.append(
-                {
-                    "emb": [float(x) for x in list(emb)],
-                    "bbox": box,
-                    "area": area,
-                    "img_w": int(w),
-                    "img_h": int(h),
-                }
-            )
-        if not out:
-            return [], "no_embedding"
-        return out, "arcface"
+        return rows, "arcface"
     except Exception:
         return [], "arcface_error"
 
@@ -307,8 +327,9 @@ def validate_character_ref(ref_path: Path | None) -> dict[str, Any]:
     ``no_embedding``，而且此时已无法回改（定妆一旦锁定即不可变）。
 
     区分两类完全不同的失败：
-      - 可重试：图本身没人脸/嵌入不出来（no_face / no_embedding）→ 换种子重生成。
-      - 不可重试：依赖缺失（no_insightface / arcface_error）→ 快速失败，重生成无用。
+      - 可手工重生成：图本身没人脸/嵌入不出来（no_face / no_embedding）。
+      - 依赖缺失（no_insightface / arcface_error）→ 重生成无用，需先修环境。
+    ``retryable`` 仅作提示，产线不会据此自动换种子重抽。
     """
     if ref_path is None or not ref_path.is_file() or ref_path.stat().st_size < 32:
         return {
@@ -761,8 +782,7 @@ def qc_shot_identity(
 
     subject_id = str((char or {}).get("id") or (plan or {}).get("identity_subject_id") or "")
     subject_row = next((m for m in matches if m.get("character_id") == subject_id), None)
-    if subject_row is None and matches:
-        subject_row = next((m for m in matches if m.get("role") == "identity"), matches[0])
+    # 禁止用配角匹配顶替主体：speaker 标错 / 主体未入 ref 时，旧逻辑会误放行。
 
     for row in matches:
         status = "ok" if row.get("matched") and row.get("cosine") is not None else "skipped"
@@ -797,9 +817,13 @@ def qc_shot_identity(
         pair["prev_shot"] = int(prev.get("n") or 0)
         checks.append(pair)
 
-    # 硬闸：identity/subject 必须匹配且过阈值；support 若匹配到也要过阈值
+    # 硬闸：identity/subject 必须匹配且过阈值；support 若匹配到也要过阈值。
+    # 脸面积：仅在身份分未过时作为失败原因；已过 cosine 则只警告（避免 MCU 合法镜被 8% 面积误杀）。
     failures: list[str] = []
+    warnings: list[str] = []
     primary_cosine = None
+    if subject_id and subject_row is None:
+        failures.append(f"{char_name or subject_id}: 未匹配到人脸")
     for row in matches:
         role = str(row.get("role") or "support")
         is_subject = str(row.get("character_id") or "") == subject_id or role == "identity"
@@ -814,8 +838,13 @@ def qc_shot_identity(
                 primary_cosine = cos
             if cos < threshold:
                 failures.append(f"{name}: cosine={cos}<{threshold}")
-            if row.get("face_ratio_ok") is False:
-                failures.append(f"{name}: 脸面积不足")
+                if row.get("face_ratio_ok") is False:
+                    failures.append(f"{name}: 脸面积不足")
+            elif row.get("face_ratio_ok") is False:
+                warnings.append(
+                    f"{name}: 脸偏小(ratio={row.get('face_ratio')}<{row.get('min_face_ratio')})，身份分已过"
+                )
+                row["face_ratio_warn"] = True
         else:
             if row.get("matched"):
                 cos = float(row.get("cosine") or 0)
@@ -828,10 +857,12 @@ def qc_shot_identity(
 
     if not passed:
         reason = "unmatched_face" if any("未匹配" in f for f in failures) else "below_threshold"
+        if any("脸面积不足" in f for f in failures) and not any("cosine=" in f for f in failures):
+            reason = "face_too_small"
         hint = "；".join(failures) if failures else fail_hint(threshold)
     else:
         reason = ""
-        hint = ""
+        hint = "；".join(warnings)
 
     result = {
         "status": "ok" if (subject_row and subject_row.get("matched")) or passed else "skipped",
@@ -841,7 +872,7 @@ def qc_shot_identity(
         "method": "arcface",
         "cosine": round(float(primary_cosine), 4) if primary_cosine is not None else None,
         "threshold": threshold,
-        "hint": hint if not passed else "",
+        "hint": hint if not passed else (hint or ""),
         "character_id": (char or {}).get("id") or subject_id,
         "character_name": char_name,
         "checks": checks,
@@ -849,9 +880,10 @@ def qc_shot_identity(
         "kind": kind,
         "dirtied": [],
         "failures": failures,
+        "warnings": warnings,
     }
     # 主体完全没匹配时 status 用 skipped 更贴切
-    if subject_row is not None and not subject_row.get("matched"):
+    if subject_id and (subject_row is None or not subject_row.get("matched")):
         result["status"] = "skipped"
         result["reason"] = result["reason"] or "unmatched_face"
     elif subject_row is not None and subject_row.get("matched"):
@@ -950,8 +982,15 @@ def qc_shot_lip(slug: str, shot: dict[str, Any], *, apply: bool = True) -> dict[
             result["dirtied"] = _mark_fail_layers(shot, ("lip", "clip"))
         shot["qc_lip"] = result
         return result
+    from tools.drama_lse import SCORE_VERSION as LSE_SCORE_VERSION
+
     score = shot.get("lip_score") if isinstance(shot.get("lip_score"), dict) else None
-    if (not score or score.get("status") != "ok") and lip_path is not None:
+    score_stale = (
+        not isinstance(score, dict)
+        or score.get("status") != "ok"
+        or int(score.get("version") or 0) < int(LSE_SCORE_VERSION)
+    )
+    if score_stale and lip_path is not None:
         voice = _asset_file(shot, "voice")
         score = score_lip(lip_path, voice)
         if apply:
@@ -968,18 +1007,33 @@ def qc_shot_lip(slug: str, shot: dict[str, Any], *, apply: bool = True) -> dict[
         return result
     lse_c = float(score.get("lse_c") or 0)
     lse_d = float(score.get("lse_d") or 0)
-    passed = lse_c >= thresholds["lse_c_min"] and lse_d <= thresholds["lse_d_max"]
+    proxy_ok = lse_c >= thresholds["lse_c_min"] and lse_d <= thresholds["lse_d_max"]
+    from tools.providers.lip_providers import lip_source_is_real
+
+    # 真实口型模型已出片时：proxy LSE 只作参考，不硬拦导出（ROI 启发式对 MCU/多人易误杀）。
+    # 闭口 fallback 仍硬失败。
+    real_lip = lip_source_is_real(source) and lip_path is not None
+    passed = bool(proxy_ok or real_lip)
+    hint = ""
+    reason = ""
+    if not proxy_ok and real_lip:
+        reason = "proxy_advisory"
+        hint = f"口型 proxy LSE 偏低(c={lse_c},d={lse_d})，真实口型已出片，不硬拦"
+    elif not passed:
+        reason = "below_threshold"
+        hint = "口型分数低于 mock 基线"
     result = {
         "status": "ok",
         "pass": passed,
         "required": True,
-        "reason": "" if passed else "below_threshold",
-        "hint": "" if passed else "口型分数低于 mock 基线",
+        "reason": reason,
+        "hint": hint,
         "method": score.get("method") or "proxy",
         "lse_c": lse_c,
         "lse_d": lse_d,
         "lse_c_min": thresholds["lse_c_min"],
         "lse_d_max": thresholds["lse_d_max"],
+        "proxy_pass": proxy_ok,
         "dirtied": [],
     }
     if apply and not passed:
