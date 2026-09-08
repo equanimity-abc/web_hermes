@@ -491,6 +491,13 @@ def _resolved_i2v_provider(shot: dict[str, Any]) -> str:
                         used += 1
             if used >= MAX_EXPENSIVE_I2V:
                 shot["i2v_deferred"] = True
+                from tools.drama_hq_contract import is_hq_no_fallback
+
+                if is_hq_no_fallback(slug):
+                    shot["i2v_error"] = (
+                        f"昂贵 I2V 已达本集上限 {MAX_EXPENSIVE_I2V}，专业档禁止改 mock/Ken Burns"
+                    )
+                    return "fail"
                 return "mock"
         return str(est.get("provider") or "mock")
     return _provider() or "mock"
@@ -633,6 +640,13 @@ def try_generate_i2v(
             shot["i2v_ladder"] = "L4"
             return _finish("keys")
 
+    if provider in ("fail", "mock", "mock_ai") and strict:
+        shot.setdefault(
+            "i2v_error",
+            shot.get("i2v_error") or f"专业档禁止 provider={provider}（需真 I2V）",
+        )
+        return "none"
+
     if planned == "L3":
         ok = _run_i2v_with_same_tier_alt(
             provider, scene, dest, shot, max(run_sec, 3.0), models=models, planned=planned
@@ -650,6 +664,9 @@ def try_generate_i2v(
         return "none"
 
     if planned == "L0" or provider in ("l0", "none", "off", ""):
+        if strict:
+            shot["i2v_error"] = shot.get("i2v_error") or "专业档禁止 L0/Ken Burns 顶替真 I2V"
+            return "none"
         try:
             _provider_mock_ai(scene, dest, shot, max(ken_sec, 2.5))
             return _finish("fallback")
@@ -686,11 +703,15 @@ def generate_shot_i2v(
     the caller is an explicit video-page regenerate (force + allow_locked).
     Successful ai/keys runs auto-lock the motion layer.
     strict=True: HQ/Agent Fail Loud — no Ken Burns substitute for real I2V.
+    Studio profile always forces strict (workbench + queue + produce).
     """
+    from tools.drama_hq_contract import assert_hq_i2v_ready, is_hq_no_fallback
     from tools.drama_shots import set_shot_locks
 
     shot["_slug"] = slug
     shot["_episode"] = episode
+    if is_hq_no_fallback(slug):
+        strict = True
     locked = set(shot.get("locked") or [])
     motion_locked = "motion" in locked or "shot" in locked
     rel = motion_rel(slug, episode, int(shot.get("n") or 0))
@@ -716,12 +737,35 @@ def generate_shot_i2v(
         shot.pop("_episode", None)
         return {"tried": False, "i2v_source": str(shot.get("i2v_source") or "none"), "reason": "i2v_off"}
 
+    if strict:
+        try:
+            assert_hq_i2v_ready(slug, shot)
+        except Exception:
+            shot.pop("_slug", None)
+            shot.pop("_episode", None)
+            raise
+
     scene = resolve_safe(str(assets.get("scene") or ""))
     source = try_generate_i2v(scene, dest, shot, strict=strict)
     shot["i2v_source"] = source
     if source == "ai" and str(shot.get("i2v_provider") or "") in ("kling", "kling-video", "kling-maas", "hailuo"):
         if not shot.get("i2v_deferred"):
             shot["i2v_expensive"] = True
+    if strict and source not in ("ai", "keys"):
+        from tools.drama_hq_contract import HQ_I2V_OPTIONAL_KINDS
+        from tools.drama_models import infer_kind
+
+        kind = infer_kind(shot)
+        if kind not in HQ_I2V_OPTIONAL_KINDS:
+            detail = str(shot.get("i2v_error") or "").strip()
+            provider = str(shot.get("i2v_provider") or "").strip()
+            shot.pop("_slug", None)
+            shot.pop("_episode", None)
+            raise RuntimeError(
+                f"Shot {shot.get('n')} 需要真 I2V，但得到 {source or 'none'}"
+                f"（provider={provider or '?'}{('；' + detail) if detail else ''}）；"
+                "专业档禁止 Ken Burns/mock 顶替"
+            )
     shot.pop("_slug", None)
     shot.pop("_episode", None)
     if source in ("ai", "keys", "fallback") and dest.is_file() and dest.stat().st_size > 500:

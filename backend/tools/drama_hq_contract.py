@@ -111,3 +111,53 @@ def assert_hq_image_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
         "face_refs": len(faces),
         "provider": pid,
     }
+
+
+# Narrative kinds that must never use Ken Burns under studio.
+HQ_I2V_REQUIRED_KINDS = frozenset(
+    {
+        "dialogue",
+        "reaction",
+        "action",
+        "cu",
+        "ms",
+        "ws",
+    }
+)
+
+# Still-image kinds allowed without I2V in HQ v1 (title cards etc.).
+HQ_I2V_OPTIONAL_KINDS = frozenset(
+    {
+        "establishing",
+        "insert",
+        "crowd",
+        "title",
+    }
+)
+
+
+def assert_hq_i2v_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
+    """Fail loud when studio narrative motion has no usable real I2V provider."""
+    from tools.drama_models import infer_kind, load_models, provider_usable
+
+    kind = infer_kind(shot)
+    if kind in HQ_I2V_OPTIONAL_KINDS:
+        return {"ok": True, "skipped": kind, "optional": True}
+
+    models = load_models(slug)
+    candidates = (
+        "seedance",
+        "ark",
+        "doubao-video",
+        "kling",
+        "kling-video",
+        "kling-maas",
+        "hailuo",
+    )
+    usable = [p for p in candidates if provider_usable(models, p)]
+    if not usable:
+        raise ValueError(
+            "专业档运动需要可用的真 I2V（Seedance/Kling/Hailuo 等），"
+            "当前无可用 Key；禁止 Ken Burns/mock 顶替。"
+        )
+    return {"ok": True, "kind": kind, "providers": usable}
