@@ -1182,18 +1182,38 @@ def qc_shot_lip(slug: str, shot: dict[str, Any], *, apply: bool = True) -> dict[
     proxy_ok = lse_c >= thresholds["lse_c_min"] and lse_d <= thresholds["lse_d_max"]
     from tools.providers.lip_providers import lip_source_is_real
 
-    # 真实口型模型已出片时：proxy LSE 只作参考，不硬拦导出（ROI 启发式对 MCU/多人易误杀）。
-    # 闭口 fallback 仍硬失败。
+    # 真实口型模型已出片时：proxy LSE 只作参考（draft）；studio 默认要求 proxy 也过，
+    # 可用 DRAMA_LIP_PROXY_ADVISORY=1 放宽。
     real_lip = lip_source_is_real(source) and lip_path is not None
-    passed = bool(proxy_ok or real_lip)
+    studio = False
+    try:
+        from tools.drama_profiles import resolve_quality_profile
+
+        studio = resolve_quality_profile(slug) == "studio"
+    except Exception:
+        studio = False
+    import os
+
+    allow_advisory = os.getenv("DRAMA_LIP_PROXY_ADVISORY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if studio and not allow_advisory:
+        passed = bool(real_lip and proxy_ok)
+    else:
+        passed = bool(proxy_ok or real_lip)
     hint = ""
     reason = ""
-    if not proxy_ok and real_lip:
+    if not proxy_ok and real_lip and (not studio or allow_advisory):
         reason = "proxy_advisory"
         hint = f"口型 proxy LSE 偏低(c={lse_c},d={lse_d})，真实口型已出片，不硬拦"
+    elif studio and real_lip and not proxy_ok and not allow_advisory:
+        reason = "proxy_below_studio"
+        hint = f"专业档要求口型 proxy 也过线(c={lse_c},d={lse_d})；可设 DRAMA_LIP_PROXY_ADVISORY=1"
     elif not passed:
         reason = "below_threshold"
-        hint = "口型分数低于 mock 基线"
+        hint = "口型分数低于基线或未使用真实口型模型"
     result = {
         "status": "ok",
         "pass": passed,

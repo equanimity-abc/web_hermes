@@ -200,13 +200,28 @@ def load_shared_catalog() -> list[dict[str, Any]]:
 
 
 def match_bgm_by_intent(intent: str, tracks: list[dict[str, Any]] | None = None) -> str:
-    """Pick catalog id by mood/keywords in script 配乐 intent. Empty → ''."""
+    """Pick catalog id by mood/keywords in script 配乐 intent. Prefer non-procedural."""
     text = str(intent or "").strip().lower()
     rows = list(tracks or load_shared_catalog())
     if not rows:
         return ""
-    if not text:
-        return str(rows[0].get("id") or "")
+
+    def _score_row(row: dict[str, Any]) -> tuple[int, int, str]:
+        tid = str(row.get("id") or "").strip()
+        if not tid:
+            return (-1, 1, "")
+        mood = str(row.get("mood") or "")
+        blob = f"{mood} {row.get('title') or ''} {row.get('notes') or ''}".lower()
+        score = 0
+        if text:
+            if mood and mood in text:
+                score += 5
+            for mood_name, keys in mood_aliases:
+                if mood == mood_name or mood_name in blob:
+                    score += sum(2 for k in keys if k in text)
+        # Prefer real uploaded/replaced stems over lavfi procedural.
+        real_bonus = 0 if bool(row.get("procedural")) else 1000
+        return (score + real_bonus, 0 if not row.get("procedural") else 1, tid)
 
     mood_aliases: list[tuple[str, tuple[str, ...]]] = [
         ("悬疑", ("悬疑", "紧张", "暗", "神秘", "惊悚", "危险")),
@@ -216,21 +231,22 @@ def match_bgm_by_intent(intent: str, tracks: list[dict[str, Any]] | None = None)
         ("轻快", ("轻快", "日常", "甜", "轻松", "明亮", "欢快")),
         ("高潮", ("高潮", "复仇", "终局", "爆发", "激昂")),
     ]
-    scores: list[tuple[int, str]] = []
-    for row in rows:
-        tid = str(row.get("id") or "").strip()
-        if not tid:
-            continue
-        mood = str(row.get("mood") or "")
-        blob = f"{mood} {row.get('title') or ''} {row.get('notes') or ''}".lower()
-        score = 0
-        if mood and mood in text:
-            score += 5
-        for mood_name, keys in mood_aliases:
-            if mood == mood_name or mood_name in blob:
-                score += sum(2 for k in keys if k in text)
-        scores.append((score, tid))
-    scores.sort(key=lambda x: (-x[0], x[1]))
-    if scores and scores[0][0] > 0:
-        return scores[0][1]
-    return str(rows[0].get("id") or "")
+    ranked = [_score_row(row) for row in rows]
+    ranked = [r for r in ranked if r[2]]
+    if not ranked:
+        return ""
+    ranked.sort(key=lambda x: (-x[0], x[1], x[2]))
+    # If intent scored nothing on real tracks, still prefer any real track over lavfi.
+    best = ranked[0]
+    if text and best[0] < 1000:
+        real = [r for r in ranked if r[1] == 0]
+        if real:
+            return real[0][2]
+    if not text:
+        real = [r for r in ranked if r[1] == 0]
+        if real:
+            return real[0][2]
+        return ranked[0][2]
+    if best[0] % 1000 > 0 or best[0] >= 1000:
+        return best[2]
+    return ranked[0][2]

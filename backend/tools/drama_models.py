@@ -594,23 +594,29 @@ def append_cost(
 
 
 def actual_episode_cost(slug: str, episode: int) -> float:
-    """Sum recorded actual spend for an episode (0 when nothing recorded)."""
+    """Sum recorded actual spend for an episode (max of shots.json + jsonl journal)."""
     from tools.drama_shots import load_doc
 
     doc = load_doc(slug, int(episode))
-    if not doc:
-        return 0.0
-    entries = doc.get("cost_log")
-    if not isinstance(entries, list):
-        return 0.0
     total = 0.0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            total += float(entry.get("cost") or 0)
-        except (TypeError, ValueError):
-            continue
+    if doc:
+        entries = doc.get("cost_log")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    total += float(entry.get("cost") or 0)
+                except (TypeError, ValueError):
+                    continue
+    try:
+        from tools.drama_observability import sum_cost_log_jsonl
+
+        journal = sum_cost_log_jsonl(slug, int(episode))
+        # Prefer the higher ledger to avoid under-counting either side.
+        total = max(total, journal)
+    except Exception:
+        pass
     return round(total, 4)
 
 
@@ -621,9 +627,8 @@ def budget_state(
 ) -> dict[str, Any]:
     """R7: per-episode estimated spend + budget gate (warn/block).
 
-    spent = i2v estimate + lip estimate + image estimate from the current
-    shot list. When budget.enabled and spent > per_episode, generation of
-    expensive layers is blocked until the budget is raised or disabled.
+    Gate uses max(estimate, actual_spent) so provider journals and shots.json
+    cost_log stay honest together.
     """
     from tools.drama_shots import load_doc
 
@@ -647,8 +652,14 @@ def budget_state(
     shots = shots or []
     ep_doc = load_doc(slug, episode) if episode else None
     est = estimate_episode_i2v(slug, shots, episode=episode, doc=ep_doc)
-    spent = round(float(est.get("i2v_estimate") or 0) + float(est.get("lip_estimate") or 0) + float(est.get("image_estimate") or 0), 4)
+    spent_est = round(
+        float(est.get("i2v_estimate") or 0)
+        + float(est.get("lip_estimate") or 0)
+        + float(est.get("image_estimate") or 0),
+        4,
+    )
     actual_spent = actual_episode_cost(slug, episode) if episode else 0.0
+    spent = round(max(spent_est, actual_spent), 4)
 
     if not enabled or per_episode <= 0:
         return {
@@ -656,6 +667,7 @@ def budget_state(
             "per_episode": round(per_episode, 2),
             "warn_at": warn_at,
             "spent": spent,
+            "spent_estimate": spent_est,
             "actual_spent": actual_spent,
             "remaining": None,
             "ratio": None,
@@ -671,7 +683,7 @@ def budget_state(
     warn = ratio >= warn_at and not blocked
     reason = ""
     if blocked:
-        reason = f"本集预算已超支（已估 {spent} / {per_episode}），请先调高预算或关闭闸门"
+        reason = f"本集预算已超支（已用 {spent} / {per_episode}），请先调高预算或关闭闸门"
     elif warn:
         reason = f"本集预算已用 {ratio * 100:.0f}%（{spent} / {per_episode}），接近上限"
     return {
@@ -679,6 +691,7 @@ def budget_state(
         "per_episode": round(per_episode, 2),
         "warn_at": warn_at,
         "spent": spent,
+        "spent_estimate": spent_est,
         "actual_spent": actual_spent,
         "remaining": remaining,
         "ratio": ratio,

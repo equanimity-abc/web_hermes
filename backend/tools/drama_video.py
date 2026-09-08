@@ -1419,12 +1419,15 @@ def _draw_subtitle_overlay(
     assets = shot.setdefault("assets", {})
     if karaoke:
         ass_dest = dest.with_suffix(".ass")
+        track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else {}
+        turns = list(track.get("turns") or []) if track else []
         written = write_karaoke_ass(
             ass_dest,
             dialogue_caption_text(shot),
             duration=_shot_overlay_duration(shot),
             play_res_x=WIDTH,
             play_res_y=HEIGHT,
+            turns=turns,
         )
         if written is not None:
             try:

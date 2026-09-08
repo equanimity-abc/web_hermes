@@ -50,6 +50,59 @@ def append_cost_log(
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+    # Dual-write into shots.json cost_log so budget_state.actual_spent matches journals.
+    if ok and episode and float(cost or 0) > 0:
+        try:
+            from tools.drama_models import record_cost
+
+            layer = str(capability or "other")
+            if layer == "image":
+                layer = "scene"
+            elif layer in ("i2v", "video"):
+                layer = "motion"
+            record_cost(
+                slug,
+                int(episode),
+                provider=str(provider or ""),
+                layer=layer,
+                cost=float(cost or 0),
+                shot=int(shot) if shot else None,
+            )
+        except Exception:
+            pass
+
+
+def sum_cost_log_jsonl(slug: str, episode: int | None = None) -> float:
+    """Sum provider journal costs (optionally filtered by episode)."""
+    path = resolve_safe(_cost_rel(slug))
+    if not path.is_file():
+        return 0.0
+    total = 0.0
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("ok") is False:
+                continue
+            if episode is not None and row.get("episode") not in (None, episode, int(episode)):
+                try:
+                    if int(row.get("episode") or 0) != int(episode):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            try:
+                total += float(row.get("cost") or 0)
+            except (TypeError, ValueError):
+                continue
+    except OSError:
+        return 0.0
+    return round(total, 4)
+
 
 def bump_failure_heat(
     slug: str,

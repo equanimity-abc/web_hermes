@@ -331,6 +331,15 @@ def save_uploaded_bgm(
     mix["bgm"]["title"] = str(title or Path(filename).stem or "upload")
     mix["bgm"]["license"] = LICENSE_USER
     mix["bgm"]["license_ok"] = bool(license_ok)
+    mix["bgm"]["procedural"] = False
+    mix["bgm"]["source"] = "upload"
+    # Drop procedural marker if user overwrote a catalog path by chance.
+    marker = dest.with_suffix(dest.suffix + ".procedural")
+    if marker.is_file():
+        try:
+            marker.unlink()
+        except OSError:
+            pass
     save_mix(slug, episode, mix)
     return load_mix(slug, episode)
 

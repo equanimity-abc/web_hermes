@@ -1162,6 +1162,24 @@ def _action_produce_episode(args: dict) -> str:
     style_id = str(args.get("style_id") or "").strip()
     catalog_bgm = str(args.get("catalog_bgm") or "").strip()
     try:
+        from tools.drama_episode_status import build_episode_status, write_episode_status
+        from tools.drama_produce_gates import produce_blockers
+
+        blockers = produce_blockers(slug, n, force=force)
+        status_text = build_episode_status(slug, n)
+        write_episode_status(slug, n)
+        if blockers and not force:
+            return _err(
+                "产片被状态卡拦截（传入 force=true 可覆盖）：" + "；".join(blockers[:6]),
+                slug=slug,
+                episode=n,
+                action="produce_episode",
+                episode_status=status_text,
+                blockers=blockers,
+            )
+    except Exception:
+        pass
+    try:
         if background:
             job = produce_episode(
                 slug,

@@ -591,10 +591,24 @@ def apply_turn_timings(track: dict[str, Any], timed: list[dict[str, Any]]) -> di
 
 
 def infer_turn_timings_from_voice(track: dict[str, Any], voice_duration: float) -> dict[str, Any]:
-    """When turn timings were lost on disk, split master VO by text weight per turn."""
+    """Recover turn timings. Prefer existing TTS start/end; else split by text weight."""
     turns = list((track or {}).get("turns") or [])
     if len(turns) < 2 or voice_duration <= 0:
         return track or empty_dialogue_track()
+    # Keep TTS-probed timings when they already cover the master VO.
+    timed_existing = []
+    for turn in turns:
+        try:
+            start = float(turn.get("start") or 0)
+            end = float(turn.get("end") or 0)
+        except (TypeError, ValueError):
+            start, end = 0.0, 0.0
+        if end > start + 0.02:
+            timed_existing.append({"start": start, "end": end, "voice": turn.get("voice") or ""})
+    if len(timed_existing) == len(turns):
+        span = max(t["end"] for t in timed_existing)
+        if span > 0 and abs(span - voice_duration) <= max(0.35, voice_duration * 0.12):
+            return apply_turn_timings(track, timed_existing)
     weights = [max(len(str(t.get("text") or "")), 1) for t in turns]
     total_w = float(sum(weights)) or 1.0
     cursor = 0.0

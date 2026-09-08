@@ -971,6 +971,9 @@ def _produce_episode_hq_body(
 
     clock.start("sync")
     doc = sync_shots_doc(slug, n, str(markdown), title=str(ep.get("title") or ""))
+    from tools.drama_produce_gates import assert_produce_ready
+
+    assert_produce_ready(slug, n, force=bool(force or allow_qc_fail_export), doc=doc)
     ep_title = str(doc.get("title") or f"第{n}集")
 
     if style_id:

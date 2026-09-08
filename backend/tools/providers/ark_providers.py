@@ -482,6 +482,25 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                     if video_url and _download(str(video_url), Path(dest)):
                         if isinstance(shot, dict):
                             shot.pop("i2v_error", None)
+                        try:
+                            from tools.drama_observability import append_cost_log, estimate_provider_cost
+
+                            slug = str((shot or {}).get("_slug") or "") if isinstance(shot, dict) else ""
+                            ep = int((shot or {}).get("_episode") or 0) if isinstance(shot, dict) else 0
+                            sn = int((shot or {}).get("n") or 0) if isinstance(shot, dict) else 0
+                            if slug:
+                                append_cost_log(
+                                    slug,
+                                    capability="i2v",
+                                    provider="ark",
+                                    model=model,
+                                    cost=estimate_provider_cost(slug, "ark"),
+                                    shot=sn or None,
+                                    episode=ep or None,
+                                    ok=True,
+                                )
+                        except Exception:
+                            pass
                         return "ai"
                     _remember_error("succeeded_but_no_video_url")
                     return "none"

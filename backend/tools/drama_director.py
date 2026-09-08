@@ -244,12 +244,65 @@ def refresh_coverage(doc: dict[str, Any]) -> dict[str, Any]:
         generated.append(hook)
     generated.extend(_build_rhythm(shots, kept))
     generated.extend(_build_reactions(shots, kept))
+    silence = _build_silence(shots, kept)
+    if silence:
+        generated.append(silence)
     coverage = {
         "updated_at": utc_now(),
         "suggestions": _merge(previous.get("suggestions") or [], generated),
     }
     doc["coverage"] = coverage
     return public_coverage(doc)
+
+
+def _build_silence(shots: list[dict[str, Any]], kept: dict[str, str]) -> dict[str, Any] | None:
+    """Flag shots whose VO is much shorter than shot duration (awkward silence)."""
+    for shot in shots:
+        n = int(shot.get("n") or 0)
+        if n < 1:
+            continue
+        sid = f"silence-{n}"
+        if kept.get(sid) in KEPT_STATUSES:
+            continue
+        try:
+            dur = float(shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else {}
+        try:
+            vo = float(track.get("total_duration") or 0)
+        except (TypeError, ValueError):
+            vo = 0.0
+        if vo <= 0:
+            assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
+            if not assets.get("voice"):
+                continue
+            # Voice exists but no timing — mild note
+            if dur >= 4.0 and not str(shot.get("对白") or shot.get("字幕") or "").strip():
+                return {
+                    "id": sid,
+                    "type": "silence",
+                    "status": "open",
+                    "shot": n,
+                    "title": "长镜几乎无对白",
+                    "reason": f"Shot {n} 时长约 {dur:.1f}s 且无对白，注意静音空洞（只读建议）",
+                    "patch": {},
+                }
+            continue
+        if dur >= 3.0 and vo + 1.2 < dur * 0.55:
+            return {
+                "id": sid,
+                "type": "silence",
+                "status": "open",
+                "shot": n,
+                "title": "对白偏短留白过大",
+                "reason": (
+                    f"Shot {n} 配音约 {vo:.1f}s / 镜头 {dur:.1f}s，"
+                    "静音比例偏高（只读建议，不自动改时长）"
+                ),
+                "patch": {},
+            }
+    return None
 
 
 def _require_item(doc: dict[str, Any], sid: str) -> dict[str, Any]:

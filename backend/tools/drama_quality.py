@@ -88,6 +88,12 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
             continue
         if "shot" in (shot.get("locked") or []):
             continue
+        # Studio: lip-eligible shots must use a real lip provider (not fallback/mock).
+        try:
+            assert_studio_lip_shot(slug, shot)
+        except ValueError as e:
+            blockers.append(f"Shot {sn}: {e}")
+            continue
         bundle = qc_shot_bundle(slug, episode, shot, apply=True)
         if shot_can_pass(bundle):
             continue
@@ -101,6 +107,26 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
             + ("…" if len(blockers) > 8 else "")
         )
     return {"ok": True, "forced": False, "block_reason": ""}
+
+
+def assert_studio_lip_shot(slug: str, shot: dict[str, Any]) -> None:
+    """Fail loud when eligible lip shots still use fallback/mock under studio profile."""
+    import os
+
+    from tools.drama_lip import lip_eligible
+    from tools.drama_profiles import resolve_quality_profile
+    from tools.providers.lip_providers import lip_source_is_real
+
+    if resolve_quality_profile(slug) != "studio":
+        return
+    if os.getenv("DRAMA_ALLOW_FALLBACK_LIP", "").strip().lower() in ("1", "true", "yes"):
+        return
+    gate = lip_eligible(shot)
+    if not gate.get("ok"):
+        return
+    source = str(shot.get("lip_source") or "")
+    if not lip_source_is_real(source):
+        raise ValueError(f"专业档口型源无效（lip_source={source or '空'}），禁止 fallback/mock 当通过")
 
 
 def assert_loudness_after_export(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:

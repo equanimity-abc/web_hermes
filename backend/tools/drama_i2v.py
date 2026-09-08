@@ -354,9 +354,9 @@ def _concat_motion(first: Path, second: Path, dest: Path) -> bool:
 
 
 def ensure_motion_seconds(path: Path, target: float) -> bool:
-    """Pad a short motion mp4 up to script duration by freezing the last frame.
+    """Fit motion mp4 to script duration: pad short clips, trim oversize Seedance takes.
 
-    Avoids stream_loop so performance masters are not polluted with a restart seam.
+    Seedance floors at 4s; short dialogue beats need trim back to shot.duration.
     """
     from tools.drama_video import FPS, _probe_duration, _run_ffmpeg
 
@@ -364,41 +364,69 @@ def ensure_motion_seconds(path: Path, target: float) -> bool:
     if target <= 0.1 or not path.is_file():
         return False
     cur = float(_probe_duration(path) or 0)
-    if cur <= 0.05 or cur + 0.12 >= target:
-        return cur + 0.12 >= target
-    hold = max(0.0, target - cur)
-    tmp = path.with_suffix(".pad.tmp.mp4")
+    if cur <= 0.05:
+        return False
+    # Already close enough.
+    if abs(cur - target) <= 0.12:
+        return True
+    tmp = path.with_suffix(".fit.tmp.mp4")
     try:
-        _run_ffmpeg(
-            [
-                "-y",
-                "-i",
-                str(path),
-                "-vf",
-                f"tpad=stop_mode=clone:stop_duration={hold:.3f},fps={FPS}",
-                "-an",
-                "-t",
-                f"{target:.2f}",
-                "-r",
-                str(FPS),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(tmp),
-            ],
-            timeout=180,
-        )
+        if cur + 0.12 < target:
+            hold = max(0.0, target - cur)
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-vf",
+                    f"tpad=stop_mode=clone:stop_duration={hold:.3f},fps={FPS}",
+                    "-an",
+                    "-t",
+                    f"{target:.2f}",
+                    "-r",
+                    str(FPS),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(tmp),
+                ],
+                timeout=180,
+            )
+        else:
+            # Trim oversize AI take down to script beat.
+            _run_ffmpeg(
+                [
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-t",
+                    f"{target:.2f}",
+                    "-an",
+                    "-vf",
+                    f"fps={FPS}",
+                    "-r",
+                    str(FPS),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(tmp),
+                ],
+                timeout=180,
+            )
         if not tmp.is_file() or tmp.stat().st_size < 500:
             return False
         tmp.replace(path)
-        return float(_probe_duration(path) or 0) + 0.12 >= target
+        return abs(float(_probe_duration(path) or 0) - target) <= 0.25
     except RuntimeError:
         return False
     finally:
-        if tmp.exists():
+        if tmp.is_file():
             try:
                 tmp.unlink()
             except OSError:
@@ -567,7 +595,7 @@ def try_generate_i2v(
 
     from tools.drama_models import effective_motion_ladder, models_with_overrides
 
-    # Provider I2V stays capped (~4s APIs); Ken Burns / keys / final motion follow script duration.
+    # Provider I2V: Seedance floors at 4s — request ≥4 then fit to script via ensure_motion_seconds.
     provider_sec = i2v_seconds(shot) if seconds is None else max(MIN_SECONDS, min(float(seconds), MAX_SECONDS))
     ken_sec = motion_seconds(shot) if seconds is None else max(provider_sec, float(seconds))
     ken_sec = max(MIN_SECONDS, min(ken_sec, KEN_BURNS_MAX_SECONDS))
@@ -580,7 +608,18 @@ def try_generate_i2v(
     planned = effective_motion_ladder(shot, slug=slug, models=models)
     provider = _resolved_i2v_provider(shot)
     shot["i2v_provider"] = provider
-    run_sec = ken_sec if provider in local_mock else sec
+    SEEDANCE_FLOOR = 4.0
+    if provider in local_mock:
+        run_sec = ken_sec
+    else:
+        # Align cloud I2V request with Seedance minimum; trim/pad later to ken_sec.
+        run_sec = max(SEEDANCE_FLOOR, sec)
+        try:
+            shot_dur = float(shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            shot_dur = 0.0
+        if shot_dur > run_sec:
+            run_sec = min(max(shot_dur, SEEDANCE_FLOOR), 12.0)
 
     def _finish(source: str) -> str:
         if source in ("ai", "keys", "fallback") and dest.is_file():

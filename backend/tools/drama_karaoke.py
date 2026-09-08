@@ -54,6 +54,27 @@ def build_karaoke_dialogue(text: str, duration: float) -> str:
     return "".join(parts)
 
 
+def build_karaoke_from_turns(turns: list[dict[str, Any]]) -> list[tuple[float, float, str]]:
+    """Build (start, end, karaoke_body) rows from TTS-timed dialogue turns."""
+    rows: list[tuple[float, float, str]] = []
+    for turn in turns or []:
+        if not isinstance(turn, dict):
+            continue
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(turn.get("start") or 0)
+            end = float(turn.get("end") or 0)
+        except (TypeError, ValueError):
+            start, end = 0.0, 0.0
+        dur = max(0.05, end - start) if end > start else 1.0
+        body = build_karaoke_dialogue(text, dur)
+        if body:
+            rows.append((start, start + dur if end <= start else end, body))
+    return rows
+
+
 def write_karaoke_ass(
     dest: Path,
     text: str,
@@ -61,11 +82,17 @@ def write_karaoke_ass(
     duration: float,
     play_res_x: int = 1080,
     play_res_y: int = 1920,
+    turns: list[dict[str, Any]] | None = None,
 ) -> Path | None:
-    """Write a minimal ASS karaoke file. Returns dest or None if empty text."""
-    body = build_karaoke_dialogue(text, duration)
-    if not body:
-        return None
+    """Write a minimal ASS karaoke file. Prefer TTS turn timings when provided."""
+    turn_rows = build_karaoke_from_turns(turns or [])
+    if turn_rows:
+        bodies = turn_rows
+    else:
+        body = build_karaoke_dialogue(text, duration)
+        if not body:
+            return None
+        bodies = [(0.0, max(0.4, float(duration or 1.0)), body)]
     dest.parent.mkdir(parents=True, exist_ok=True)
     header = (
         "[Script Info]\n"
@@ -85,9 +112,11 @@ def write_karaoke_ass(
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
-    end = _cs(duration)
-    line = f"Dialogue: 0,0:00:00.00,{end},Karaoke,,0,0,0,,{body}\n"
-    dest.write_text(header + line, encoding="utf-8-sig")
+    lines = [
+        f"Dialogue: 0,{_cs(start)},{_cs(end)},Karaoke,,0,0,0,,{body}\n"
+        for start, end, body in bodies
+    ]
+    dest.write_text(header + "".join(lines), encoding="utf-8-sig")
     return dest
 
 
