@@ -65,6 +65,8 @@ const {
   ensureScriptChatSeed,
   sendScriptChat,
   rerenderDirtyShots,
+  produceEpisodeHq,
+  directorGenerateScript,
   selectCharacter,
   toggleShotRole,
   addCharacter,
@@ -548,6 +550,8 @@ async function onResumeDramaJob(index) {
       @script-chat-send="sendScriptChat"
       @enter-script-stage="onEnterScriptStage"
       @rerender-dirty="rerenderDirtyShots"
+      @produce-episode="produceEpisodeHq"
+      @director-generate-script="directorGenerateScript"
       @select-character="selectCharacter"
       @add-character="addCharacter"
       @save-character="saveCharacterCard"

@@ -1220,6 +1220,12 @@ def _produce_episode_hq_body(
         "exported": True,
         "hint": "全自动 HQ 已导出整集；定妆已锁定；分镜仅单图（候选墙请在工作台微调时手动生成）",
     }
+    try:
+        from tools.drama_episode_status import write_episode_status
+
+        result["episode_status_path"] = write_episode_status(slug, n)
+    except Exception:
+        pass
     return result
 
 

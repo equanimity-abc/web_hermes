@@ -32,6 +32,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 
 ## 工作流
 0. **create_from_premise（一句话全自动，默认推荐）** premise=故事梗概 → 自动解析「几集 / 每集几秒」→ 立项 + bible + outline + **按集拆分剧本** + **逐集 HQ 成片导出**（返回 play_url + episodes[]）；定妆每人 1 张并锁定；分镜只出 1 张画面（候选墙留给工作台微调）
+0b. **get / guide** 带 slug+episode 时返回 **episode_status** 状态卡（脏镜/失败镜/BGM/导演下一步）；行动前先读卡，避免盲推进
 1. tiktok_drama action=init 建项目（slug + title + logline）
 2. save_bible 写入人设 bible.md
 3. save_outline 写入系列大纲 outline.md
@@ -170,8 +171,30 @@ def _save_project(slug: str, data: dict[str, Any]) -> None:
     _write_text(_project_rel(slug), json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
-def _action_guide(_args: dict) -> str:
-    return _ok(action="guide", content=_GUIDE)
+def _action_guide(args: dict) -> str:
+    """Return studio guide; if slug+episode given, append live episode_status card."""
+    payload: dict[str, Any] = {"action": "guide", "content": _GUIDE}
+    slug = _slug(str(args.get("slug") or ""))
+    ep_raw = args.get("episode")
+    if slug and ep_raw is not None:
+        try:
+            n = int(ep_raw)
+            from tools.drama_episode_status import build_episode_status, write_episode_status
+            from tools.drama_shots import load_doc
+
+            doc = load_doc(slug, n)
+            status = build_episode_status(slug, n, doc)
+            path = write_episode_status(slug, n, doc)
+            payload["episode_status"] = status
+            payload["episode_status_path"] = path
+            payload["content"] = (
+                _GUIDE
+                + "\n\n---\n\n## 本集状态卡（Agent 先读再行动）\n\n"
+                + status
+            )
+        except Exception:
+            pass
+    return _ok(**payload)
 
 
 def _action_init(args: dict) -> str:
@@ -293,6 +316,13 @@ def _action_get(args: dict) -> str:
                 "scene_ai": sum(1 for s in _shots if s.get("scene_source") == "ai"),
                 "qc_verdict": (shots_doc.get("qc") or {}).get("verdict") or "待修",
             }
+            try:
+                from tools.drama_episode_status import build_episode_status, write_episode_status
+
+                payload["episode_status"] = build_episode_status(slug, n, shots_doc)
+                payload["episode_status_path"] = write_episode_status(slug, n, shots_doc)
+            except Exception:
+                pass
         video_rel = _rel(slug, "videos", f"ep{n:02d}.mp4")
         video_path = resolve_safe(video_rel)
         if video_path.is_file():

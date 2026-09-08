@@ -550,6 +550,16 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     models = effective_models(slug, episode=n, doc=doc)
     from tools.drama_audio import public_mix
 
+    episode_status = ""
+    episode_status_path = ""
+    try:
+        from tools.drama_episode_status import build_episode_status, write_episode_status
+
+        episode_status = build_episode_status(slug, n, doc)
+        episode_status_path = write_episode_status(slug, n, doc)
+    except Exception:
+        pass
+
     return {
         "slug": slug,
         "episode": n,
@@ -565,6 +575,8 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
         "mix_mode": (doc or {}).get("mix"),
         "video_path": video_rel if video["exists"] else None,
         "play_url": video.get("url") if video["exists"] else None,
+        "episode_status": episode_status,
+        "episode_status_path": episode_status_path,
         "cameras": list(CAMERAS),
         "characters": list_characters(slug),
         "voices": public_voices(slug),

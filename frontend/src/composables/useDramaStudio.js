@@ -1319,6 +1319,66 @@ export function useDramaStudio() {
     }
   }
 
+  async function produceEpisodeHq() {
+    if (!slug.value || !episodeN.value) return
+    if (!String(scriptDraft.value || episode.value?.script || '').trim()) {
+      error.value = '请先生成或保存剧本，再一键成片'
+      return
+    }
+    error.value = ''
+    notice.value = ''
+    rendering.value = true
+    setBatchProgress({
+      kind: 'produce',
+      label: '一键成片',
+      current: 0,
+      total: 1,
+      status: 'running',
+      message: 'HQ 成片排队中…',
+    })
+    try {
+      const result = await dramaApi.produceEpisode(slug.value, episodeN.value, true, false)
+      if (result.job_id) {
+        await trackJob(result, slug.value)
+        notice.value = '一键成片已加入后台队列'
+        setBatchProgress({
+          status: 'running',
+          message: '一键成片进行中（后台）…',
+          jobId: result.job_id,
+        })
+        rendering.value = false
+        return
+      }
+      bust.value = Date.now()
+      await openEpisode(episodeN.value)
+      notice.value = result.produce?.hint || '一键成片完成'
+      setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
+    } catch (e) {
+      error.value = e.message || String(e)
+      setBatchProgress({ status: 'error', message: error.value })
+    } finally {
+      if (!batchProgress.value?.jobId) {
+        rendering.value = false
+        clearBatchProgressSoon()
+      }
+    }
+  }
+
+  async function directorGenerateScript() {
+    const hint = String(project.value?.project?.logline || '').trim()
+    const premise = window.prompt(
+      '输入一句话故事梗概（生成结构化剧本）：',
+      hint || '',
+    )
+    if (premise == null) return
+    const text = String(premise || '').trim()
+    if (!text) {
+      error.value = '梗概不能为空'
+      return
+    }
+    await generateScriptFromPremise(text)
+  }
+
   async function saveEpisodeMeta(patch) {
     if (!slug.value || !episodeN.value) return
     saving.value = true
@@ -2797,6 +2857,8 @@ export function useDramaStudio() {
     ensureScriptChatSeed,
     sendScriptChat,
     rerenderDirtyShots,
+    produceEpisodeHq,
+    directorGenerateScript,
     selectCharacter,
     toggleShotRole,
     addCharacter,

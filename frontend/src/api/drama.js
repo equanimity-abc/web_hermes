@@ -299,6 +299,13 @@ export function exportEpisode(slug, episode, background = true, force = false) {
   })
 }
 
+export function produceEpisode(slug, episode, background = true, force = false) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/produce`, {
+    method: 'POST',
+    body: JSON.stringify({ background, force: Boolean(force) }),
+  })
+}
+
 export function getMix(slug, episode) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`)
 }

@@ -35,6 +35,7 @@ from tools.drama_studio import (
     patch_shots,
     patch_timeline,
     preview_script,
+    produce_episode,
     remove_character,
     remove_project,
     rerender_dirty_shots,
@@ -233,6 +234,13 @@ class ExportBody(BaseModel):
     background: bool = True
     # Workbench may force export past QC; Agent must never set this.
     force: bool = False
+
+
+class ProduceBody(BaseModel):
+    background: bool = True
+    force: bool = False
+    style_id: str = ""
+    catalog_bgm: str = ""
 
 
 class MixPatch(BaseModel):
@@ -702,6 +710,26 @@ async def drama_export_episode(slug: str, episode: int, body: ExportBody | None 
         background = body.background if body else True
         force = bool(body.force) if body else False
         return export_episode(slug, episode, background=background, force=force)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/projects/{slug}/episodes/{episode}/produce")
+async def drama_produce_episode(slug: str, episode: int, body: ProduceBody | None = None):
+    """Director one-shot HQ produce (cast → scene/voice → I2V → BGM → export)."""
+    try:
+        background = body.background if body else True
+        force = bool(body.force) if body else False
+        style_id = str(body.style_id or "") if body else ""
+        catalog_bgm = str(body.catalog_bgm or "") if body else ""
+        return produce_episode(
+            slug,
+            episode,
+            background=background,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm,
+        )
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 

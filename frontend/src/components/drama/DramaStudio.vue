@@ -1,8 +1,9 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import DramaThumbImg from '@/components/drama/DramaThumbImg.vue'
 import DramaScriptChat from '@/components/drama/DramaScriptChat.vue'
 import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
+import DramaDirectorBar from '@/components/drama/DramaDirectorBar.vue'
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -122,6 +123,8 @@ const emit = defineEmits([
   'move-timeline-shot',
   'reorder-timeline',
   'export-timeline',
+  'produce-episode',
+  'director-generate-script',
   'save-mix',
   'upload-bgm',
   'apply-mix',
@@ -389,6 +392,46 @@ function goStage(id) {
 }
 function goNext() {
   if (nextStage.value) goStage(nextStage.value.id)
+}
+
+const dirtyCount = computed(() => {
+  const shots = props.shots || []
+  let n = 0
+  for (const s of shots) {
+    if ((s.dirty || []).length) n += 1
+    else if (s.qc && s.qc.produce_ok === false) n += 1
+  }
+  return n
+})
+
+const STAGE_IDS = new Set(['script', 'cast', 'scene', 'video', 'voice', 'assemble'])
+
+function applyDeepLink(hash = window.location.hash || '') {
+  const raw = String(hash || '').replace(/^#/, '')
+  if (!raw) return
+  const params = new URLSearchParams(raw.includes('=') ? raw : '')
+  // also support #shot=3&stage=scene
+  const shot = Number(params.get('shot') || 0)
+  const st = String(params.get('stage') || '').trim()
+  if (st && STAGE_IDS.has(st)) goStage(st)
+  if (shot > 0) emit('select-shot', shot)
+}
+
+function onHashChange() {
+  applyDeepLink(window.location.hash)
+}
+
+onMounted(() => {
+  applyDeepLink(window.location.hash)
+  window.addEventListener('hashchange', onHashChange)
+})
+onUnmounted(() => {
+  window.removeEventListener('hashchange', onHashChange)
+})
+
+function onDirectorGenerateScript() {
+  goStage('script')
+  emit('director-generate-script')
 }
 
 const previewUrl = computed(() => {
@@ -1512,6 +1555,16 @@ const statusBar = computed(() => {
           </label>
         </div>
       </div>
+      <DramaDirectorBar
+        v-if="project"
+        :has-script="Boolean(episode?.script || scriptDraft)"
+        :has-shots="shots.length > 0"
+        :dirty-count="dirtyCount"
+        :busy="saving || rendering"
+        @generate-script="onDirectorGenerateScript"
+        @produce-episode="emit('produce-episode')"
+        @rerender-dirty="emit('rerender-dirty')"
+      />
     </header>
 
     <!-- 6 阶段线性步进器 + 下一步 -->
@@ -2497,9 +2550,9 @@ const statusBar = computed(() => {
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
-        <li><strong>1. 立项</strong> 在对话里说「帮我立项一个 xxx 漫剧」或点左侧项目</li>
-        <li><strong>2. 剧本</strong> 对话生成或编写剧本与分镜</li>
-        <li><strong>3. 一路生成</strong> 角色 → 画面 → 视频 → 声音 → 成片</li>
+        <li><strong>1. 立项</strong> 左侧选项目，或对话「帮我立项一个 xxx 漫剧」</li>
+        <li><strong>2. 生成剧本</strong> 顶部「生成剧本」或剧本台对话一句话出结构化蓝图</li>
+        <li><strong>3. 一键成片</strong> 顶部「一键成片」；有脏镜时用「导出错镜」深链 <code>#shot=N&amp;stage=scene</code></li>
       </ol>
     </div>
 

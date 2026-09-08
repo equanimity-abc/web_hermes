@@ -1076,6 +1076,14 @@
   justify-self: center;
 }
 
+.drama-director-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 4px 4px;
+}
+
 /* —— 剧本页：左编辑 + 右对话 —— */
 .drama-script-stage {
   flex: 1;
