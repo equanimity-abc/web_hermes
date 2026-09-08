@@ -155,11 +155,31 @@ def ensure_shared_bgm_catalog() -> dict[str, Any]:
     return catalog
 
 
+def ensure_shared_bgm_catalog_with_freesound() -> dict[str, Any]:
+    """Ensure catalog; prefer Mixkit free music, then Freesound when Key is set."""
+    catalog = ensure_shared_bgm_catalog()
+    try:
+        from tools.drama_mixkit_bgm import maybe_autofill_from_mixkit
+
+        maybe_autofill_from_mixkit()
+        catalog = ensure_shared_bgm_catalog()
+    except Exception:
+        pass
+    try:
+        from tools.drama_freesound_bgm import maybe_autofill_from_freesound
+
+        maybe_autofill_from_freesound()
+        catalog = ensure_shared_bgm_catalog()
+    except Exception:
+        pass
+    return catalog
+
+
 def load_shared_catalog() -> list[dict[str, Any]]:
     path = resolve_safe(SHARED_CATALOG_REL)
     if not path.is_file():
         try:
-            return list(ensure_shared_bgm_catalog().get("tracks") or [])
+            return list(ensure_shared_bgm_catalog_with_freesound().get("tracks") or [])
         except Exception:
             return []
     try:
@@ -196,6 +216,26 @@ def load_shared_catalog() -> list[dict[str, Any]]:
                 "preview_url": f"/api/workspace/file?path={quote(path_rel, safe='/')}",
             }
             out.append(row)
+    # If still all lavfi placeholders, try Mixkit (no key) then Freesound (needs key).
+    if out and all(t.get("procedural") for t in out):
+        try:
+            from tools.drama_mixkit_bgm import maybe_autofill_from_mixkit
+
+            filled = maybe_autofill_from_mixkit()
+            if filled and int(filled.get("real_tracks") or 0) > 0:
+                refreshed = ensure_shared_bgm_catalog().get("tracks") or []
+                return [t for t in refreshed if isinstance(t, dict)]
+        except Exception:
+            pass
+        try:
+            from tools.drama_freesound_bgm import maybe_autofill_from_freesound
+
+            filled = maybe_autofill_from_freesound()
+            if filled and int(filled.get("real_tracks") or 0) > 0:
+                refreshed = ensure_shared_bgm_catalog().get("tracks") or []
+                return [t for t in refreshed if isinstance(t, dict)]
+        except Exception:
+            pass
     return out
 
 

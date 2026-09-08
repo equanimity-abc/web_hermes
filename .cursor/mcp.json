@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "freesound": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/johnkimdw/freesound-mcp-server",
+        "freesound-mcp"
+      ],
+      "env": {
+        "FREESOUND_API_KEY": ""
+      }
+    }
+  }
+}

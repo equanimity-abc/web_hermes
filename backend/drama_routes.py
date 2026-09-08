@@ -772,6 +772,99 @@ async def drama_upload_episode_bgm(
         raise _http(e) from e
 
 
+class FreesoundFetchBody(BaseModel):
+    force: bool = False
+    catalog_id: str = ""
+
+
+@router.post("/bgm/freesound/fetch")
+def drama_fetch_freesound_bgm(body: FreesoundFetchBody | None = None):
+    """Pull CC0/CC-BY previews from Freesound into shared catalog (needs FREESOUND_API_KEY)."""
+    try:
+        from tools.drama_freesound_bgm import fetch_all_catalog_bgm, fetch_one_mood, freesound_api_key
+
+        if not freesound_api_key():
+            raise DramaBadRequest(
+                "缺少 FREESOUND_API_KEY。请到 https://freesound.org/apiv2/apply/ 申请后写入 backend/.env"
+            )
+        force = bool(body.force) if body else False
+        cid = str(body.catalog_id or "").strip() if body else ""
+        if cid:
+            return fetch_one_mood(cid, force=force)
+        return fetch_all_catalog_bgm(force=force)
+    except DramaBadRequest:
+        raise
+    except (ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+class MixkitFetchBody(BaseModel):
+    force: bool = False
+    catalog_id: str = ""
+
+
+class MixkitSearchBody(BaseModel):
+    query: str = Field(min_length=1, max_length=120)
+    limit: int = Field(default=12, ge=1, le=40)
+
+
+class MixkitDownloadBody(BaseModel):
+    mixkit_id: int = Field(ge=1)
+    catalog_id: str = ""
+    filename: str = ""
+
+
+@router.post("/bgm/mixkit/fetch")
+def drama_fetch_mixkit_bgm(body: MixkitFetchBody | None = None):
+    """Pull Mixkit free stock music into shared catalog (no API key)."""
+    try:
+        from tools.drama_mixkit_bgm import fetch_all_catalog_bgm, fetch_one_mood
+
+        force = bool(body.force) if body else False
+        cid = str(body.catalog_id or "").strip() if body else ""
+        if cid:
+            return fetch_one_mood(cid, force=force)
+        return fetch_all_catalog_bgm(force=force)
+    except (ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.get("/bgm/mixkit/search")
+def drama_search_mixkit_bgm(q: str = "", limit: int = 12):
+    """Realtime Mixkit search via mood/tag pages."""
+    try:
+        from tools.drama_mixkit_bgm import search_mixkit
+
+        return search_mixkit(q, limit=limit)
+    except (ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/bgm/mixkit/search")
+def drama_search_mixkit_bgm_post(body: MixkitSearchBody):
+    try:
+        from tools.drama_mixkit_bgm import search_mixkit
+
+        return search_mixkit(body.query, limit=body.limit)
+    except (ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
+@router.post("/bgm/mixkit/download")
+def drama_download_mixkit_bgm(body: MixkitDownloadBody):
+    """Download one Mixkit id into shared catalog or named file."""
+    try:
+        from tools.drama_mixkit_bgm import download_by_id
+
+        return download_by_id(
+            int(body.mixkit_id),
+            catalog_id=str(body.catalog_id or "").strip(),
+            filename=str(body.filename or "").strip(),
+        )
+    except (ValueError, RuntimeError) as e:
+        raise _http(e) from e
+
+
 @router.post("/projects/{slug}/episodes/{episode}/mix")
 async def drama_mix_episode(slug: str, episode: int, body: MixApplyBody | None = None):
     try:

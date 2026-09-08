@@ -118,5 +118,8 @@ class Config:
     TTS_API_URL: str = os.getenv("TTS_API_URL", "")
     TTS_API_KEY: str = os.getenv("TTS_API_KEY", "")
 
+    # Freesound.org — free CC0/CC-BY BGM for shared catalog (same API as Freesound MCP)
+    FREESOUND_API_KEY: str = os.getenv("FREESOUND_API_KEY", "")
+
 
 config = Config()

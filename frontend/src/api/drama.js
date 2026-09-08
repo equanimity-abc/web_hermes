@@ -310,6 +310,40 @@ export function getMix(slug, episode) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`)
 }
 
+/** Realtime Mixkit search (mood/tag pages). */
+export function searchMixkitBgm(query, limit = 12) {
+  const q = encodeURIComponent(String(query || '').trim())
+  return request(`/api/drama/bgm/mixkit/search?q=${q}&limit=${Number(limit) || 12}`)
+}
+
+/** Download one Mixkit track by id into shared catalog. */
+export function downloadMixkitBgm({ mixkitId, catalogId = '', filename = '' } = {}) {
+  return request(`/api/drama/bgm/mixkit/download`, {
+    method: 'POST',
+    body: JSON.stringify({
+      mixkit_id: Number(mixkitId),
+      catalog_id: catalogId || '',
+      filename: filename || '',
+    }),
+  })
+}
+
+/** Pull free Mixkit stock music into shared catalog (no API key). */
+export function fetchMixkitBgm({ force = false, catalogId = '' } = {}) {
+  return request(`/api/drama/bgm/mixkit/fetch`, {
+    method: 'POST',
+    body: JSON.stringify({ force: Boolean(force), catalog_id: catalogId || '' }),
+  })
+}
+
+/** Pull free CC0/CC-BY BGM from Freesound into shared catalog (needs FREESOUND_API_KEY). */
+export function fetchFreesoundBgm({ force = false, catalogId = '' } = {}) {
+  return request(`/api/drama/bgm/freesound/fetch`, {
+    method: 'POST',
+    body: JSON.stringify({ force: Boolean(force), catalog_id: catalogId || '' }),
+  })
+}
+
 export function patchMix(slug, episode, body) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/mix`, {
     method: 'PATCH',
