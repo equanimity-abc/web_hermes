@@ -9,7 +9,23 @@ from __future__ import annotations
 
 from typing import Any
 
-# Providers that are allowed without commercial keys even in studio mode.
+# Motion placeholders that do not need commercial keys (still gated elsewhere).
+_MOTION_NO_KEY = frozenset({"l0", "none", "off"})
+
+# Studio must never treat these as acceptable image backends.
+_STUDIO_FORBIDDEN_IMAGE = frozenset(
+    {
+        "flux",
+        "pollinations",
+        "mock",
+        "mock_ai",
+        "none",
+        "off",
+        "",
+    }
+)
+
+# Legacy: providers that may run without keys outside studio image routes.
 _FREE_OK = frozenset(
     {
         "l0",
@@ -26,6 +42,7 @@ _FREE_OK = frozenset(
 
 def assert_studio_providers(slug: str) -> dict[str, Any]:
     """Fail loud if project models require keys that are missing/unusable."""
+    from tools.drama_hq_contract import HQ_FORBIDDEN_IMAGE
     from tools.drama_models import load_models, provider_usable
 
     models = load_models(slug)
@@ -42,7 +59,7 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
         if not isinstance(route, dict):
             continue
         pid = str(route.get("provider") or "").strip().lower()
-        if pid and pid not in ("l0", "none", "off"):
+        if pid and pid not in _MOTION_NO_KEY:
             needed.append((f"motion.{kind}", pid))
 
     tts = models.get("tts") if isinstance(models.get("tts"), dict) else {}
@@ -58,7 +75,20 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
     missing: list[str] = []
     checked: set[str] = set()
     for where, pid in needed:
-        if pid in _FREE_OK or pid in checked:
+        if where.startswith("image.") and (
+            pid in _STUDIO_FORBIDDEN_IMAGE or pid in HQ_FORBIDDEN_IMAGE
+        ):
+            missing.append(f"{pid}（{where}：专业档禁止免费/空出图）")
+            continue
+        if pid in _MOTION_NO_KEY or pid in checked:
+            continue
+        # Image/TTS/lip: never skip via _FREE_OK under studio assert
+        if where.startswith("image."):
+            checked.add(pid)
+            if not provider_usable(models, pid):
+                missing.append(f"{pid}（用于 {where}）")
+            continue
+        if pid in _FREE_OK:
             continue
         checked.add(pid)
         if not provider_usable(models, pid):

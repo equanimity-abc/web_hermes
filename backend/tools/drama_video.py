@@ -888,9 +888,18 @@ def _image_provider_chain(
     shot: dict[str, Any] | None,
     *,
     refs: tuple[str, ...] = (),
+    slug: str = "",
 ) -> list[str]:
-    """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks."""
+    """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks.
+
+    Studio / HQ: single commercial provider only — no free cascade.
+    """
+    from tools.drama_hq_contract import hq_image_provider_chain, is_hq_no_fallback
     from tools.providers import registry
+
+    sid = str(slug or (shot or {}).get("_slug") or "").strip()
+    if sid and is_hq_no_fallback(sid):
+        return hq_image_provider_chain(primary, shot)
 
     skip = frozenset({"", "none", "off", "mock"})
     chain: list[str] = []
@@ -963,7 +972,7 @@ def _generate_scene_image(
 
     gen_w = int(width or ZOOM_W)
     gen_h = int(height or ZOOM_H)
-    for pid in _image_provider_chain(provider, shot, refs=refs):
+    for pid in _image_provider_chain(provider, shot, refs=refs, slug=slug):
         ok = registry.dispatch(
             "image",
             pid,
@@ -1236,13 +1245,22 @@ def generate_shot_candidates(
     n = int(shot.get("n") or 0)
 
     # R4: feed locked character reference sheets into the image provider.
+    from tools.drama_hq_contract import assert_hq_image_ready, is_hq_no_fallback
     from tools.drama_qc import compose_shot_image_refs, locked_env_refs_for_shot
+
+    hq = is_hq_no_fallback(slug)
+    shot["_slug"] = slug
+    if hq:
+        assert_hq_image_ready(slug, shot)
 
     refs = tuple(compose_shot_image_refs(slug, shot, max_refs=3))
     shot["_env_ref_count"] = len(locked_env_refs_for_shot(slug, shot)[:1])
     # If first ref is env plate/detail, count at least 1 for Seedream prompt split
     if shot["_env_ref_count"] <= 0 and refs and str(shot.get("location_id") or "").strip():
         shot["_env_ref_count"] = 1
+    if hq and refs:
+        # Face-required shots already asserted; ensure refs actually reach the adapter.
+        shot["_hq_image_refs"] = list(refs)
 
     from tools.drama_retry import retry_call
 
@@ -1289,6 +1307,10 @@ def generate_shot_candidates(
             )
             source = "ai" if ai_ok else "fallback"
         if not ai_ok:
+            if hq:
+                raise RuntimeError(
+                    f"第{n}镜专业档出图失败（provider 未产出可用图），禁止静图/免费链兜底"
+                )
             _draw_fallback_scene(shot, dest, cast, seed=seed)
             source = "fallback"
         return {"id": cid, "path": rel, "source": source, "seed": seed, "ai": ai_ok or source == "layered"}

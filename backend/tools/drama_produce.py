@@ -685,6 +685,10 @@ def _hq_process_one_shot(
     flicker_only = bool(shot.pop("_flicker_only_repair", None))
 
     if not flicker_only:
+        from tools.drama_hq_contract import assert_hq_image_ready
+
+        assert_hq_image_ready(slug, shot)
+
         def _run_scene_and_qc(*, retry: int) -> tuple[dict[str, Any], dict[str, Any]]:
             if cancel_check:
                 cancel_check()
