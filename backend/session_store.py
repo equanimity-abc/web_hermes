@@ -116,6 +116,51 @@ class SessionStore:
         tmp.replace(path)
         self._cache[sid] = session
 
+    def update_tool_result(
+        self,
+        session_id: str,
+        tool_call_id: str,
+        content: str,
+        *,
+        assistant_content: str | None = None,
+    ) -> dict[str, Any]:
+        """把异步任务终态写回 session 里对应的 tool 消息（可选更新其后的 assistant 文案）。"""
+        session = self.get(session_id)
+        if not session:
+            raise KeyError(session_id)
+        tid = str(tool_call_id or "").strip()
+        if not tid:
+            raise ValueError("tool_call_id 不能为空")
+        text = str(content if content is not None else "")
+        messages = list(session.get("messages") or [])
+        tool_idx = -1
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "") != "tool":
+                continue
+            if str(msg.get("tool_call_id") or "") == tid:
+                messages[i] = {**msg, "content": text}
+                tool_idx = i
+                break
+        if tool_idx < 0:
+            raise KeyError(f"tool_call_id not found: {tid}")
+        if assistant_content is not None:
+            # 工具结果后的第一条 assistant 文本（fold 时挂载 toolCalls 的那条）
+            for j in range(tool_idx + 1, len(messages)):
+                m = messages[j]
+                if not isinstance(m, dict):
+                    continue
+                role = str(m.get("role") or "")
+                if role == "assistant" and not (m.get("tool_calls") or []):
+                    messages[j] = {**m, "content": str(assistant_content)}
+                    break
+                if role in ("user", "system"):
+                    break
+        session["messages"] = messages
+        self.save(session)
+        return session
+
     def get(self, session_id: str) -> dict[str, Any] | None:
         if session_id in self._cache:
             return self._cache[session_id]

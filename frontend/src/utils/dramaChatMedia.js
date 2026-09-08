@@ -42,6 +42,56 @@ function sleep(ms, signal) {
   })
 }
 
+function dramaUiSnapshot(message, extra = {}) {
+  const job = { ...(message?.dramaJob || {}), ...extra }
+  return {
+    state: String(job.state || ''),
+    line: String(job.line || ''),
+    pct: job.pct == null || Number.isNaN(Number(job.pct)) ? null : Number(job.pct),
+    current: job.current ?? null,
+    total: job.total ?? null,
+    finished: job.finished ?? null,
+    failed: job.failed ?? null,
+    shot: job.shot ?? null,
+    stage: job.stage || '',
+    error: job.error || '',
+    slug: job.slug || '',
+    episode: job.episode ?? null,
+    kind: job.kind || '',
+    jobId: job.jobId || '',
+    mediaReady: Boolean(job.mediaReady || (message?.media || []).length),
+  }
+}
+
+/**
+ * Write terminal tool.result (+ optional assistant text) back into session JSON.
+ * Fire-and-forget safe: failures must not break the live UI.
+ */
+export async function persistDramaToolTerminal(message, tool, { sessionId } = {}) {
+  const sid = String(sessionId || message?.sessionId || '').trim()
+  const tid = String(tool?.id || '').trim()
+  if (!sid || !tid || !tool) return false
+  try {
+    let payload
+    try {
+      payload = JSON.parse(tool.result || '{}')
+    } catch {
+      payload = { raw: String(tool.result || '') }
+    }
+    payload.ui = dramaUiSnapshot(message)
+    tool.result = JSON.stringify(payload)
+    const { patchSessionToolResult } = await import('@/api/sessions')
+    await patchSessionToolResult(sid, {
+      toolCallId: tid,
+      content: tool.result,
+      assistantContent: message?.content != null ? String(message.content) : null,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Normalize job.progress into a chat-friendly progress object.
  */
@@ -324,6 +374,7 @@ export async function awaitPendingDramaVideos(
       message.content = errText
       lastError = errText
       waited = true
+      await persistDramaToolTerminal(message, tool, { sessionId })
       continue
     }
 
@@ -454,6 +505,7 @@ export async function awaitPendingDramaVideos(
                 onStatus?.(terminalError)
                 message.content = terminalError
                 lastError = terminalError
+                await persistDramaToolTerminal(message, tool, { sessionId })
                 jobId = ''
                 break
               }
@@ -487,6 +539,7 @@ export async function awaitPendingDramaVideos(
               onStatus?.(terminalError)
               message.content = terminalError
               lastError = terminalError
+              await persistDramaToolTerminal(message, tool, { sessionId })
               jobId = ''
               break
             }
@@ -552,8 +605,10 @@ export async function awaitPendingDramaVideos(
             pct: 100,
             line: '成片已就绪',
             error: '',
+            mediaReady: true,
           })
           onStatus?.('')
+          await persistDramaToolTerminal(message, tool, { sessionId })
           break
         }
 
@@ -581,6 +636,7 @@ export async function awaitPendingDramaVideos(
         onStatus?.(timeoutMsg)
         message.content = timeoutMsg
         lastError = timeoutMsg
+        await persistDramaToolTerminal(message, tool, { sessionId })
       }
     } finally {
       if (pollJobId) markDramaJobPolling(pollJobId, false)
@@ -600,12 +656,110 @@ export function findPendingDramaJobIds(message) {
       const data = JSON.parse(tool.result || '')
       if (data?.ok === false) continue
       if (data?.status === 'gone' || data?.status === 'error' || data?.status === 'cancelled') continue
+      if (data?.ui?.state === 'done' || data?.ui?.state === 'error') continue
       if (data?.job_id && !data?.play_url) ids.push(String(data.job_id))
     } catch {
       /* */
     }
   }
   return ids
+}
+
+/**
+ * One-shot hydrate for history: if session still says「未完成」但队列已有终态，写回并展示。
+ * Does not start a long poll loop.
+ */
+export async function hydrateDramaTerminalFromQueue(messages, { sessionId } = {}) {
+  let any = false
+  for (const message of messages || []) {
+    if (message?.role !== 'assistant') continue
+    for (const tool of message.toolCalls || []) {
+      if (String(tool.name || '') !== 'tiktok_drama') continue
+      let data
+      try {
+        data = JSON.parse(tool.result || '')
+      } catch {
+        continue
+      }
+      if (!data?.job_id) continue
+      if (data.play_url || data.ui?.state === 'done' || data.ui?.state === 'error') continue
+      if (data.ok === false && data.error && data.ui) continue
+      try {
+        const { getJob } = await import('@/api/drama')
+        const job = await getJob(String(data.job_id))
+        const status = String(job?.status || '')
+        if (!TERMINAL_JOB.has(status)) continue
+        const progress = formatDramaJobProgress(job)
+        const ep = Number(job?.episode || data.episode || 1) || 1
+        if (status === 'done') {
+          const inner = job.result || {}
+          const playUrl = inner.play_url || job.play_url || ''
+          const slug = String(inner.slug || job.slug || data.slug || '')
+          tool.status = 'done'
+          tool.result = JSON.stringify({
+            ...data,
+            ok: true,
+            status: 'done',
+            slug,
+            episode: ep,
+            play_url: playUrl || data.play_url || '',
+            progress: job.progress || {},
+          })
+          if (playUrl && isVideoUrl(playUrl)) {
+            attachDramaMedia(message, {
+              type: 'video',
+              url: playUrl,
+              slug,
+              episode: ep,
+              title: dramaVideoTitle(data.action || 'produce_episode', slug, ep),
+              action: data.action || 'produce_episode',
+            })
+          }
+          setMessageDramaJob(message, {
+            state: 'done',
+            jobId: String(data.job_id),
+            slug,
+            episode: ep,
+            pct: 100,
+            line: '成片已就绪',
+            mediaReady: Boolean(playUrl),
+            error: '',
+          })
+          if (!String(message.content || '').trim()) message.content = '成片已就绪'
+        } else {
+          const line = humanizeDramaJobError(job.error || `任务${status}`, {
+            episode: ep,
+            progress,
+            slug: job?.slug || data.slug || '',
+          })
+          tool.status = 'error'
+          tool.result = JSON.stringify({
+            ...data,
+            ok: false,
+            status,
+            error: job.error || line,
+            progress: job.progress || {},
+          })
+          setMessageDramaJob(message, {
+            state: 'error',
+            jobId: String(data.job_id),
+            slug: job?.slug || data.slug || '',
+            episode: ep,
+            line,
+            error: job.error || '',
+            ...progress,
+          })
+          message.content = line
+        }
+        await persistDramaToolTerminal(message, tool, { sessionId })
+        any = true
+      } catch {
+        /* queue gone / network — keep folded idle prompt */
+      }
+    }
+    enrichMessageWithDramaMedia(message)
+  }
+  return any
 }
 
 export async function resumeDramaProgressForMessages(messages, opts = {}) {

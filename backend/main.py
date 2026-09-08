@@ -240,6 +240,33 @@ async def delete_session(session_id: str):
     return {"status": "deleted"}
 
 
+class ToolResultPatch(BaseModel):
+    tool_call_id: str
+    content: str
+    assistant_content: str | None = None
+
+
+@app.patch("/api/sessions/{session_id}/tool-results")
+async def patch_session_tool_result(session_id: str, body: ToolResultPatch):
+    """异步成片终态写回会话，重新打开历史时不再空白/未完成。"""
+    try:
+        session = store.update_tool_result(
+            session_id,
+            body.tool_call_id,
+            body.content,
+            assistant_content=body.assistant_content,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "session_id": session["id"],
+        "updated_at": session.get("updated_at"),
+        "ok": True,
+    }
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
     """非流式：走完整 Agent loop（可含工具）。"""

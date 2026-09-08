@@ -1387,7 +1387,7 @@ def generate_episode_script(
         parse_series_spec,
         shot_range_for_seconds,
     )
-    from tools.drama_script import draft_text_sync
+    from tools.drama_script import draft_text_sync, scrub_script_markdown
     from tools.drama_video import parse_episode_markdown
 
     series = project.get("series") if isinstance(project.get("series"), dict) else {}
@@ -1449,7 +1449,7 @@ def generate_episode_script(
         raise DramaBadRequest("剧本生成失败（模型无返回），请重试")
 
     cleaned = apply_target_duration_meta(
-        extract_single_episode_markdown(str(draft).strip(), n),
+        extract_single_episode_markdown(scrub_script_markdown(str(draft).strip()), n),
         ep_sec,
     )
 
@@ -1466,11 +1466,133 @@ def generate_episode_script(
         )
         if str(draft2 or "").strip():
             cleaned = apply_target_duration_meta(
-                extract_single_episode_markdown(str(draft2).strip(), n),
+                extract_single_episode_markdown(scrub_script_markdown(str(draft2).strip()), n),
                 ep_sec,
             )
 
+    # Persist series plan so workbench can show EP2/EP3 even before they are opened.
+    project = load_project(slug)
+    project["series"] = {
+        "episode_count": ep_total,
+        "seconds_per_episode": ep_sec,
+        "shot_min": shot_lo,
+        "shot_max": shot_hi,
+        "count_explicit": bool(spec.get("count_explicit")),
+        "seconds_explicit": bool(spec.get("seconds_explicit")),
+        "source": spec.get("source") or "premise",
+    }
+    if text and not str(project.get("logline") or "").strip():
+        project["logline"] = text
+    save_project(slug, project)
+
     return save_script(slug, n, cleaned)
+
+
+def generate_scripts_from_premise(
+    slug: str,
+    premise: str,
+    *,
+    episode: int = 1,
+) -> dict[str, Any]:
+    """Studio chat entry: one premise → planned episode script(s).
+
+    If the premise clearly asks for N>1 episodes (or the project series plan does and
+    some episodes are still missing), write those scripts. Returns the focus episode
+    payload plus series metadata.
+    """
+    slug = parse_slug(slug)
+    focus = parse_episode(episode)
+    text = str(premise or "").strip()
+    if not text:
+        raise DramaBadRequest("请先给一句故事梗概")
+    project = load_project(slug)
+
+    from tools.drama_produce import _parse_episode_count_from_text, parse_series_spec
+
+    series = project.get("series") if isinstance(project.get("series"), dict) else {}
+    from_text = _parse_episode_count_from_text(text)
+    if from_text and from_text > 1:
+        spec = parse_series_spec(text)
+    else:
+        spec = parse_series_spec(
+            text,
+            episode_count=series.get("episode_count"),
+            seconds=series.get("seconds_per_episode"),
+        )
+
+    ep_total = int(spec["episode_count"])
+    ep_sec = int(spec["seconds_per_episode"])
+    multi = bool(spec.get("count_explicit") and ep_total > 1)
+
+    existing = {
+        int(e.get("n") or 0)
+        for e in (project.get("episodes") or [])
+        if int(e.get("n") or 0) >= 1
+    }
+
+    if multi:
+        if from_text and from_text > 1:
+            targets = list(range(1, ep_total + 1))
+        else:
+            missing = [n for n in range(1, ep_total + 1) if n not in existing]
+            targets = sorted(set(missing + [focus]))
+    else:
+        targets = [focus]
+
+    generated: list[dict[str, Any]] = []
+    focus_payload: dict[str, Any] | None = None
+    for n in targets:
+        info = generate_episode_script(
+            slug,
+            n,
+            text,
+            target_seconds=ep_sec,
+            episode_count=ep_total,
+        )
+        generated.append(
+            {
+                "episode": n,
+                "title": info.get("title"),
+                "count": info.get("count"),
+                "seconds": info.get("seconds"),
+            }
+        )
+        if n == focus:
+            focus_payload = info
+
+    if focus_payload is None:
+        focus_payload = next(
+            (
+                generate_episode_script(
+                    slug,
+                    n,
+                    text,
+                    target_seconds=ep_sec,
+                    episode_count=ep_total,
+                )
+                for n in targets
+            ),
+            None,
+        )
+        if focus_payload is None:
+            focus_payload = generate_episode_script(
+                slug,
+                focus,
+                text,
+                target_seconds=ep_sec,
+                episode_count=ep_total,
+            )
+
+    focus_payload["series"] = {
+        "episode_count": ep_total,
+        "seconds_per_episode": ep_sec,
+        "count_explicit": bool(spec.get("count_explicit")),
+        "shot_min": spec.get("shot_min"),
+        "shot_max": spec.get("shot_max"),
+    }
+    focus_payload["generated_episodes"] = [g["episode"] for g in generated]
+    focus_payload["scripts"] = generated
+    return focus_payload
 
 
 def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:

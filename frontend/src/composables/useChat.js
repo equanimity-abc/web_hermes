@@ -415,9 +415,16 @@ export function useChat(deps) {
   }
 
   async function resumeAfterMessagesLoad(sessionId) {
-    // 仅缓存当前消息；历史任务不再自动轮询（改由 refreshDramaJob 手动查询）
+    // 历史任务：若会话未写回终态但队列已结束，静默补一次终态（不进入长时间轮询）
     const list = messages.value || []
-    stashSessionMessages(sessionId || deps.getSessionId?.() || '', list)
+    const sid = sessionId || deps.getSessionId?.() || ''
+    try {
+      const { hydrateDramaTerminalFromQueue } = await import('@/utils/dramaChatMedia')
+      await hydrateDramaTerminalFromQueue(list, { sessionId: sid })
+    } catch {
+      /* ignore */
+    }
+    stashSessionMessages(sid, list)
     return false
   }
 

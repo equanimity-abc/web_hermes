@@ -27,6 +27,7 @@ from tools.drama_studio import (
     choose_character_candidate,
     delete_character_candidate,
     generate_episode_script,
+    generate_scripts_from_premise,
     lock_character_ref,
     patch_episode,
     patch_project,
@@ -641,10 +642,11 @@ async def drama_save_script(slug: str, episode: int, body: ScriptBody):
 
 @router.post("/projects/{slug}/episodes/{episode}/script/generate")
 def drama_generate_script(slug: str, episode: int, body: ScriptGenerateBody):
-    # 注意：必须是 def（同步），否则 generate_episode_script → draft_text_sync
+    # 注意：必须是 def（同步），否则 generate_* → draft_text_sync
     # 内部的 asyncio.run() 会在事件循环里抛 RuntimeError（500）。
+    # 梗概若写明共 N 集，会一次生成 EP01…EP0N，再返回当前焦点集。
     try:
-        return generate_episode_script(slug, episode, body.premise)
+        return generate_scripts_from_premise(slug, body.premise, episode=episode)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e
 

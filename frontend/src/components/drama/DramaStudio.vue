@@ -901,6 +901,15 @@ function onEpisodeChange(event) {
   }
 }
 
+const seriesEpisodeOptions = computed(() => {
+  const n = Number(props.project?.project?.series?.episode_count || 0)
+  if (!Number.isFinite(n) || n < 2) return []
+  return Array.from({ length: Math.min(20, Math.floor(n)) }, (_, i) => ({
+    n: i + 1,
+    title: `第${i + 1}集`,
+  }))
+})
+
 // 预加载候选缩略图
 watch(
   () => props.shots,
@@ -1508,11 +1517,15 @@ const statusBar = computed(() => {
         <div class="drama-top-title">
           <h1>{{ project?.project?.title || '漫剧工作台' }}</h1>
         </div>
-        <div v-if="episodes.length > 1" class="drama-ep-select">
+        <div v-if="episodes.length > 1 || Number(project?.project?.series?.episode_count || 0) > 1" class="drama-ep-select">
           <label class="drama-ep-label">
             <span class="drama-ep-label-text">集数</span>
             <select class="drama-ep-dropdown" :value="episodeN" @change="onEpisodeChange">
-              <option v-for="ep in episodes" :key="ep.n" :value="ep.n">
+              <option
+                v-for="ep in (episodes.length ? episodes : seriesEpisodeOptions)"
+                :key="ep.n"
+                :value="ep.n"
+              >
                 第{{ ep.n }}集 · EP{{ String(ep.n).padStart(2, '0') }}
               </option>
             </select>

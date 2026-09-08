@@ -137,7 +137,7 @@ def _parse_episode_count_from_text(raw: str) -> int | None:
 
     patterns = [
         r"(?:共|一共|总计|合计)\s*(\d+)\s*集",
-        r"(?:做|拍|制作|产出|写成|分成|规划)\s*(\d+)\s*集",
+        r"(?:做|拍|制作|产出|写成|分成|规划|要|需要|想要|改成|扩成|做成)\s*(\d+)\s*集",
         r"(\d+)\s*集\s*[×xX*]",
         r"(\d+)\s*集\s*[，,、]?\s*(?:每集|\d+\s*秒)",
         r"(\d+)\s*episodes?\b",
@@ -150,9 +150,10 @@ def _parse_episode_count_from_text(raw: str) -> int | None:
             except ValueError:
                 continue
 
-    # 「三集」「两集」等（需有共/一共/做… 或紧跟每集/秒，避免误伤）
+    # 「三集」「两集」等（共/要/做… 或紧跟每集/秒）
     m = re.search(
-        r"(?:共|一共|总计|合计|做|拍|制作|产出|写成|分成|规划)\s*([一二两三四五六七八九十])\s*集",
+        r"(?:共|一共|总计|合计|做|拍|制作|产出|写成|分成|规划|要|需要|想要|改成|扩成|做成)\s*"
+        r"([一二两三四五六七八九十])\s*集",
         raw,
     )
     if m:
@@ -174,6 +175,17 @@ def _parse_episode_count_from_text(raw: str) -> int | None:
             return int(m.group(1))
         except ValueError:
             continue
+
+    # Bare 「三集」 only when not 「第三集 / 这一集 / 每一集」
+    for m in re.finditer(r"([一二两三四五六七八九十])\s*集", raw):
+        prefix = raw[max(0, m.start() - 2) : m.start()]
+        if prefix.endswith(("第", "这", "那", "每", "本", "上", "下", "该")):
+            continue
+        if re.search(r"(?:第|这|那|每|本|上|下|该)\s*$", prefix):
+            continue
+        val = _CN_EP_NUM.get(m.group(1))
+        if val is not None:
+            return val
     return None
 
 

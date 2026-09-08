@@ -29,6 +29,14 @@ def test_parse_series_spec_from_chinese_premise():
     assert spec["shot_min"] <= spec["shot_max"]
 
 
+def test_parse_series_spec_wants_three_episodes_phrases():
+    assert parse_series_spec("我要三集嫦娥奔月漫剧")["episode_count"] == 3
+    assert parse_series_spec("做三集，每集20秒")["episode_count"] == 3
+    assert parse_series_spec("三集每集20秒的AI漫剧")["episode_count"] == 3
+    assert parse_series_spec("帮我改这一集旁白")["episode_count"] == 1
+    assert parse_series_spec("帮我改这一集旁白")["count_explicit"] is False
+
+
 def test_parse_series_spec_defaults_one_episode_when_unspecified():
     spec = parse_series_spec("帮我做一部重生复仇漫剧")
     assert spec["episode_count"] == 1

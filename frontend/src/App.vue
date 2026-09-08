@@ -205,6 +205,7 @@ const {
   stashCurrent,
   refreshDramaJob,
   resumeDramaJob,
+  resumeAfterMessagesLoad,
 } = useChat({
   getSessionId: () => currentSessionId.value,
   setSessionId: (id) => {
@@ -287,6 +288,11 @@ async function switchSession(sessionId) {
   if (cached && cached.length) {
     setMessages(cached)
     stashCurrent(sessionId)
+    try {
+      await resumeAfterMessagesLoad(sessionId)
+    } catch {
+      /* ignore */
+    }
     scrollChatToBottom()
     return
   }
@@ -298,6 +304,11 @@ async function switchSession(sessionId) {
     setMessages(list)
     // Cache the live array reference so later switches keep dramaJob updates
     stashCurrent(sessionId)
+    try {
+      await resumeAfterMessagesLoad(sessionId)
+    } catch {
+      /* ignore */
+    }
     scrollChatToBottom()
   } catch (e) {
     console.error('加载会话失败:', e)

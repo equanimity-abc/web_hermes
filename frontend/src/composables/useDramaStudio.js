@@ -1135,7 +1135,7 @@ export function useDramaStudio() {
       return
     }
     // init 立项后可能还没有任何分集（episodeN == null），此时默认落到 EP01。
-    // 后端 save_script 会自动把该集写进 project.json，无需预建分集。
+    // 后端若识别到「共N集」会一次生成全部集剧本。
     const ep = episodeN.value || 1
     saving.value = true
     error.value = ''
@@ -1155,7 +1155,15 @@ export function useDramaStudio() {
       const keep = (data.shots || []).some((s) => s.n === selectedN.value)
       selectShot(keep ? selectedN.value : data.shots?.[0]?.n || null)
       const shotCount = (data.shots || []).length
-      notice.value = shotCount ? `已生成剧本，共 ${shotCount} 镜` : '剧本已生成'
+      const genEps = Array.isArray(data.generated_episodes) ? data.generated_episodes : []
+      const seriesN = Number(data.series?.episode_count || project.value?.project?.series?.episode_count || 0)
+      const epCount = genEps.length || seriesN || 1
+      notice.value =
+        epCount > 1
+          ? `已生成 ${epCount} 集剧本（当前第 ${data.episode || ep} 集${shotCount ? `，${shotCount} 镜` : ''}）`
+          : shotCount
+            ? `已生成剧本，共 ${shotCount} 镜`
+            : '剧本已生成'
       scriptChatProgress.value = {
         status: 'done',
         message: notice.value,
@@ -1220,9 +1228,15 @@ export function useDramaStudio() {
           return null
         }
         const shotCount = (data.shots || []).length
-        const reply = shotCount
-          ? `已根据你的描述生成剧本，共 ${shotCount} 镜。可在左侧微调或继续对话修改。`
-          : '已根据你的描述生成剧本。可在左侧微调或继续对话修改。'
+        const genEps = Array.isArray(data.generated_episodes) ? data.generated_episodes : []
+        const seriesN = Number(data.series?.episode_count || 0)
+        const epCount = genEps.length || seriesN || 1
+        const reply =
+          epCount > 1
+            ? `已按你的描述生成 ${epCount} 集剧本（当前第 ${data.episode || 1} 集${shotCount ? `，${shotCount} 镜` : ''}）。可在顶部切换集数，或继续对话修改。`
+            : shotCount
+              ? `已根据你的描述生成剧本，共 ${shotCount} 镜。可在左侧微调或继续对话修改。`
+              : '已根据你的描述生成剧本。可在左侧微调或继续对话修改。'
         pushScriptChatMessage('assistant', reply)
         return data
       }
