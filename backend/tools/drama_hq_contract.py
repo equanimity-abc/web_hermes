@@ -161,3 +161,117 @@ def assert_hq_i2v_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
             "当前无可用 Key；禁止 Ken Burns/mock 顶替。"
         )
     return {"ok": True, "kind": kind, "providers": usable}
+
+
+# Commercial TTS only — edge-tts is never HQ.
+HQ_TTS_OK = frozenset(
+    {
+        "seed-audio",
+        "ark",
+        "doubao-audio",
+        "cosyvoice",
+        "dashscope-tts",
+        "http",
+        "api",
+        "volcano",
+        "azure",
+        "ms",
+    }
+)
+
+HQ_TTS_FORBIDDEN = frozenset({"edge-tts", "edge", "mock", "none", "off", ""})
+
+HQ_LIP_OK = frozenset(
+    {
+        "pixverse",
+        "pixverse-lipsync",
+        "latentsync",
+        "latent-sync",
+        "replicate-lip",
+        "musetalk",
+        "wav2lip",
+        "http",
+        "api",
+    }
+)
+
+
+def assert_hq_tts_ready(slug: str, shot: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fail loud when studio TTS is missing or routed to edge-tts."""
+    from tools.drama_models import load_models, models_with_overrides, provider_usable
+
+    models = models_with_overrides(slug, shot=shot) if shot else load_models(slug)
+    tts = models.get("tts") if isinstance(models.get("tts"), dict) else {}
+    pid = str(tts.get("provider") or "").strip().lower()
+    if pid in HQ_TTS_FORBIDDEN or pid not in HQ_TTS_OK:
+        raise ValueError(
+            f"专业档 TTS 必须为商用引擎（当前 provider={pid or '空'}），禁止 edge-tts"
+        )
+    if not provider_usable(models, pid):
+        raise ValueError(
+            f"专业档 TTS provider 未就绪：{pid}（缺少 ARK/DASHSCOPE/TTS_API_*），禁止降级 edge-tts"
+        )
+    return {"ok": True, "provider": pid}
+
+
+def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
+    """Fail loud before lip: real provider + real motion base; multi-speaker → split shots."""
+    from tools.drama_lip import lip_eligible, lip_provider_cascade
+    from tools.drama_models import models_with_overrides
+    from tools.workspace import resolve_safe
+
+    models = models_with_overrides(slug, shot=shot)
+    gate = lip_eligible(shot, models=models)
+    if not gate.get("ok"):
+        return {"ok": True, "skipped": gate.get("reason") or "not_eligible"}
+
+    # Multi-speaker: HQ v1 requires split shots (no color-heuristic wrong-lock).
+    track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else {}
+    turns = list(track.get("turns") or [])
+    speakers = {
+        str(t.get("speaker") or t.get("character_id") or t.get("name") or "").strip()
+        for t in turns
+        if isinstance(t, dict)
+    }
+    speakers.discard("")
+    if len(speakers) >= 2:
+        raise ValueError(
+            "专业档口型暂不支持多说话人同镜（避免锁错脸）。"
+            "请拆成单人对话镜后再产片。"
+        )
+
+    lip_cfg = models.get("lip") if isinstance(models.get("lip"), dict) else {}
+    wanted = str(lip_cfg.get("provider") or "").strip().lower()
+    if wanted in ("mock", "none", "off", "l0", "fail"):
+        raise ValueError("专业档口型禁止 mock/关闭路由，请配置 PixVerse/LatentSync/LIP_API_URL")
+    cascade = lip_provider_cascade(wanted or None, slug=slug)
+    if not cascade:
+        raise ValueError(
+            "专业档无可用口型模型：请配置 DASHSCOPE_MAAS_BASE_URL+DASHSCOPE_API_KEY（PixVerse）"
+            " 或 REPLICATE_API_TOKEN（LatentSync）或 LIP_API_URL"
+        )
+    head = cascade[0]
+    if head not in HQ_LIP_OK:
+        raise ValueError(f"专业档口型 provider 无效：{head}")
+
+    assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
+    motion_ok = False
+    for key in ("motion", "i2v"):
+        rel = str(assets.get(key) or "").strip()
+        if not rel:
+            continue
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
+        if path.is_file() and path.suffix.lower() in (".mp4", ".mov", ".webm") and path.stat().st_size > 1000:
+            motion_ok = True
+            break
+    src = str(shot.get("i2v_source") or "").strip().lower()
+    if not motion_ok or src not in ("ai", "keys"):
+        raise ValueError(
+            "专业档口型必须以真 I2V 运动片为底（i2v_source=ai|keys），"
+            "禁止静图 lip_base / Ken Burns 顶替"
+        )
+
+    return {"ok": True, "provider": head, "cascade": cascade, "i2v_source": src}

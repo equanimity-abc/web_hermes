@@ -1715,8 +1715,17 @@ def _synthesize_shot_voice(
     if not turns:
         return False, "", [], track
 
+    from tools.drama_hq_contract import assert_hq_tts_ready, is_hq_no_fallback
+
+    if is_hq_no_fallback(slug):
+        assert_hq_tts_ready(slug, shot)
+
     tts_cfg = (load_models(slug) or {}).get("tts") or {}
     tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
+    if is_hq_no_fallback(slug) and tts_provider.lower() in ("edge-tts", "edge", "mock", ""):
+        raise RuntimeError(
+            f"第{int(shot.get('n') or 0)}镜专业档 TTS 禁止 edge-tts（provider={tts_provider}）"
+        )
     primary = str(turns[0].get("voice") or voice_id_for_shot(shot, cast, slug=slug))
     timed: list[dict[str, Any]] = []
 

@@ -904,6 +904,7 @@ def produce_episode_hq(
 
     Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
     """
+    from tools.drama_hq_contract import assert_hq_tts_ready
     from tools.drama_parallel import ProgressClock, parallel_map, shot_concurrency
     from tools.drama_profiles import assert_profile_allows_studio_gates, resolve_quality_profile, research_backlog
     from tools.drama_quality import assert_studio_providers
@@ -918,6 +919,7 @@ def produce_episode_hq(
 
     profile = resolve_quality_profile(slug)
     assert_profile_allows_studio_gates(profile)
+    assert_hq_tts_ready(slug)
     tts_token = set_tts_edge_degrade(resolve_tts_degrade_for_slug(slug))
     try:
         return _produce_episode_hq_body(

@@ -22,6 +22,7 @@ from config import config
 from tools.providers.registry import register
 
 # Sources that mean a real lip-synced video was produced (clip encode may burn in).
+# mock is intentionally excluded — studio must never treat waveform overlay as real.
 REAL_LIP_SOURCES = frozenset(
     {
         "latentsync",
@@ -31,7 +32,6 @@ REAL_LIP_SOURCES = frozenset(
         "wav2lip",
         "http",
         "ai",
-        "mock",  # degraded but still a lip layer file
     }
 )
 

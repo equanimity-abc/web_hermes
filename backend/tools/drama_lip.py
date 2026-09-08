@@ -190,8 +190,11 @@ def _provider_ready(pid: str) -> bool:
     return False
 
 
-def lip_provider_cascade(wanted: str | None = None) -> list[str]:
-    """Ordered list of runnable lip providers (best first)."""
+def lip_provider_cascade(wanted: str | None = None, *, slug: str = "") -> list[str]:
+    """Ordered list of runnable lip providers (best first).
+
+    Studio / HQ: never append mock; empty list means Fail Loud upstream.
+    """
     wanted = str(wanted or _provider() or "").strip().lower()
     ordered: list[str] = []
     seen: set[str] = set()
@@ -200,12 +203,12 @@ def lip_provider_cascade(wanted: str | None = None) -> list[str]:
         pid = str(pid or "").strip().lower()
         if not pid or pid in seen:
             return
-        if pid in ("none", "off", "fail", "l0"):
+        if pid in ("none", "off", "fail", "l0", "mock"):
             return
         seen.add(pid)
         ordered.append(pid)
 
-    if wanted:
+    if wanted and wanted != "mock":
         push(wanted)
     if _quality_max():
         for pid in QUALITY_CASCADE:
@@ -215,6 +218,12 @@ def lip_provider_cascade(wanted: str | None = None) -> list[str]:
             push(pid)
 
     ready = [p for p in ordered if _provider_ready(p)]
+    from tools.drama_hq_contract import is_hq_no_fallback
+    from tools.drama_profiles import resolve_quality_profile
+
+    profile = resolve_quality_profile(slug) if slug else resolve_quality_profile()
+    if profile == "studio" or (slug and is_hq_no_fallback(slug)):
+        return ready
     if not ready and _allow_mock():
         ready = ["mock"]
     elif not ready and not _quality_max():
@@ -317,9 +326,26 @@ def ensure_lip_video_base(
     # 1) Video-page output first (ai / keys / fallback Ken Burns — all keep 运镜)
     existing = _motion_path()
     if existing is not None:
+        from tools.drama_hq_contract import is_hq_no_fallback
+
+        if is_hq_no_fallback(slug):
+            src = str(shot.get("i2v_source") or "").strip().lower()
+            if src not in ("ai", "keys"):
+                raise RuntimeError(
+                    f"第{n}镜专业档口型要求真 I2V 底片（i2v_source=ai|keys），"
+                    f"当前 i2v_source={src or '空'}，禁止 Ken Burns/静图对嘴"
+                )
         return existing
 
     # 2) No motion yet → dedicated lip_base from still (does not invent a rival master)
+    from tools.drama_hq_contract import is_hq_no_fallback
+
+    if is_hq_no_fallback(slug):
+        raise RuntimeError(
+            f"第{n}镜专业档口型缺少真运动片，禁止用静图 lip_base 顶替。"
+            "请先完成 Seedance/Kling I2V。"
+        )
+
     if not scene.is_file():
         return None
     rel = lip_base_rel(slug, episode, n)
@@ -443,6 +469,7 @@ def try_generate_lip(
     duration: float,
     provider: str | None = None,
     video_base: Path | None = None,
+    slug: str = "",
 ) -> str:
     """Run lip cascade. `scene` may be still; `video_base` is preferred face video."""
     if not voice.is_file() or voice.stat().st_size < 80:
@@ -454,13 +481,15 @@ def try_generate_lip(
     if not visual.is_file():
         return "fallback"
 
+    from tools.drama_hq_contract import is_hq_no_fallback
     from tools.drama_retry import retry_call
     from tools.providers import registry
 
-    cascade = lip_provider_cascade(provider)
+    hq = bool(slug and is_hq_no_fallback(slug))
+    cascade = lip_provider_cascade(provider, slug=slug)
     last = "fallback"
     for pid in cascade:
-        if pid in ("fail", "none", "off", ""):
+        if pid in ("fail", "none", "off", "mock", ""):
             continue
         if registry.has("lip", pid):
             # Video-first models need mp4; fall through if still-only
@@ -484,17 +513,19 @@ def try_generate_lip(
                 shot,
                 duration,
                 attempts=1,
-                ok=lambda r: r not in ("fallback", "", None),
+                ok=lambda r: r not in ("fallback", "", None, "mock"),
             )
-            if source and source != "fallback":
+            if source and source not in ("fallback", "mock"):
                 return str(source)
             last = "fallback"
             continue
         # Unknown: try http then mock
         if _http_lip(visual, voice, dest, shot, duration):
             return "http"
+    if hq:
+        return last
     if _allow_mock() or not _quality_max():
-        # Mock can use still
+        # Mock can use still (draft only)
         still = scene if scene.is_file() else visual
         if still.is_file() and _mock_lip(still, voice, dest, duration):
             return "mock"
@@ -1915,21 +1946,39 @@ def generate_shot_lip(
         except Exception:
             pass
 
+    from tools.drama_hq_contract import assert_hq_lip_ready, is_hq_no_fallback
+    from tools.providers.lip_providers import lip_source_is_real
+
+    hq = is_hq_no_fallback(slug)
+    if hq and gate.get("ok"):
+        # Motion must exist before lip under studio (I2V runs earlier in HQ).
+        assert_hq_lip_ready(slug, shot)
+
     video_base = ensure_lip_video_base(slug, episode, shot, scene, duration=duration)
+    if hq and gate.get("ok") and (video_base is None or not video_base.is_file()):
+        raise RuntimeError(
+            f"第{int(shot.get('n') or 0)}镜专业档口型缺少真 I2V 底片，禁止静图 lip_base"
+        )
+
     wanted = str(((models or {}).get("lip") or {}).get("provider") or _default_provider()).strip()
     provider = resolve_provider(models, wanted)
     # If resolve fell through to mock but we have real providers, prefer cascade head
     if provider in ("mock", "l0") and _quality_max():
-        cascade = lip_provider_cascade(wanted)
+        cascade = lip_provider_cascade(wanted, slug=slug)
         provider = cascade[0] if cascade else provider
+    if hq and provider in ("mock", "l0", "none", "off", ""):
+        cascade = lip_provider_cascade(wanted, slug=slug)
+        if not cascade:
+            raise RuntimeError(
+                f"第{int(shot.get('n') or 0)}镜专业档无可用真口型 provider，禁止 mock"
+            )
+        provider = cascade[0]
 
     if voice.is_file():
         _ensure_dialogue_track_on_shot(slug, shot, voice)
 
-    # 多人口型改为「整镜全帧」单次对口型：不分割（不裁脸/不逐段拼接）、不羽化
-    # （不 Poisson 合成）。口型模型直接吃整镜视频 + 完整配音，避免 per-turn 拼接与
-    # 合成带来的画面跳动；代价是可能只动一张脸（已记录告警告知导演）。
-    if len(_timed_turns_for_lip(shot, voice_path=voice, slug=slug)) >= 2:
+    # Draft: multi-speaker full-frame warning. Studio: already blocked in assert_hq_lip_ready.
+    if not hq and len(_timed_turns_for_lip(shot, voice_path=voice, slug=slug)) >= 2:
         _lip_warn(shot, "多人口型：采用整镜全帧对口型（未按说话人拆分，可能只动一张脸）")
     try:
         from tools.drama_parallel import acquire_lane
@@ -1944,10 +1993,11 @@ def generate_shot_lip(
         duration=duration,
         provider=provider,
         video_base=video_base,
+        slug=slug,
     )
     shot["lip_source"] = source
     score = None
-    if source != "fallback" and dest.is_file():
+    if lip_source_is_real(source) and dest.is_file():
         score = score_lip(dest, voice if voice.is_file() else None)
         shot["lip_score"] = score
         return {
@@ -1971,11 +2021,15 @@ def generate_shot_lip(
     reason = "口型失败，回退闭口静图"
     if shot.get("lip_error"):
         reason = str(shot.get("lip_error"))
-    elif _quality_max() and not lip_provider_cascade(wanted):
+    elif _quality_max() and not lip_provider_cascade(wanted, slug=slug):
         reason = (
             "未配置可用口型模型：请设置 DASHSCOPE_MAAS_BASE_URL+DASHSCOPE_API_KEY（PixVerse）"
             " 或 REPLICATE_API_TOKEN（LatentSync）"
             " 或 LIP_API_URL（自建）"
+        )
+    if hq:
+        raise RuntimeError(
+            f"第{int(shot.get('n') or 0)}镜专业档口型失败（lip_source={source or '空'}）：{reason}"
         )
     _lip_warn(shot, reason)
     shot["lip_score"] = {"status": "skipped", "reason": "fallback", "method": "proxy"}

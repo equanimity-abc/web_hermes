@@ -47,6 +47,7 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
 
     models = load_models(slug)
     needed: list[tuple[str, str]] = []
+    missing: list[str] = []
 
     for kind, route in (models.get("image") or {}).items():
         if not isinstance(route, dict):
@@ -65,14 +66,18 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
     tts = models.get("tts") if isinstance(models.get("tts"), dict) else {}
     tts_pid = str(tts.get("provider") or "").strip().lower()
     if tts_pid:
-        needed.append(("tts", tts_pid))
+        if tts_pid in ("edge-tts", "edge", "mock", "none", "off", ""):
+            missing.append(f"{tts_pid or '空'}（tts：专业档禁止 edge-tts）")
+        else:
+            needed.append(("tts", tts_pid))
 
     lip = models.get("lip") if isinstance(models.get("lip"), dict) else {}
     lip_pid = str(lip.get("provider") or "").strip().lower()
     if lip_pid and lip_pid != "mock":
         needed.append(("lip", lip_pid))
+    elif lip_pid == "mock":
+        missing.append("mock（lip：专业档禁止 mock 口型）")
 
-    missing: list[str] = []
     checked: set[str] = set()
     for where, pid in needed:
         if where.startswith("image.") and (
