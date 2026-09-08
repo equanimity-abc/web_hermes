@@ -41,6 +41,7 @@ from tools.drama_studio import (
     rerender_one_shot,
     retry_render_job,
     resume_render_job,
+    resume_interrupted_jobs,
     save_character,
     save_script,
     upload_character_ref,
@@ -828,6 +829,20 @@ async def drama_resume_job(body: JobResumeBody):
             params=params or None,
         )
     except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+class JobResumeInterruptedBody(BaseModel):
+    slug: str = ""
+    limit: int = 20
+
+
+@router.post("/jobs/resume_interrupted")
+async def drama_resume_interrupted(body: JobResumeInterruptedBody):
+    """批量续跑因服务重启而中断的任务。"""
+    try:
+        return resume_interrupted_jobs(slug=body.slug, limit=body.limit)
+    except DramaBadRequest as e:
         raise _http(e) from e
 
 

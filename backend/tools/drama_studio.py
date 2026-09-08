@@ -1707,6 +1707,16 @@ def retry_render_job(job_id: str) -> dict[str, Any]:
         raise DramaBadRequest(str(e)) from e
 
 
+def resume_interrupted_jobs(*, slug: str = "", limit: int = 20) -> dict[str, Any]:
+    """Batch re-queue jobs interrupted by process restart."""
+    from tools.drama_queue import drama_jobs
+
+    if slug:
+        slug = parse_slug(slug)
+    jobs = drama_jobs.resume_interrupted(slug=slug, limit=limit)
+    return {"ok": True, "count": len(jobs), "jobs": jobs}
+
+
 def resume_render_job(
     *,
     job_id: str = "",

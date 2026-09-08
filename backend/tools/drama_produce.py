@@ -364,10 +364,10 @@ def ensure_character_refs(
     lock: bool = True,
     on_progress: Callable[..., None] | None = None,
 ) -> list[str]:
-    """Generate a single portrait ref per character (no 4-up wall, no auto-retry).
+    """Generate portrait refs per character with up to 3 seed candidates.
 
-    生成一次 → 身份就绪校验 → 才锁定。失败则 Fail Loud，由工作台手工重生成/上传。
-    锁定后的定妆是稳定的身份锚点，下游不再改动它。
+    每次候选：生成全身+正脸 → ArcFace 身份就绪校验 → 通过才锁定。
+    三次均失败则 Fail Loud，由工作台手工重生成/上传。
     """
     from tools.drama_characters import (
         character_requires_face_identity,
@@ -473,23 +473,30 @@ def ensure_character_refs(
                 f"{check.get('hint') or check.get('reason')}；请在工作台手工重生成或上传"
             )
         _progress(on_progress, message=f"定妆 {name}")
-        try:
-            generate_character_ref(slug, cid, lock=False, seed=None)
-        except Exception as exc:
-            raise RuntimeError(f"角色「{name}」定妆生成失败：{exc}") from exc
-        invalidate_character_embedding(slug, cid)
-        rec = find_character(load_characters(slug), cid)
-        if rec is None:
-            raise RuntimeError(f"角色「{name}」（{cid}）定妆生成后角色卡丢失")
-        if not ref_face_exists(slug, rec):
-            rec = _ensure_face(rec, name)
-        check = validate_character_ref(_ref_path(rec))
-        if check["ok"]:
-            _lock_if_needed(rec)
-            return cid
+        last_err = ""
+        # 多候选：不同种子试 3 次，身份校验通过即锁定（避免单次赌脸）。
+        for attempt in range(3):
+            seed = (attempt + 1) * 9973 + (hash(cid) % 1000)
+            try:
+                generate_character_ref(slug, cid, lock=False, seed=seed)
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+            invalidate_character_embedding(slug, cid)
+            rec = find_character(load_characters(slug), cid)
+            if rec is None:
+                last_err = "定妆生成后角色卡丢失"
+                continue
+            if not ref_face_exists(slug, rec):
+                rec = _ensure_face(rec, name)
+            check = validate_character_ref(_ref_path(rec))
+            if check["ok"]:
+                _lock_if_needed(rec)
+                return cid
+            last_err = str(check.get("hint") or check.get("reason") or "身份校验未通过")
         raise RuntimeError(
-            f"角色「{name}」定妆未通过身份就绪校验"
-            f"（{check.get('hint') or check.get('reason')}）；请在工作台手工重生成或上传"
+            f"角色「{name}」定妆 3 次候选均未通过身份就绪校验"
+            f"（{last_err}）；请在工作台手工重生成或上传"
         )
 
     if pending:
@@ -576,6 +583,31 @@ def _assert_identity_deps_ready(slug: str) -> None:
             "专业档身份验收无法进行。请先运行 backend/scripts/fetch_arcface_model.py "
             "或安装 insightface 并下载 buffalo_l 后再试。"
         )
+
+
+def _mark_shot_produce_failed(slug: str, episode: int, shot_n: int, err: BaseException | str) -> None:
+    """Persist per-shot failure so rerender_dirty / retry can target the subset."""
+    from tools.drama_shots import find_shot, load_doc, merge_save_shot
+
+    try:
+        doc = load_doc(slug, episode)
+        if not doc:
+            return
+        shot = find_shot(doc, int(shot_n))
+        if not shot:
+            return
+        qc = dict(shot.get("qc") or {}) if isinstance(shot.get("qc"), dict) else {}
+        qc["produce_ok"] = False
+        qc["produce_error"] = str(err)[:400]
+        shot["qc"] = qc
+        dirty = [str(x) for x in (shot.get("dirty") or []) if str(x).strip()]
+        for layer in ("scene", "overlay", "voice", "motion", "clip"):
+            if layer not in dirty:
+                dirty.append(layer)
+        shot["dirty"] = dirty
+        merge_save_shot(slug, episode, shot)
+    except Exception:
+        pass
 
 
 def _hq_process_one_shot(
@@ -1048,6 +1080,7 @@ def _produce_episode_hq_body(
     done_count = {"n": 0}
     ok_count = {"n": 0}
     fail_count = {"n": 0}
+    failed_shots: list[dict[str, Any]] = []
 
     def _worker(sn: int) -> dict[str, Any]:
         _progress(
@@ -1074,6 +1107,8 @@ def _produce_episode_hq_body(
             finished = done_count["n"]
             if isinstance(result, BaseException):
                 fail_count["n"] += 1
+                _mark_shot_produce_failed(slug, n, sn, result)
+                failed_shots.append({"shot": sn, "error": str(result)[:300]})
                 ok = ok_count["n"]
                 failed = fail_count["n"]
                 _progress(
@@ -1085,7 +1120,7 @@ def _produce_episode_hq_body(
                     finished=finished,
                     failed=failed,
                     ok=ok,
-                    message=f"Shot {sn} 失败：{result}",
+                    message=f"Shot {sn} 失败（已落盘可重试）：{result}",
                 )
                 return
             ok_count["n"] += 1
@@ -1109,9 +1144,11 @@ def _produce_episode_hq_body(
         max_workers=shot_concurrency(),
         cancel_check=cancel_check,
         on_done=_on_done,
+        fail_fast=False,
     )
-    clock.end("shots", count=len(shot_results))
+    clock.end("shots", count=len(shot_results), failed=len(failed_shots))
 
+    stages["shots_failed"] = list(failed_shots)
     for row in shot_results:
         if not isinstance(row, dict) or row.get("skipped"):
             continue
@@ -1125,6 +1162,12 @@ def _produce_episode_hq_body(
     snap = take_snapshot(slug, n, doc, tag="stage_shots")
     if snap:
         stages["snapshots"].append(snap)
+
+    if failed_shots:
+        detail = "；".join(f"Shot {x['shot']}: {x['error']}" for x in failed_shots[:6])
+        raise RuntimeError(
+            f"HQ 有 {len(failed_shots)} 镜失败（成功镜已落盘，可用 rerender_dirty 重试子集）：{detail}"
+        )
 
     _progress(on_progress, stage="bgm", message="挂载默认配乐")
     clock.start("bgm")
@@ -1538,16 +1581,24 @@ def create_from_premise(
         cancel_check()
 
     if background:
-        # Queue first episode only (queue API is per-episode); scripts for all are ready.
+        # Queue all planned episodes; scripts are already on disk.
+        job_ids: list[str] = []
+        first_job: dict[str, Any] | None = None
+        for n in episode_numbers:
+            job = produce_episode(
+                slug,
+                n,
+                background=True,
+                force=force,
+                style_id=style_id,
+                catalog_bgm=catalog_bgm,
+            )
+            jid = str(job.get("job_id") or "")
+            if jid:
+                job_ids.append(jid)
+            if first_job is None:
+                first_job = job
         first = episode_numbers[0]
-        job = produce_episode(
-            slug,
-            first,
-            background=True,
-            force=force,
-            style_id=style_id,
-            catalog_bgm=catalog_bgm,
-        )
         return {
             "ok": True,
             "action": "create_from_premise",
@@ -1560,11 +1611,12 @@ def create_from_premise(
             "outline_chars": len(docs.get("outline") or ""),
             "scripts": script_infos,
             "shots": (script_infos[0] or {}).get("count"),
-            "job_id": job.get("job_id"),
-            "status": job.get("status"),
+            "job_id": (first_job or {}).get("job_id"),
+            "job_ids": job_ids,
+            "status": (first_job or {}).get("status"),
             "hint": (
-                f"已按 {ep_total}集×{ep_sec}s 写好剧本；第{first}集成片在后台渲染。"
-                "其余集可用 produce_episode 继续；poll_job 查进度。"
+                f"已按 {ep_total}集×{ep_sec}s 写好剧本；已后台排队 {len(job_ids)} 集成片（job_ids）。"
+                "poll_job 查进度；单镜失败可用 rerender_dirty。"
                 if ep_total > 1
                 else f"剧本已生成（约 {ep_sec}s），成片在后台渲染；poll_job 查进度。"
             ),

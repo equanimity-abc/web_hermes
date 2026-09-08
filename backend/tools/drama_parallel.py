@@ -117,11 +117,18 @@ def parallel_map(
     max_workers: int | None = None,
     cancel_check: Callable[[], None] | None = None,
     on_done: Callable[[int, T, R | BaseException], None] | None = None,
+    fail_fast: bool = True,
 ) -> list[R]:
-    """Run worker over items with a bounded thread pool; fail-fast on first error."""
+    """Run worker over items with a bounded thread pool.
+
+    fail_fast=True (default): raise the first error after cancelling siblings.
+    fail_fast=False: run all items; return only successful results and raise an
+    AggregateError-like RuntimeError at the end if any failed.
+    """
     if not items:
         return []
     workers = max(1, int(max_workers if max_workers is not None else shot_concurrency()))
+    errors: list[tuple[T, BaseException]] = []
     if workers <= 1 or len(items) == 1:
         out: list[R] = []
         for i, item in enumerate(items):
@@ -132,10 +139,16 @@ def parallel_map(
             except BaseException as exc:  # noqa: BLE001 — propagate after callback
                 if on_done:
                     on_done(i, item, exc)
-                raise
+                if fail_fast:
+                    raise
+                errors.append((item, exc))
+                continue
             if on_done:
                 on_done(i, item, result)
             out.append(result)
+        if errors:
+            # Caller already saw failures via on_done; return successes only.
+            return out
         return out
 
     results: list[R | None] = [None] * len(items)
@@ -149,7 +162,7 @@ def parallel_map(
         for fut in as_completed(futures):
             i = futures[fut]
             item = items[i]
-            if error:
+            if fail_fast and error:
                 fut.cancel()
                 continue
             if cancel_check:
@@ -157,20 +170,27 @@ def parallel_map(
                     cancel_check()
                 except BaseException as exc:  # noqa: BLE001
                     error.append(exc)
+                    if fail_fast:
+                        continue
+                    errors.append((item, exc))
                     continue
             try:
                 result = fut.result()
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
+                errors.append((item, exc))
                 if on_done:
                     on_done(i, item, exc)
                 continue
             results[i] = result
             if on_done:
                 on_done(i, item, result)
-    if error:
+    if error and fail_fast:
         raise error[0]
-    return list(results)  # type: ignore[return-value]
+    if errors and not fail_fast:
+        # Caller already saw failures via on_done; return successes only.
+        return [r for r in results if r is not None]  # type: ignore[return-value]
+    return [r for r in results if r is not None]  # type: ignore[return-value]
 
 
 class ProgressClock:

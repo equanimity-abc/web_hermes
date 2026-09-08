@@ -134,6 +134,10 @@ class DramaQueue:
             status = "error"
             error = str(error or "服务重启，任务中断；可继续渲染").strip()
         params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        progress = dict(data.get("progress") or {}) if isinstance(data.get("progress"), dict) else {}
+        if status == "error" and "服务重启" in str(error or ""):
+            progress["resumable"] = True
+            progress["message"] = progress.get("message") or str(error)
         return DramaJob(
             job_id=jid,
             kind=kind,
@@ -142,7 +146,7 @@ class DramaQueue:
             params=dict(params),
             idem_key=str(data.get("idem_key") or ""),
             status=status,
-            progress=dict(data.get("progress") or {}) if isinstance(data.get("progress"), dict) else {},
+            progress=progress,
             result=data.get("result") if isinstance(data.get("result"), dict) else None,
             error=str(error) if error else None,
             created_at=str(data.get("created_at") or utc_now()),
@@ -202,6 +206,13 @@ class DramaQueue:
                         self._persist(job)
                     except OSError:
                         pass
+        import os
+
+        if os.getenv("DRAMA_AUTO_RESUME", "").strip().lower() in ("1", "true", "yes"):
+            try:
+                self.resume_interrupted(limit=10)
+            except Exception:
+                pass
 
     def get(self, job_id: str) -> DramaJob | None:
         with self._lock:
@@ -364,6 +375,28 @@ class DramaQueue:
         if ep < 1:
             raise ValueError("续跑需要合法 episode")
         return self.submit(kind, slug, ep, params=dict(params or {}))
+
+    def resume_interrupted(self, *, slug: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        """Re-queue jobs marked resumable after process restart."""
+        import os
+
+        auto = os.getenv("DRAMA_AUTO_RESUME", "").strip().lower() in ("1", "true", "yes")
+        # Method always works when called explicitly; auto only if env set.
+        _ = auto
+        rows = self.list_jobs(slug=slug or None, active_only=False, limit=max(1, int(limit)))
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("status") != "error":
+                continue
+            prog = row.get("progress") if isinstance(row.get("progress"), dict) else {}
+            err = str(row.get("error") or "")
+            if not (prog.get("resumable") or "服务重启" in err):
+                continue
+            try:
+                out.append(self.retry(str(row.get("job_id") or "")))
+            except Exception:
+                continue
+        return out
 
     def remove_slug(self, slug: str) -> int:
         """Cancel and drop in-memory jobs for a slug and remove persisted records.
