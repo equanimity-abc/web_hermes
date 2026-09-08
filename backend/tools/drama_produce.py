@@ -868,6 +868,13 @@ def produce_episode_hq(
 
     purged_shadows = purge_shadow_character_cards(slug)
     created_chars = ensure_characters_from_shots(slug, doc)
+    from tools.drama_environment import ensure_locations_and_props_from_shots
+
+    env_summary = ensure_locations_and_props_from_shots(slug, doc)
+    if env_summary.get("shots_bound") or env_summary.get("locations_created") or env_summary.get(
+        "props_created"
+    ):
+        save_doc(doc)
     expanded_looks = ensure_character_looks_expanded(slug)
     trait_cids = ensure_character_traits(slug)
     anchored = ensure_character_anchors(slug)
@@ -878,7 +885,8 @@ def produce_episode_hq(
         on_progress,
         stage="cast",
         message=(
-            f"角色 {len(created_chars)} 新建 · 清除影子卡 {len(purged_shadows)} · "
+            f"角色 {len(created_chars)} 新建 · 地点 {len(env_summary.get('locations_created') or [])} · "
+            f"道具 {len(env_summary.get('props_created') or [])} · 清除影子卡 {len(purged_shadows)} · "
             f"look 扩写 {len(expanded_looks)} · 特征字段 {len(trait_cids)} · "
             f"特征锚 {len(anchored)} · 定妆 {len(ref_chars)} 生成"
         ),
@@ -886,6 +894,8 @@ def produce_episode_hq(
     clock.end(
         "cast",
         characters=len(created_chars),
+        locations=len(env_summary.get("locations_created") or []),
+        props=len(env_summary.get("props_created") or []),
         refs=len(ref_chars),
         looks=len(expanded_looks),
         traits=len(trait_cids),
@@ -900,6 +910,8 @@ def produce_episode_hq(
         "quality_profile": profile,
         "research": research_backlog(),
         "characters_created": created_chars,
+        "locations_created": env_summary.get("locations_created") or [],
+        "props_created": env_summary.get("props_created") or [],
         "shadows_purged": purged_shadows,
         "looks_expanded": expanded_looks,
         "refs_generated": ref_chars,

@@ -14,7 +14,7 @@ _SCRIPT_START_RE = re.compile(
 )
 _SCRIPT_LINE_RE = re.compile(
     r"^(?:#{1,3}\s|"
-    r"-\s*\*{0,2}(?:时长|钩子|悬念|画面|字幕|旁白|角色|对白)\*{0,2}\s*[:：]|"
+    r"-\s*\*{0,2}(?:时长|钩子|悬念|画面|地点|道具|字幕|旁白|角色|对白)\*{0,2}\s*[:：]|"
     r"```)",
 )
 _TRAILING_PROSE_RE = re.compile(
@@ -32,7 +32,8 @@ _REFINE_SYSTEM = (
     "1. 只输出完整剧本 Markdown 正文，从标题行（# …）或分镜（## 分镜 / ### Shot）开始；\n"
     "2. 禁止任何开场白、解释、改动说明、总结、希望语、列表点评；\n"
     "3. 禁止用 ``` 代码围栏包裹；\n"
-    "4. 保留原有结构字段：标题、时长/钩子/悬念、### Shot N (…s)、画面/字幕/旁白/角色；\n"
+    "4. 保留原有结构字段：标题、时长/钩子/悬念、### Shot N (…s)、"
+    "画面/地点/道具/字幕/旁白/角色；\n"
     "5. 用户修改要求只影响剧情与文案，不要把要求本身写进剧本。"
 )
 
@@ -164,10 +165,17 @@ def format_episode_markdown(parsed: dict[str, Any]) -> str:
         timing = str(shot.get("timing") or "").strip()
         head = f"### Shot {n}" + (f" ({timing})" if timing else "")
         lines.append(head)
-        for key in ("画面", "字幕", "旁白", "角色"):
-            val = str(shot.get(key) or "").strip()
-            if val:
-                lines.append(f"- {key}: {val}")
+        for key in ("画面", "地点", "道具", "字幕", "旁白", "角色"):
+            val = shot.get(key)
+            if key == "道具":
+                if isinstance(val, (list, tuple)):
+                    text = "、".join(str(x).strip() for x in val if str(x).strip())
+                else:
+                    text = str(val or "").strip()
+            else:
+                text = str(val or "").strip()
+            if text:
+                lines.append(f"- {key}: {text}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

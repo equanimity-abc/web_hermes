@@ -97,7 +97,7 @@ LAYER_LABELS = {
     "shot": "整镜",
 }
 # 字幕 = 台词（配音 + 底部字幕）；旁白 = 画外说明（左上角竖排）
-_CONTENT_KEYS = ("画面", "字幕", "旁白", "角色", "duration", "timing")
+_CONTENT_KEYS = ("画面", "地点", "道具", "字幕", "旁白", "角色", "duration", "timing")
 
 
 def migrate_shot_script_fields(raw: dict[str, Any]) -> dict[str, Any]:
@@ -455,6 +455,12 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "end": round_timing(raw.get("end") or duration),
         "duration": duration,
         "画面": str(raw.get("画面") or ""),
+        "地点": str(raw.get("地点") or "").strip(),
+        "道具": normalize_roles(raw.get("道具")),
+        "location_id": str(raw.get("location_id") or "").strip(),
+        "prop_ids": [str(x).strip() for x in (raw.get("prop_ids") or []) if str(x).strip()]
+        if isinstance(raw.get("prop_ids"), (list, tuple))
+        else normalize_roles(raw.get("prop_ids")),
         "字幕": str(raw.get("字幕") or ""),
         "旁白": str(raw.get("旁白") or ""),
         "角色": normalize_roles(raw.get("角色")),
@@ -542,6 +548,12 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "end": round_timing(raw.get("end") or duration),
         "duration": duration,
         "画面": str(raw.get("画面") or ""),
+        "地点": str(raw.get("地点") or "").strip(),
+        "道具": normalize_roles(raw.get("道具")),
+        "location_id": str(raw.get("location_id") or "").strip(),
+        "prop_ids": [str(x).strip() for x in (raw.get("prop_ids") or []) if str(x).strip()]
+        if isinstance(raw.get("prop_ids"), (list, tuple))
+        else normalize_roles(raw.get("prop_ids")),
         "字幕": str(raw.get("字幕") or ""),
         "旁白": str(raw.get("旁白") or ""),
         "角色": normalize_roles(raw.get("角色")),
@@ -582,6 +594,8 @@ def infer_dirty(old: dict[str, Any], new_content: dict[str, Any]) -> list[str]:
         return str(old.get(key) or "") != str(new_content.get(key) or "")
 
     if changed("画面"):
+        dirty.extend(["scene", "clip"])
+    if changed("地点") or roles_key(old.get("道具")) != roles_key(new_content.get("道具")):
         dirty.extend(["scene", "clip"])
     if changed("字幕"):
         dirty.extend(["voice", "overlay", "clip", "lip"])
@@ -833,6 +847,8 @@ def layers_for_patch(patch: dict[str, Any], locked: Any = None) -> list[str]:
     dirty: list[str] = []
     if "画面" in patch:
         dirty.extend(["scene", "clip"])
+    if "地点" in patch or "道具" in patch or "location_id" in patch or "prop_ids" in patch:
+        dirty.extend(["scene", "clip"])
     if "字幕" in patch:
         dirty.extend(["voice", "overlay", "clip", "lip"])
     if "旁白" in patch:
@@ -889,13 +905,19 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
         k: shot.get(k)
         for k in (*_CONTENT_KEYS, "camera", "kind", "size", "speaker", "voice", "i2v", "i2v_ladder", "i2v_source")
     }
-    for key in ("画面", "字幕", "旁白", "timing", "camera"):
+    for key in ("画面", "地点", "字幕", "旁白", "timing", "camera"):
         if key in patch and patch[key] is not None:
-            shot[key] = str(patch[key])
+            shot[key] = str(patch[key]).strip() if key == "地点" else str(patch[key])
     if "对白" in patch and patch["对白"] is not None and "字幕" not in patch:
         shot["字幕"] = str(patch["对白"])
     if "角色" in patch and patch["角色"] is not None:
         shot["角色"] = normalize_roles(patch["角色"])
+    if "道具" in patch and patch["道具"] is not None:
+        shot["道具"] = normalize_roles(patch["道具"])
+    if "location_id" in patch and patch["location_id"] is not None:
+        shot["location_id"] = str(patch["location_id"] or "").strip()
+    if "prop_ids" in patch and patch["prop_ids"] is not None:
+        shot["prop_ids"] = normalize_roles(patch["prop_ids"])
     if "kind" in patch and patch["kind"] is not None:
         kind = normalize_kind(patch["kind"])
         if not kind:
@@ -1052,6 +1074,13 @@ def merge_from_parsed(
         if not roles and old:
             roles = normalize_roles(old.get("角色"))
         rec["角色"] = roles
+        # Preserve / carry location & props from markdown; ids bound later by ensure_*.
+        if not str(rec.get("地点") or "").strip() and old:
+            rec["地点"] = str(old.get("地点") or "")
+            rec["location_id"] = str(old.get("location_id") or "")
+        if not normalize_roles(rec.get("道具")) and old:
+            rec["道具"] = normalize_roles(old.get("道具"))
+            rec["prop_ids"] = list(old.get("prop_ids") or []) if isinstance(old.get("prop_ids"), list) else []
         if old and "shot" in _as_str_list(old.get("locked")):
             frozen = dict(old)
             frozen["locked"] = _as_str_list(old.get("locked"))
@@ -1060,7 +1089,11 @@ def merge_from_parsed(
         if old:
             rec["locked"] = _as_str_list(old.get("locked"))
             locked = set(rec["locked"])
-            scene_changed = str(rec.get("画面") or "") != str(old.get("画面") or "")
+            scene_changed = (
+                str(rec.get("画面") or "") != str(old.get("画面") or "")
+                or str(rec.get("地点") or "") != str(old.get("地点") or "")
+                or roles_key(rec.get("道具")) != roles_key(old.get("道具"))
+            )
             if scene_changed:
                 rec["prompt"] = ""
                 if "scene" in locked:
@@ -1210,6 +1243,16 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         "timing": shot.get("timing"),
         "duration": shot.get("duration"),
         "画面": shot.get("画面"),
+        "地点": str(shot.get("地点") or ""),
+        "道具": normalize_roles(shot.get("道具")),
+        "location_id": str(shot.get("location_id") or ""),
+        "prop_ids": [
+            str(x).strip()
+            for x in (shot.get("prop_ids") or [])
+            if str(x).strip()
+        ]
+        if isinstance(shot.get("prop_ids"), (list, tuple))
+        else normalize_roles(shot.get("prop_ids")),
         "字幕": shot.get("字幕"),
         "旁白": shot.get("旁白"),
         "角色": normalize_roles(shot.get("角色")),
@@ -1269,11 +1312,13 @@ def script_impact(
         if old is None:
             changed = ["新增"]
         else:
-            for key in ("画面", "字幕", "旁白", "timing"):
+            for key in ("画面", "地点", "字幕", "旁白", "timing"):
                 if str(old.get(key) or "") != str(shot.get(key) or ""):
                     changed.append(key)
             if roles_key(old.get("角色")) != roles_key(shot.get("角色")):
                 changed.append("角色")
+            if roles_key(old.get("道具")) != roles_key(shot.get("道具")):
+                changed.append("道具")
         items.append(
             {
                 "n": n,

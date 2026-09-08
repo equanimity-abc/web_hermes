@@ -107,10 +107,14 @@ class EpisodePatch(BaseModel):
 
 class ShotPatch(BaseModel):
     画面: str | None = None
+    地点: str | None = None
+    道具: list[str] | str | None = None
     字幕: str | None = None
     旁白: str | None = None
     对白: str | None = None  # legacy alias → 字幕
     角色: list[str] | str | None = None
+    location_id: str | None = None
+    prop_ids: list[str] | str | None = None
     camera: str | None = None
     duration: float | None = None
     timing: str | None = None

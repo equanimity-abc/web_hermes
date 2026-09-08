@@ -68,7 +68,7 @@ _SHOT_HEAD = re.compile(
     r"^###\s*Shot\s+(\d+)\s*(?:\(([^)]*)\))?\s*$",
     re.IGNORECASE,
 )
-_FIELD = re.compile(r"^-\s*\*{0,2}(画面|字幕|旁白|对白|角色)\*{0,2}\s*[:：]\s*(.*)\s*$")
+_FIELD = re.compile(r"^-\s*\*{0,2}(画面|字幕|旁白|对白|角色|地点|道具)\*{0,2}\s*[:：]\s*(.*)\s*$")
 _POSTPRODUCTION_CUES = (
     "画面切黑",
     "切黑",
@@ -185,6 +185,8 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
                 "end": end,
                 "duration": duration,
                 "画面": "",
+                "地点": "",
+                "道具": "",
                 "字幕": "",
                 "旁白": "",
                 "角色": "",
@@ -210,8 +212,8 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
 
 
 def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str:
-    """Write 画面/字幕/旁白/角色 and Shot timing header back into episode markdown."""
-    keys = ("画面", "字幕", "旁白", "角色")
+    """Write 画面/地点/道具/字幕/旁白/角色 and Shot timing header back into episode markdown."""
+    keys = ("画面", "地点", "道具", "字幕", "旁白", "角色")
     fields: dict[str, str] = {}
     patch = dict(patch or {})
     # legacy alias
@@ -222,6 +224,10 @@ def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str
             continue
         if key == "角色":
             fields[key] = "、".join(normalize_roles(value))
+        elif key == "道具":
+            fields[key] = "、".join(normalize_roles(value))
+        elif key == "地点":
+            fields[key] = str(value).strip()
         else:
             fields[key] = str(value)
 
