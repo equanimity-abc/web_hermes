@@ -225,6 +225,44 @@ def _ark_image(
         env_ref_count=env_ref_count,
     )
 
+    # Content-addressed cache (skip network when prompt/seed/model unchanged).
+    if slug:
+        try:
+            from tools.drama_gen_cache import lookup as cache_lookup, store as cache_store
+
+            hit = cache_lookup(
+                slug,
+                kind="image",
+                prompt=final_prompt,
+                seed=seed,
+                provider="ark",
+                model=model,
+                suffix=".png",
+            )
+            if hit is not None:
+                dest = Path(dest)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+
+                shutil.copy2(hit, dest)
+                try:
+                    from tools.drama_observability import append_cost_log
+
+                    append_cost_log(
+                        slug,
+                        capability="image",
+                        provider="ark",
+                        model=model,
+                        cost=0.0,
+                        ok=True,
+                        detail="cache_hit",
+                    )
+                except Exception:
+                    pass
+                return dest.is_file() and dest.stat().st_size > 0
+        except Exception:
+            pass
+
     body: dict[str, Any] = {
         "model": model,
         "prompt": final_prompt,
@@ -276,9 +314,50 @@ def _ark_image(
             tw = int(width or 1620)
             th = int(height or 2880)
             _save_provider_image(img, dest, shot=shot, target_w=tw, target_h=th)
-            return dest.is_file() and dest.stat().st_size > 0
+            ok = dest.is_file() and dest.stat().st_size > 0
+            if ok and slug:
+                try:
+                    from tools.drama_gen_cache import store as cache_store
+                    from tools.drama_observability import append_cost_log, estimate_provider_cost
+
+                    cache_store(
+                        slug,
+                        dest,
+                        kind="image",
+                        prompt=final_prompt,
+                        seed=seed,
+                        provider="ark",
+                        model=model,
+                        suffix=".png",
+                    )
+                    append_cost_log(
+                        slug,
+                        capability="image",
+                        provider="ark",
+                        model=model,
+                        cost=estimate_provider_cost(slug, "ark"),
+                        ok=True,
+                    )
+                except Exception:
+                    pass
+            return ok
     except Exception as e:
         log.warning("ark image failed: %s", e)
+        if slug:
+            try:
+                from tools.drama_observability import append_cost_log
+
+                append_cost_log(
+                    slug,
+                    capability="image",
+                    provider="ark",
+                    model=model,
+                    cost=0.0,
+                    ok=False,
+                    detail=str(e)[:160],
+                )
+            except Exception:
+                pass
         return False
 
 

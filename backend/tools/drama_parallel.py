@@ -56,6 +56,7 @@ def lane_for_provider(provider_id: str) -> str:
 
 
 def rpm_for_lane(lane: str) -> int:
+    """RPM for a lane. Env overrides win; else research-card defaults; else safe caps."""
     lane = str(lane or LANE_DEFAULT).strip().lower() or LANE_DEFAULT
     mapping = {
         LANE_ARK: int(getattr(config, "DRAMA_RPM_ARK", 0) or 0),
@@ -66,7 +67,29 @@ def rpm_for_lane(lane: str) -> int:
     rpm = mapping.get(lane, mapping[LANE_DEFAULT])
     if rpm <= 0:
         rpm = int(getattr(config, "DRAMA_RPM_DEFAULT", 0) or 0)
-    return max(0, rpm)
+    if rpm <= 0:
+        # Prefer research-card rpm when env unset (0 previously meant unlimited).
+        try:
+            from tools.drama_models import default_models
+
+            models = default_models()
+            cards = models.get("providers") if isinstance(models.get("providers"), dict) else {}
+            sample_pids = {
+                LANE_ARK: ("ark", "seedream", "seedance"),
+                LANE_DASHSCOPE: ("wanx", "dashscope", "qwen"),
+                LANE_LIP: ("pixverse-lipsync", "latentsync"),
+                LANE_DEFAULT: (),
+            }.get(lane, ())
+            for pid in sample_pids:
+                card = cards.get(pid)
+                if isinstance(card, dict) and int(card.get("rpm") or 0) > 0:
+                    rpm = int(card["rpm"])
+                    break
+        except Exception:
+            rpm = 0
+    if rpm <= 0:
+        rpm = {LANE_ARK: 30, LANE_DASHSCOPE: 30, LANE_LIP: 20}.get(lane, 60)
+    return max(0, int(rpm))
 
 
 def acquire_lane(lane_or_provider: str) -> str:

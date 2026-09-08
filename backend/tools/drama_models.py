@@ -390,10 +390,10 @@ def default_models() -> dict[str, Any]:
         },
         "subtitle": {"style": "karaoke"},
         "budget": {
-            "enabled": False,
-            "per_episode": 0.0,
+            "enabled": True,
+            "per_episode": 50.0,
             "warn_at": 0.8,
-            "note": "",
+            "note": "默认开启预算提示；超阈值 warn，工作台可见",
         },
     }
 

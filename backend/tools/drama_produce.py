@@ -1109,6 +1109,12 @@ def _produce_episode_hq_body(
                 fail_count["n"] += 1
                 _mark_shot_produce_failed(slug, n, sn, result)
                 failed_shots.append({"shot": sn, "error": str(result)[:300]})
+                try:
+                    from tools.drama_observability import bump_failure_heat
+
+                    bump_failure_heat(slug, n, layer="shot", provider="")
+                except Exception:
+                    pass
                 ok = ok_count["n"]
                 failed = fail_count["n"]
                 _progress(
@@ -1193,7 +1199,13 @@ def _produce_episode_hq_body(
     )
     clock.end("export")
     stages["timing"] = clock.snapshot()
-    stages["observability"] = {"timing": stages["timing"], "failure_heat": {}}
+    try:
+        from tools.drama_observability import load_failure_heat
+
+        heat = load_failure_heat(slug, n)
+    except Exception:
+        heat = {"by_layer": {}, "by_provider": {}}
+    stages["observability"] = {"timing": stages["timing"], "failure_heat": heat}
     if not result.get("play_url"):
         from tools.drama_video import output_rel
 
