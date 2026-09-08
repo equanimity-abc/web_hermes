@@ -136,31 +136,76 @@ def generate_layered_scene(
     plate_path = resolve_safe(plate_rel)
     plate_path.parent.mkdir(parents=True, exist_ok=True)
 
-    scene_txt = _scene_text_for_prompt(shot.get("画面") or "")
-    plate_prompt = (
-        f"竖屏9:16场景底板，{title or '短剧'}，{scene_txt}，"
-        "空镜或极弱化人物剪影，突出环境与光影，不要清晰可辨的人脸，"
-        "现代都市条漫插画，戏剧性轮廓光，无文字无字幕无水印"
-    )
-    ok_plate = bool(
-        _generate_scene_image(
-            plate_prompt,
-            plate_path,
-            seed=(seed + 17) & 0x7FFFFFFF,
-            slug=slug,
-            shot={**shot, "kind": "establishing"},
-            refs=(),
-            width=ZOOM_W,
-            height=ZOOM_H,
+    plate_source = "generated"
+    ok_plate = False
+    # 优先复用锁定地点主底板，避免每镜重抽空镜导致背景漂移
+    loc_id = str(shot.get("location_id") or "").strip()
+    if loc_id:
+        from tools.drama_characters import (
+            environment_ref_rel,
+            find_character,
+            normalize_category,
+            ref_plate_exists,
         )
-    )
+        from shutil import copyfile
+
+        loc = find_character(cards, loc_id)
+        if loc and normalize_category(loc.get("category")) == "scene" and ref_plate_exists(slug, loc):
+            src_rel = environment_ref_rel(slug, loc)
+            src_path = None
+            try:
+                src_path = resolve_safe(src_rel)
+            except ValueError:
+                candidate = Path(str(src_rel))
+                if candidate.is_file():
+                    src_path = candidate
+            if src_path and src_path.is_file() and src_path.stat().st_size > 100:
+                try:
+                    copyfile(src_path, plate_path)
+                    ok_plate = plate_path.is_file() and plate_path.stat().st_size > 100
+                    if ok_plate:
+                        plate_source = "reused"
+                except OSError:
+                    ok_plate = False
+
+    if not ok_plate:
+        scene_txt = _scene_text_for_prompt(shot.get("画面") or "")
+        loc_hint = ""
+        if loc_id:
+            loc = find_character(cards, loc_id) if loc_id else None
+            if loc:
+                loc_hint = str(loc.get("look") or loc.get("name") or "")
+        plate_prompt = (
+            f"竖屏9:16场景底板，{title or '短剧'}，{scene_txt}，"
+            f"{loc_hint + '，' if loc_hint else ''}"
+            "空镜或极弱化人物剪影，突出环境与光影，不要清晰可辨的人脸，"
+            "现代都市条漫插画，戏剧性轮廓光，无文字无字幕无水印"
+        )
+        env_refs: tuple[str, ...] = ()
+        if loc_id:
+            from tools.drama_qc import locked_env_refs_for_shot
+
+            env_refs = tuple(locked_env_refs_for_shot(slug, shot)[:1])
+        ok_plate = bool(
+            _generate_scene_image(
+                plate_prompt,
+                plate_path,
+                seed=(seed + 17) & 0x7FFFFFFF,
+                slug=slug,
+                shot={**shot, "kind": "establishing", "_env_ref_count": 1 if env_refs else 0},
+                refs=env_refs,
+                width=ZOOM_W,
+                height=ZOOM_H,
+            )
+        )
+        plate_source = "generated" if ok_plate else plate_source
     if not ok_plate or not plate_path.is_file():
         return {"ok": False, "reason": "plate_failed"}
 
     canvas = Image.open(plate_path).convert("RGBA")
     canvas = _prepare_frame(canvas.convert("RGB"), ZOOM_W, ZOOM_H).convert("RGBA")
 
-    layer_assets: dict[str, str] = {"plate": plate_rel}
+    layer_assets: dict[str, str] = {"plate": plate_rel, "plate_source": plate_source}
     ordered_slots = _occlusion_ordered_slots(plan)
     # 保持 usable 顺序跟 occlusion 一致
     by_cid = {str(s.get("character_id") or ""): (s, c, r) for s, c, r in usable}
@@ -217,8 +262,14 @@ def generate_layered_scene(
         if k.startswith("layer_"):
             assets[k] = v
     shot["scene_source"] = "layered"
-    shot["layer_assets"] = layer_assets
-    return {"ok": True, "layer_assets": layer_assets, "path": str(dest)}
+    shot["layer_assets"] = {k: v for k, v in layer_assets.items() if k != "plate_source"}
+    shot["layer_assets"]["plate_source"] = plate_source
+    return {
+        "ok": True,
+        "layer_assets": shot["layer_assets"],
+        "path": str(dest),
+        "plate_source": plate_source,
+    }
 
 
 def _failing_character_ids(identity: dict[str, Any]) -> list[str]:
