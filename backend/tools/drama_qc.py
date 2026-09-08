@@ -1405,6 +1405,134 @@ def qc_episode_loudness(slug: str, episode: int, *, apply: bool = True) -> dict[
     return result
 
 
+def qc_shot_environment(
+    slug: str,
+    episode: int,
+    shot: dict[str, Any],
+    *,
+    apply: bool = True,
+    ssim_min: float = 0.28,
+) -> dict[str, Any]:
+    """Soft environment gate: scene vs locked location plate (wide/establishing).
+
+    Dialogue close-ups return n/a (do not block face-led frames). Failures dirties
+    ``scene`` for one automatic produce retry.
+    """
+    from tools.drama_characters import (
+        environment_ref_rel,
+        find_character,
+        load_characters,
+        normalize_category,
+        ref_plate_exists,
+    )
+    from tools.drama_models import infer_kind, infer_size
+
+    loc_id = str(shot.get("location_id") or "").strip()
+    if not loc_id:
+        result = {
+            "status": "skipped",
+            "reason": "no_location",
+            "pass": True,
+            "hint": "本镜未绑定地点，跳过环境验收",
+        }
+        shot["environment"] = result
+        return result
+
+    kind = str(shot.get("kind") or infer_kind(shot) or "")
+    size = str(shot.get("size") or infer_size(shot) or "")
+    if kind in ("dialogue", "reaction") and size in ("CU", "ECU", "MCU"):
+        result = {
+            "status": "skipped",
+            "reason": "closeup",
+            "pass": True,
+            "hint": "近景对话镜不做环境硬闸",
+            "location_id": loc_id,
+        }
+        shot["environment"] = result
+        return result
+
+    cards = load_characters(slug)
+    loc = find_character(cards, loc_id)
+    if not loc or normalize_category(loc.get("category")) != "scene":
+        result = {
+            "status": "skipped",
+            "reason": "no_location_card",
+            "pass": True,
+            "location_id": loc_id,
+        }
+        shot["environment"] = result
+        return result
+    if not ref_plate_exists(slug, loc):
+        result = {
+            "status": "skipped",
+            "reason": "no_plate",
+            "pass": True,
+            "hint": "地点主底板尚未生成",
+            "location_id": loc_id,
+        }
+        shot["environment"] = result
+        return result
+
+    scene_path = _scene_path(shot)
+    plate_rel = environment_ref_rel(slug, loc)
+    try:
+        plate_path = resolve_safe(plate_rel)
+    except ValueError:
+        plate_path = None
+    if scene_path is None or plate_path is None or not plate_path.is_file():
+        result = {
+            "status": "skipped",
+            "reason": "missing_files",
+            "pass": True,
+            "location_id": loc_id,
+        }
+        shot["environment"] = result
+        return result
+
+    try:
+        from PIL import Image, ImageFilter
+    except ImportError:
+        result = _skip_check("no_pillow", hint="缺少 Pillow，环境验收跳过")
+        result["location_id"] = loc_id
+        shot["environment"] = result
+        return result
+
+    try:
+        scene_img = Image.open(scene_path).convert("RGB").resize((64, 64))
+        plate_img = Image.open(plate_path).convert("RGB").resize((64, 64))
+        # 强模糊后比结构，降低人物遮挡对底板相似度的干扰
+        scene_img = scene_img.filter(ImageFilter.GaussianBlur(radius=2)).convert("L")
+        plate_img = plate_img.filter(ImageFilter.GaussianBlur(radius=2)).convert("L")
+        score = round(_ssim_gray(scene_img, plate_img), 4)
+    except OSError:
+        result = {
+            "status": "skipped",
+            "reason": "read_error",
+            "pass": True,
+            "location_id": loc_id,
+        }
+        shot["environment"] = result
+        return result
+
+    threshold = max(0.05, min(0.9, float(ssim_min)))
+    passed = score >= threshold
+    result = {
+        "status": "ok",
+        "pass": passed,
+        "ssim": score,
+        "ssim_min": threshold,
+        "location_id": loc_id,
+        "location_name": str(loc.get("name") or loc_id),
+        "hint": ""
+        if passed
+        else f"环境与地点底板相似度偏低（SSIM {score} < {threshold}），建议重抽画面",
+    }
+    if apply and not passed:
+        result["dirtied"] = _mark_fail_layers(shot, ("scene", "clip"))
+    shot["environment"] = result
+    return result
+
+
 def shot_can_pass(bundle: dict[str, Any] | None) -> bool:
     if not isinstance(bundle, dict):
         return False

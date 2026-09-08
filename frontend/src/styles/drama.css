@@ -2971,6 +2971,31 @@
   margin-right: 6px;
 }
 
+.drama-scene-env-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.drama-scene-env-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 72px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.drama-scene-env-card img {
+  width: 72px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-muted, #f3f3f3);
+}
+
 .drama-scene-meta-inline {
   flex-direction: row;
   flex-wrap: nowrap;

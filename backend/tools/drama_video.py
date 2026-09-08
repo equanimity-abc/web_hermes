@@ -680,6 +680,8 @@ def _scene_prompt(
             f"身份锁角色「{speaker}」必须清晰露脸并占本镜主要人脸位置，"
             f"禁止只画其他角色正脸而把「{speaker}」画成背影、过小剪影或看不清五官"
         )
+    if shot.get("_env_retry") and loc_clause:
+        bits.append("强制保持与地点设定同一建筑轮廓、主光方向与地面材质，禁止换成无关背景")
     if style_clause:
         bits.append(style_clause)
     bits.append(

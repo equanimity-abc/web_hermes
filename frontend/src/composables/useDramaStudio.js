@@ -295,6 +295,10 @@ export function useDramaStudio() {
   function emptyDraft() {
     return {
       画面: '',
+      地点: '',
+      道具: [],
+      location_id: '',
+      prop_ids: [],
       字幕: '',
       旁白: '',
       角色: [],
@@ -400,6 +404,10 @@ export function useDramaStudio() {
     const speaker = shot?.speaker || ''
     draft.value = {
       画面: shot?.画面 || '',
+      地点: String(shot?.地点 || ''),
+      道具: Array.isArray(shot?.道具) ? [...shot.道具] : [],
+      location_id: String(shot?.location_id || ''),
+      prop_ids: Array.isArray(shot?.prop_ids) ? [...shot.prop_ids] : [],
       // Keep raw script text so save/chat never strip speaker prefixes.
       字幕: String(shot?.字幕 || shot?.对白 || ''),
       旁白: String(shot?.旁白 || ''),

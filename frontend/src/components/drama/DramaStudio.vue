@@ -910,6 +910,38 @@ const seriesEpisodeOptions = computed(() => {
   }))
 })
 
+const shotEnvAssets = computed(() => {
+  const shot = props.selected
+  if (!shot) return []
+  const cards = props.characters || []
+  const out = []
+  const locId = String(shot.location_id || '').trim()
+  if (locId) {
+    const card = cards.find((c) => String(c.id) === locId)
+    if (card) {
+      out.push({
+        id: card.id,
+        name: card.name || locId,
+        kind: '地点',
+        url: card.ref_plate_url || card.ref_url || '',
+      })
+    }
+  }
+  for (const pid of shot.prop_ids || []) {
+    const id = String(pid || '').trim()
+    if (!id) continue
+    const card = cards.find((c) => String(c.id) === id)
+    if (!card) continue
+    out.push({
+      id: card.id,
+      name: card.name || id,
+      kind: '道具',
+      url: card.ref_url || '',
+    })
+  }
+  return out
+})
+
 // 预加载候选缩略图
 watch(
   () => props.shots,
@@ -1971,10 +2003,18 @@ const statusBar = computed(() => {
                     <textarea class="drama-scene-script-text" :value="selected.画面 || ''" rows="4" readonly placeholder="（剧本中尚未填写画面描述）" />
                   </label>
                   <p class="drama-scene-script-hint">来自剧本分镜；修改请返回「剧本」步骤编辑对应 Shot 的「画面」字段。</p>
-                  <div v-if="shotRolesLabel(selected) || selected.字幕 || selected.旁白 || selected.对白" class="drama-scene-meta">
+                  <div v-if="shotRolesLabel(selected) || selected.地点 || (selected.道具 && selected.道具.length) || selected.字幕 || selected.旁白 || selected.对白" class="drama-scene-meta">
+                    <span v-if="selected.地点" class="drama-scene-meta-item"><strong>地点</strong>{{ selected.地点 }}</span>
+                    <span v-if="selected.道具 && selected.道具.length" class="drama-scene-meta-item"><strong>道具</strong>{{ Array.isArray(selected.道具) ? selected.道具.join('、') : selected.道具 }}</span>
                     <span v-if="shotRolesLabel(selected)" class="drama-scene-meta-item"><strong>角色</strong>{{ shotRolesLabel(selected) }}</span>
                     <span v-if="selected.字幕 || selected.对白" class="drama-scene-meta-item"><strong>字幕</strong>{{ selected.字幕 || selected.对白 }}</span>
                     <span v-if="selected.旁白" class="drama-scene-meta-item"><strong>旁白</strong>{{ selected.旁白 }}</span>
+                  </div>
+                  <div v-if="shotEnvAssets.length" class="drama-scene-env-refs">
+                    <div v-for="asset in shotEnvAssets" :key="asset.id" class="drama-scene-env-card">
+                      <img v-if="asset.url" :src="asset.url" :alt="asset.name" />
+                      <span>{{ asset.kind }} · {{ asset.name }}</span>
+                    </div>
                   </div>
                 </div>
 

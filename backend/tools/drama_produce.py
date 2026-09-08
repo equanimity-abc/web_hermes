@@ -639,10 +639,13 @@ def _hq_process_one_shot(
             apply_shot_class(shot, force=False)
             build_spatial_plan(slug, shot)
             identity_local = qc_shot_identity(slug, n, shot, apply=True)
-            merge_save_shot(slug, n, shot)
-            return info_local, identity_local
+            from tools.drama_qc import qc_shot_environment
 
-        info, identity_last = _run_scene_and_qc(retry=0)
+            env_local = qc_shot_environment(slug, n, shot, apply=True)
+            merge_save_shot(slug, n, shot)
+            return info_local, identity_local, env_local
+
+        info, identity_last, env_last = _run_scene_and_qc(retry=0)
         degrades = list(info.get("degrades") or [])
 
         def _identity_needs_retry(identity: dict[str, Any]) -> bool:
@@ -659,11 +662,24 @@ def _hq_process_one_shot(
                 return True
             return False
 
+        def _env_needs_retry(env: dict[str, Any]) -> bool:
+            return str(env.get("status") or "") == "ok" and not env.get("pass")
+
         if _identity_needs_retry(identity_last):
             try:
-                info, identity_last = _run_scene_and_qc(retry=1)
+                info, identity_last, env_last = _run_scene_and_qc(retry=1)
                 degrades = list(info.get("degrades") or [])
             finally:
+                shot.pop("_identity_framing_boost", None)
+                shot.pop("_identity_retry", None)
+        elif _env_needs_retry(env_last):
+            # 环境软闸：最多再重抽画面 1 次（加强地点锚）
+            try:
+                shot["_env_retry"] = 1
+                info, identity_last, env_last = _run_scene_and_qc(retry=1)
+                degrades = list(info.get("degrades") or [])
+            finally:
+                shot.pop("_env_retry", None)
                 shot.pop("_identity_framing_boost", None)
                 shot.pop("_identity_retry", None)
 
