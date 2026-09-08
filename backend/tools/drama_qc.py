@@ -544,12 +544,8 @@ def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
     return rel if path.is_file() else None
 
 
-def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
-    """本镜锁定定妆路径，供出图 ``image`` 参考。
-
-    顺序：身份主体（说话人/主角色）永远在前作为图1，再跟同镜其它可锁脸角色。
-    Seedream 多图融合时图1权重最高；若把配角放图1，主体脸会被冲淡，身份 QC 易挂。
-    """
+def locked_face_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
+    """本镜锁定角色脸/定妆路径（身份主体优先）。"""
     from tools.drama_characters import character_requires_face_identity
 
     cards = load_characters(slug)
@@ -572,6 +568,85 @@ def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
         if path and path not in refs:
             refs.append(path)
     return refs
+
+
+def locked_env_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
+    """本镜环境参考：地点主底板（优先）+ 至多 1 个主道具设定图。"""
+    from tools.drama_characters import (
+        environment_ref_rel,
+        find_character,
+        load_characters,
+        normalize_category,
+        ref_exists,
+    )
+
+    cards = load_characters(slug)
+    refs: list[str] = []
+    loc_id = str(shot.get("location_id") or "").strip()
+    if loc_id:
+        loc = find_character(cards, loc_id)
+        if loc and normalize_category(loc.get("category")) == "scene":
+            rel = environment_ref_rel(slug, loc)
+            if rel:
+                try:
+                    if resolve_safe(rel).is_file() and rel not in refs:
+                        refs.append(rel)
+                except ValueError:
+                    pass
+    prop_ids = shot.get("prop_ids") if isinstance(shot.get("prop_ids"), list) else []
+    for pid in prop_ids[:2]:
+        cid = str(pid or "").strip()
+        if not cid:
+            continue
+        prop = find_character(cards, cid)
+        if not prop or normalize_category(prop.get("category")) != "prop":
+            continue
+        if not (prop.get("ref_locked") and ref_exists(slug, prop)):
+            # still allow unlocked existing file for quality
+            if not ref_exists(slug, prop):
+                continue
+        rel = str(prop.get("ref") or "").replace("\\", "/")
+        if not rel:
+            continue
+        try:
+            if resolve_safe(rel).is_file() and rel not in refs:
+                refs.append(rel)
+                break  # 至多 1 个道具进 Seedream 槽
+        except ValueError:
+            continue
+    return refs
+
+
+def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 3) -> list[str]:
+    """Seedream 参考打包：``[环境底板, 脸1, 脸2…]``，总数 ≤ max_refs。"""
+    limit = max(1, min(int(max_refs or 3), 3))
+    env = locked_env_refs_for_shot(slug, shot)
+    faces = locked_face_refs_for_shot(slug, shot)
+    out: list[str] = []
+    for rel in env[:1]:
+        if rel not in out:
+            out.append(rel)
+    for rel in faces:
+        if len(out) >= limit:
+            break
+        if rel not in out:
+            out.append(rel)
+    # 若尚有空位且有第二环境（道具），补进
+    if len(out) < limit:
+        for rel in env[1:]:
+            if len(out) >= limit:
+                break
+            if rel not in out:
+                out.append(rel)
+    return out
+
+
+def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
+    """本镜出图参考图路径（环境 + 角色），供 Seedream ``image``。
+
+    顺序：地点主底板（若有）→ 身份主体脸 → 其它可锁脸角色（总 ≤3）。
+    """
+    return compose_shot_image_refs(slug, shot, max_refs=3)
 
 
 def _scene_path(shot: dict[str, Any]) -> Path | None:

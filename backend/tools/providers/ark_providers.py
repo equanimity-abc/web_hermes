@@ -123,12 +123,31 @@ def _seedream_image_payload(refs: tuple[str, ...]) -> str | list[str] | None:
     return uris
 
 
-def _prompt_with_identity_refs(prompt: str, *, ref_count: int) -> str:
-    """参考图是「身份锚」，不是编辑底图——避免模型只做轻微改图。"""
+def _prompt_with_identity_refs(
+    prompt: str,
+    *,
+    ref_count: int,
+    env_ref_count: int = 0,
+) -> str:
+    """参考图分工：环境底板锁背景，角色定妆锁脸——不是整图编辑底图。"""
     base = str(prompt or "").strip()
     if ref_count <= 0:
         return base
-    if ref_count == 1:
+    env_n = max(0, min(int(env_ref_count or 0), ref_count))
+    face_n = max(0, ref_count - env_n)
+    if env_n >= 1 and face_n >= 1:
+        clause = (
+            f"参考图共{ref_count}张：图1为地点/环境底板，必须保持同一建筑轮廓、布局、主光与地面材质，"
+            "禁止换成无关背景；"
+            f"图2起为角色定妆（共{face_n}张），严格保持同一张脸、发型与服装；"
+            "不要复制定妆立绘的站姿与背景，也不要把底板当可编辑贴图随意扭曲"
+        )
+    elif env_n >= 1:
+        clause = (
+            f"参考图共{ref_count}张环境底板：保持同一地点建筑轮廓、主光方向与地面材质，"
+            "可调整景别与构图，禁止换成无关场景，禁止凭空加人脸抢戏"
+        )
+    elif ref_count == 1:
         clause = (
             "参考图为角色定妆立绘：严格保持同一张脸、同一发型发色与同一套服装配饰；"
             "生成本镜全新构图、景别与姿势，不要复制定妆立绘的站姿与背景"
@@ -188,7 +207,23 @@ def _ark_image(
         if image_payload is None
         else (len(image_payload) if isinstance(image_payload, list) else 1)
     )
-    final_prompt = _prompt_with_identity_refs(str(prompt), ref_count=ref_count)
+    env_ref_count = 0
+    if isinstance(shot, dict):
+        try:
+            env_ref_count = int(shot.get("_env_ref_count") or 0)
+        except (TypeError, ValueError):
+            env_ref_count = 0
+    if env_ref_count <= 0 and refs:
+        env_ref_count = sum(1 for r in refs if "_plate" in str(r).replace("\\", "/").lower())
+        if env_ref_count <= 0 and isinstance(shot, dict) and str(shot.get("location_id") or "").strip():
+            first = str(refs[0]).replace("\\", "/").lower()
+            if "_face.png" not in first:
+                env_ref_count = 1
+    final_prompt = _prompt_with_identity_refs(
+        str(prompt),
+        ref_count=ref_count,
+        env_ref_count=env_ref_count,
+    )
 
     body: dict[str, Any] = {
         "model": model,

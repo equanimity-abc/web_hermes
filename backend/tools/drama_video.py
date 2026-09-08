@@ -632,6 +632,24 @@ def _scene_prompt(
             hid = str(head[0].get("id") or "")
             ordered_chars = head + [c for c in ordered_chars if str(c.get("id") or "") != hid]
     char_clause = character_prompt_clause(ordered_chars, slug=slug)
+    loc_clause = ""
+    prop_clause = ""
+    if slug:
+        try:
+            from tools.drama_characters import find_character, load_characters
+            from tools.drama_environment import location_prompt_clause, prop_prompt_clause
+
+            cards = load_characters(slug)
+            loc_id = str(shot.get("location_id") or "").strip()
+            if loc_id:
+                loc_clause = location_prompt_clause(find_character(cards, loc_id))
+            prop_ids = shot.get("prop_ids") if isinstance(shot.get("prop_ids"), list) else []
+            props = [find_character(cards, str(pid)) for pid in prop_ids[:4]]
+            props = [p for p in props if isinstance(p, dict)]
+            prop_clause = prop_prompt_clause(props)
+        except Exception:
+            loc_clause = ""
+            prop_clause = ""
     style_clause = ""
     if slug:
         from tools.drama_styles import style_prompt_clause
@@ -650,6 +668,8 @@ def _scene_prompt(
         "竖屏9:16竖屏短剧关键帧",
         title or "短剧",
         scene,
+        loc_clause,
+        prop_clause,
         char_clause,
         spatial_clause,
         memory_clause,
@@ -1198,9 +1218,13 @@ def generate_shot_candidates(
     n = int(shot.get("n") or 0)
 
     # R4: feed locked character reference sheets into the image provider.
-    from tools.drama_qc import locked_refs_for_shot
+    from tools.drama_qc import compose_shot_image_refs, locked_env_refs_for_shot
 
-    refs = tuple(locked_refs_for_shot(slug, shot))
+    refs = tuple(compose_shot_image_refs(slug, shot, max_refs=3))
+    shot["_env_ref_count"] = len(locked_env_refs_for_shot(slug, shot)[:1])
+    # If first ref is env plate/detail, count at least 1 for Seedream prompt split
+    if shot["_env_ref_count"] <= 0 and refs and str(shot.get("location_id") or "").strip():
+        shot["_env_ref_count"] = 1
 
     from tools.drama_retry import retry_call
 
