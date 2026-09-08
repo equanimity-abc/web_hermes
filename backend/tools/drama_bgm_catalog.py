@@ -82,7 +82,7 @@ def _ffmpeg_bin() -> str:
     return os.getenv("FFMPEG_BIN", "ffmpeg")
 
 
-def _track_public_row(spec: dict[str, Any], *, rel_path: str) -> dict[str, Any]:
+def _track_public_row(spec: dict[str, Any], *, rel_path: str, procedural: bool = True) -> dict[str, Any]:
     rel = rel_path.replace("\\", "/")
     return {
         "id": spec["id"],
@@ -91,12 +91,18 @@ def _track_public_row(spec: dict[str, Any], *, rel_path: str) -> dict[str, Any]:
         "notes": spec.get("notes") or "",
         "path": rel,
         "license": spec["license"],
+        "source": "procedural" if procedural else "file",
+        "procedural": bool(procedural),
         "preview_url": f"/api/workspace/file?path={quote(rel, safe='/')}",
     }
 
 
 def _generate_track(dest: Path, spec: dict[str, Any]) -> bool:
-    if dest.is_file() and dest.stat().st_size > 2000:
+    marker = dest.with_suffix(dest.suffix + ".procedural")
+    if dest.is_file() and dest.stat().st_size > 2000 and not marker.is_file():
+        # User-replaced real file (no procedural marker) — keep it.
+        return True
+    if dest.is_file() and dest.stat().st_size > 2000 and marker.is_file():
         return True
     if not shutil.which(_ffmpeg_bin()):
         return False
@@ -123,7 +129,10 @@ def _generate_track(dest: Path, spec: dict[str, Any]) -> bool:
         )
     except RuntimeError:
         return False
-    return dest.is_file() and dest.stat().st_size > 500
+    ok = dest.is_file() and dest.stat().st_size > 500
+    if ok:
+        marker.write_text("lavfi\n", encoding="utf-8")
+    return ok
 
 
 def ensure_shared_bgm_catalog() -> dict[str, Any]:
@@ -133,10 +142,13 @@ def ensure_shared_bgm_catalog() -> dict[str, Any]:
     for spec in _TRACK_SPECS:
         rel = f"{SHARED_BGM_DIR_REL}/{spec['filename']}"
         dest = bgm_dir / spec["filename"]
+        marker = dest.with_suffix(dest.suffix + ".procedural")
         _generate_track(dest, spec)
         if dest.is_file() and dest.stat().st_size > 500:
-            tracks.append(_track_public_row(spec, rel_path=rel))
-    catalog = {"tracks": tracks, "version": 1}
+            tracks.append(
+                _track_public_row(spec, rel_path=rel, procedural=marker.is_file())
+            )
+    catalog = {"tracks": tracks, "version": 2}
     cat_path = workspace_root() / SHARED_CATALOG_REL.replace("/", os.sep)
     cat_path.parent.mkdir(parents=True, exist_ok=True)
     cat_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -164,6 +176,14 @@ def load_shared_catalog() -> list[dict[str, Any]]:
             path_rel = str(item.get("path") or "").replace("\\", "/")
             if not tid or not path_rel:
                 continue
+            procedural = bool(item.get("procedural"))
+            if "procedural" not in item:
+                # Infer from sibling marker when catalog is stale.
+                try:
+                    p = resolve_safe(path_rel)
+                    procedural = p.with_suffix(p.suffix + ".procedural").is_file()
+                except ValueError:
+                    procedural = True
             row = {
                 "id": tid,
                 "title": str(item.get("title") or tid),
@@ -171,7 +191,46 @@ def load_shared_catalog() -> list[dict[str, Any]]:
                 "notes": str(item.get("notes") or ""),
                 "path": path_rel,
                 "license": str(item.get("license") or f"catalog:{tid}"),
+                "source": "procedural" if procedural else str(item.get("source") or "file"),
+                "procedural": procedural,
                 "preview_url": f"/api/workspace/file?path={quote(path_rel, safe='/')}",
             }
             out.append(row)
     return out
+
+
+def match_bgm_by_intent(intent: str, tracks: list[dict[str, Any]] | None = None) -> str:
+    """Pick catalog id by mood/keywords in script 配乐 intent. Empty → ''."""
+    text = str(intent or "").strip().lower()
+    rows = list(tracks or load_shared_catalog())
+    if not rows:
+        return ""
+    if not text:
+        return str(rows[0].get("id") or "")
+
+    mood_aliases: list[tuple[str, tuple[str, ...]]] = [
+        ("悬疑", ("悬疑", "紧张", "暗", "神秘", "惊悚", "危险")),
+        ("励志", ("励志", "决意", "觉醒", "希望", "重生", "温暖上升")),
+        ("对峙", ("对峙", "交锋", "对抗", "冲突", "暗战")),
+        ("压抑", ("压抑", "沉重", "权谋", "豪门", "阴冷")),
+        ("轻快", ("轻快", "日常", "甜", "轻松", "明亮", "欢快")),
+        ("高潮", ("高潮", "复仇", "终局", "爆发", "激昂")),
+    ]
+    scores: list[tuple[int, str]] = []
+    for row in rows:
+        tid = str(row.get("id") or "").strip()
+        if not tid:
+            continue
+        mood = str(row.get("mood") or "")
+        blob = f"{mood} {row.get('title') or ''} {row.get('notes') or ''}".lower()
+        score = 0
+        if mood and mood in text:
+            score += 5
+        for mood_name, keys in mood_aliases:
+            if mood == mood_name or mood_name in blob:
+                score += sum(2 for k in keys if k in text)
+        scores.append((score, tid))
+    scores.sort(key=lambda x: (-x[0], x[1]))
+    if scores and scores[0][0] > 0:
+        return scores[0][1]
+    return str(rows[0].get("id") or "")

@@ -500,18 +500,62 @@ def ensure_character_refs(
 
 
 def ensure_default_bgm(slug: str, episode: int, *, catalog_id: str = DEFAULT_CATALOG_BGM) -> bool:
-    """Attach a royalty-free catalog BGM when mix has none (export-safe)."""
+    """Attach catalog BGM when mix has none; prefer script 配乐 intent mood match."""
+    import os
+
     from tools.drama_audio import has_bgm, load_catalog, load_mix, patch_mix
+    from tools.drama_bgm_catalog import match_bgm_by_intent
+    from tools.drama_shots import load_doc
 
     mix = load_mix(slug, episode)
     if has_bgm(mix):
         return False
     tracks = load_catalog(slug).get("tracks") or []
     ids = {str(t.get("id") or "") for t in tracks}
-    cid = catalog_id if catalog_id in ids else (str(tracks[0].get("id") or "") if tracks else "")
+
+    intent = str(mix.get("bgm_intent") or "").strip()
+    if not intent:
+        doc = load_doc(slug, episode) or {}
+        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+        intent = str(meta.get("配乐") or "").strip()
+
+    picked = ""
+    if intent:
+        picked = match_bgm_by_intent(intent, tracks)
+    cid = catalog_id if catalog_id in ids else ""
+    if picked and picked in ids:
+        cid = picked
+    if not cid:
+        cid = str(tracks[0].get("id") or "") if tracks else ""
     if not cid:
         return False
-    patch_mix(slug, episode, {"catalog_id": cid})
+
+    # Studio: do not auto-attach procedural lavfi tones unless explicitly allowed.
+    hit = next((t for t in tracks if t.get("id") == cid), None) or {}
+    procedural = bool(hit.get("procedural"))
+    profile_draft = False
+    try:
+        from tools.drama_profiles import resolve_quality_profile
+
+        profile_draft = resolve_quality_profile(slug) == "draft"
+    except Exception:
+        profile_draft = False
+    allow_proc = profile_draft or os.getenv("DRAMA_ALLOW_PROCEDURAL_BGM", "").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if procedural and not allow_proc:
+        # Still record intent for the workbench; skip attaching fake tones.
+        if intent:
+            mix = load_mix(slug, episode)
+            mix["bgm_intent"] = intent
+            from tools.drama_audio import save_mix
+
+            save_mix(slug, episode, mix)
+        return False
+
+    patch_mix(slug, episode, {"catalog_id": cid, "bgm_intent": intent})
     return True
 
 
@@ -829,6 +873,7 @@ def produce_episode_hq(
     from tools.drama_quality import assert_studio_providers
     from tools.drama_shots import load_doc
     from tools.drama_studio import classify_shots, export_episode, get_episode
+    from tools.drama_tts_policy import reset_tts_edge_degrade, resolve_tts_degrade_for_slug, set_tts_edge_degrade
 
     slug = str(slug or "").strip()
     n = int(episode)
@@ -837,6 +882,46 @@ def produce_episode_hq(
 
     profile = resolve_quality_profile(slug)
     assert_profile_allows_studio_gates(profile)
+    tts_token = set_tts_edge_degrade(resolve_tts_degrade_for_slug(slug))
+    try:
+        return _produce_episode_hq_body(
+            slug,
+            n,
+            clock=clock,
+            preset=preset,
+            profile=profile,
+            force=force,
+            style_id=style_id,
+            catalog_bgm=catalog_bgm,
+            allow_qc_fail_export=allow_qc_fail_export,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
+        )
+    finally:
+        reset_tts_edge_degrade(tts_token)
+
+
+def _produce_episode_hq_body(
+    slug: str,
+    episode: int,
+    *,
+    clock: Any,
+    preset: str,
+    profile: str,
+    force: bool = False,
+    style_id: str = "",
+    catalog_bgm: str = DEFAULT_CATALOG_BGM,
+    allow_qc_fail_export: bool = False,
+    on_progress: Callable[..., None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    from tools.drama_parallel import parallel_map, shot_concurrency
+    from tools.drama_profiles import research_backlog
+    from tools.drama_quality import assert_studio_providers
+    from tools.drama_shots import load_doc
+    from tools.drama_studio import classify_shots, export_episode, get_episode
+
+    n = int(episode)
     clock.start("preset")
     _progress(on_progress, stage="preset", message=f"质量预设 {preset} · profile={profile}")
     assert_studio_providers(slug)

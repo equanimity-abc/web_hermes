@@ -31,13 +31,14 @@ def _http_tts(text, dest, *, voice=None) -> bool:
         Authorization: Bearer TTS_API_KEY (when set)
         Body = audio bytes (mp3/wav)
 
-    When TTS_API_URL is not configured, honestly degrade to edge-tts (the free
-    local engine) so the high-fidelity name never silently "passes" without a
-    real backend.
+    When TTS_API_URL is not configured: draft may fall back to edge-tts;
+    studio raises (no silent fake success).
     """
+    from tools.drama_tts_policy import refuse_or_edge
+
     url = (getattr(config, "TTS_API_URL", "") or "").strip()
     if not url:
-        return _edge_tts(text, dest, voice=voice)
+        return refuse_or_edge(text, dest, voice=voice, reason="未配置 TTS_API_URL")
 
     import httpx
 
@@ -57,27 +58,26 @@ def _http_tts(text, dest, *, voice=None) -> bool:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(resp.content)
         return dest.is_file() and dest.stat().st_size > 0
-    except Exception:
-        # Gateway failure → degrade to edge-tts rather than silent audio.
-        return _edge_tts(text, dest, voice=voice)
+    except Exception as e:
+        return refuse_or_edge(text, dest, voice=voice, reason=f"TTS 网关失败: {e}")
 
 
 def _dashscope_tts(text, dest, *, voice=None) -> bool:
     """阿里云百炼 DashScope 语音合成（OpenAI 兼容 audio/speech）。
 
-    Provider: dashscope-tts / cosyvoice。无 Key 或调用失败时诚实回退 edge-tts。
+    Provider: dashscope-tts / cosyvoice。无 Key 或调用失败时：draft 回退 edge-tts，studio 失败。
     """
+    from tools.drama_tts_policy import refuse_or_edge
+
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
     if not key:
-        return _edge_tts(text, dest, voice=voice)
+        return refuse_or_edge(text, dest, voice=voice, reason="未配置 DASHSCOPE_API_KEY")
 
     import httpx
 
     base = (getattr(config, "DASHSCOPE_BASE_URL", "") or "https://dashscope.aliyuncs.com").rstrip("/")
     model = (getattr(config, "DASHSCOPE_TTS_MODEL", "") or "qwen-audio-3.0-tts-plus").strip()
 
-    # 百炼语音合成音色与 edge-tts 音色 id 不同，这里做一句尽力传入；
-    # 无法匹配时用 None（服务端用默认音色）。
     try:
         with httpx.Client(timeout=120.0, follow_redirects=True) as client:
             resp = client.post(
@@ -97,9 +97,8 @@ def _dashscope_tts(text, dest, *, voice=None) -> bool:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(resp.content)
             return dest.is_file() and dest.stat().st_size > 0
-    except Exception:
-        # DashScope TTS failure → degrade to edge-tts rather than silent audio.
-        return _edge_tts(text, dest, voice=voice)
+    except Exception as e:
+        return refuse_or_edge(text, dest, voice=voice, reason=f"DashScope TTS 失败: {e}")
 
 
 register("tts", "edge-tts", _edge_tts)

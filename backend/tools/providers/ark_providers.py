@@ -424,11 +424,11 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
 
 def _ark_tts(text, dest, *, voice=None) -> bool:
     """Seed Audio TTS（OpenAI 兼容 audio/speech）。"""
+    from tools.drama_tts_policy import refuse_or_edge
+
     key = _ark_key()
     if not key:
-        from tools.providers.tts_providers import _edge_tts
-
-        return _edge_tts(text, dest, voice=voice)
+        return refuse_or_edge(text, dest, voice=voice, reason="未配置 ARK_API_KEY")
 
     try:
         from tools.drama_parallel import acquire_lane
@@ -457,9 +457,7 @@ def _ark_tts(text, dest, *, voice=None) -> bool:
         return dest.is_file() and dest.stat().st_size > 0
     except Exception as e:
         log.warning("ark tts failed: %s", e)
-        from tools.providers.tts_providers import _edge_tts
-
-        return _edge_tts(text, dest, voice=voice)
+        return refuse_or_edge(text, dest, voice=voice, reason=f"Ark TTS 失败: {e}")
 
 
 register("image", "ark", _ark_image)

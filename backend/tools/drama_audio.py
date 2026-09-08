@@ -52,6 +52,7 @@ def empty_mix() -> dict[str, Any]:
             "fade_in": DEFAULT_FADE_IN,
             "fade_out": DEFAULT_FADE_OUT,
             "start": 0.0,
+            "procedural": False,
         },
         "sfx": [],
         "bgm_intent": "",
@@ -106,6 +107,7 @@ def normalize_mix(raw: Any) -> dict[str, Any]:
         "fade_in": round(_clip(fade_in, 0.0, 4.0), 2),
         "fade_out": round(_clip(fade_out, 0.0, 6.0), 2),
         "start": round(_clip(start, 0.0, 600.0), 3),
+        "procedural": bool(bg.get("procedural")),
     }
     sfx_in = data.get("sfx") if isinstance(data.get("sfx"), list) else []
     sfx: list[dict[str, Any]] = []
@@ -278,6 +280,10 @@ def patch_mix(slug: str, episode: int, patch: dict[str, Any]) -> dict[str, Any]:
     for key in ("volume", "duck_db", "fade_in", "fade_out", "start"):
         if key in src and src[key] is not None:
             bgm[key] = src[key]
+    if "bgm_intent" in patch and patch["bgm_intent"] is not None:
+        mix["bgm_intent"] = str(patch["bgm_intent"] or "").strip()
+    elif "bgm_intent" in src and src["bgm_intent"] is not None:
+        mix["bgm_intent"] = str(src["bgm_intent"] or "").strip()
     if "clear" in patch and patch["clear"]:
         mix["bgm"] = empty_mix()["bgm"]
     if "sfx" in patch and isinstance(patch["sfx"], list):
@@ -293,6 +299,7 @@ def patch_mix(slug: str, episode: int, patch: dict[str, Any]) -> dict[str, Any]:
         mix["bgm"]["title"] = hit.get("title") or hit["id"]
         mix["bgm"]["license"] = hit.get("license") or f"catalog:{hit['id']}"
         mix["bgm"]["license_ok"] = True
+        mix["bgm"]["procedural"] = bool(hit.get("procedural"))
     return save_mix(slug, episode, mix)
 
 

@@ -1046,7 +1046,11 @@ def export_episode(
         return enqueue_job(slug, n, "export", params={"force": bool(force)})
     doc = _ensure_shots_doc(slug, n)
     from tools.drama_audio import assert_export_licensed, load_mix
-    from tools.drama_quality import assert_loudness_after_export, assert_shots_qc_for_export
+    from tools.drama_quality import (
+        assert_loudness_after_export,
+        assert_shots_qc_for_export,
+        assert_studio_bgm,
+    )
     from tools.drama_shots import LAYERS, cascade_shot_timings, save_doc
     from tools.drama_video import assemble_episode, ffmpeg_available, render_shot_layers
     from tools.workspace import resolve_safe
@@ -1055,6 +1059,7 @@ def export_episode(
         raise DramaBadRequest("未找到 ffmpeg，无法导出整集")
     try:
         assert_export_licensed(slug, load_mix(slug, n))
+        assert_studio_bgm(slug, n, force=bool(force))
         assert_shots_qc_for_export(slug, n, doc, force=bool(force))
         # 导出前重渲：脏层全量处理；未锁镜头至少刷新 overlay+clip，
         # 避免声音页 CSS 预览正确、成片仍是旧旁白/旧时长。

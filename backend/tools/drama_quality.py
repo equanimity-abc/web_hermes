@@ -118,3 +118,53 @@ def assert_loudness_after_export(slug: str, episode: int, *, force: bool = False
         + str(loudness.get("hint") or loudness.get("reason") or status or "loudness fail")
         + "。可 remix 后重试，或在工作台强制导出。"
     )
+
+
+def assert_studio_bgm(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
+    """Studio export must not ship lavfi procedural tones as real BGM."""
+    import os
+
+    from tools.drama_audio import has_bgm, load_catalog, load_mix
+    from tools.drama_profiles import resolve_quality_profile
+
+    if force:
+        return {"ok": True, "forced": True}
+    if resolve_quality_profile(slug) == "draft":
+        return {"ok": True, "draft": True}
+    if os.getenv("DRAMA_ALLOW_PROCEDURAL_BGM", "").strip().lower() in ("1", "true", "yes"):
+        return {"ok": True, "allowed_env": True}
+
+    mix = load_mix(slug, episode)
+    if not has_bgm(mix):
+        intent = str(mix.get("bgm_intent") or "").strip()
+        raise ValueError(
+            "专业档导出需要真实配乐：请在成片页上传免版税/已授权 BGM"
+            + (f"（剧本配乐意图：{intent}）" if intent else "")
+            + "。当前曲库占位音为 lavfi 合成，不可作为上架成片。"
+        )
+    bgm = mix.get("bgm") if isinstance(mix.get("bgm"), dict) else {}
+    procedural = bool(bgm.get("procedural"))
+    if not procedural:
+        # Cross-check catalog row / marker
+        tid = str(bgm.get("id") or "").strip()
+        tracks = load_catalog(slug).get("tracks") or []
+        hit = next((t for t in tracks if t.get("id") == tid), None)
+        if hit and hit.get("procedural"):
+            procedural = True
+        else:
+            path = str(bgm.get("path") or "")
+            if path:
+                try:
+                    from tools.workspace import resolve_safe
+
+                    p = resolve_safe(path)
+                    if p.with_suffix(p.suffix + ".procedural").is_file():
+                        procedural = True
+                except ValueError:
+                    pass
+    if procedural:
+        raise ValueError(
+            "专业档禁止使用 lavfi 程序化占位 BGM 导出。"
+            "请上传真实免版税音频，或设置 DRAMA_ALLOW_PROCEDURAL_BGM=1（仅调试）。"
+        )
+    return {"ok": True, "procedural": False}

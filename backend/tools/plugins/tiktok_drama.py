@@ -384,6 +384,19 @@ def _action_save_episode(args: dict) -> str:
     }
     if synced:
         result["shots"] = synced
+    try:
+        from tools.drama_script_blueprint import materialize_script_assets
+        from tools.drama_video import parse_episode_markdown
+
+        parsed = parse_episode_markdown(str(content))
+        # Always sync shots before materialize so location/prop ids bind.
+        if not synced:
+            from tools.drama_video import sync_shots_doc
+
+            sync_shots_doc(slug, n, str(content), title=title)
+        result["blueprint"] = materialize_script_assets(slug, n, parsed)
+    except Exception as e:
+        result["blueprint"] = {"error": str(e)[:200]}
     return _ok(**result)
 
 
@@ -434,6 +447,14 @@ def _action_parse_shots(args: dict) -> str:
     if content is None:
         return _err("该集剧本不存在", slug=slug, episode=n, path=ep_rel)
     doc = sync_shots_doc(slug, n, content)
+    blueprint: dict[str, Any] = {}
+    try:
+        from tools.drama_script_blueprint import materialize_script_assets
+        from tools.drama_video import parse_episode_markdown
+
+        blueprint = materialize_script_assets(slug, n, parse_episode_markdown(content))
+    except Exception as e:
+        blueprint = {"error": str(e)[:200]}
     return _ok(
         action="parse_shots",
         slug=slug,
@@ -444,6 +465,7 @@ def _action_parse_shots(args: dict) -> str:
         meta=doc.get("meta") or {},
         count=doc.get("count") or 0,
         shots=[public_shot(s) for s in doc.get("shots") or []],
+        blueprint=blueprint,
     )
 
 

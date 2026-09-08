@@ -133,10 +133,15 @@ def test_ensure_characters_from_shots_creates_missing(tmp_path, monkeypatch):
 
 
 def test_ensure_default_bgm_uses_catalog(monkeypatch):
-    calls: list[str] = []
+    calls: list[dict] = []
 
     monkeypatch.setattr("tools.drama_audio.has_bgm", lambda mix: False)
-    monkeypatch.setattr("tools.drama_audio.load_mix", lambda slug, ep: {"bgm": {}})
+    monkeypatch.setattr("tools.drama_audio.load_mix", lambda slug, ep: {"bgm": {}, "bgm_intent": ""})
+    monkeypatch.setattr("tools.drama_shots.load_doc", lambda slug, ep: {"meta": {}})
+    monkeypatch.setattr(
+        "tools.drama_profiles.resolve_quality_profile",
+        lambda slug: "draft",
+    )
     monkeypatch.setattr(
         "tools.drama_audio.load_catalog",
         lambda slug: {
@@ -145,14 +150,42 @@ def test_ensure_default_bgm_uses_catalog(monkeypatch):
                     "id": "rebirth_resolve",
                     "path": "shared/x.mp3",
                     "license": "catalog:rebirth_resolve",
+                    "mood": "励志",
+                    "procedural": False,
                 }
             ]
         },
     )
     monkeypatch.setattr(
         "tools.drama_audio.patch_mix",
-        lambda slug, ep, patch: calls.append(patch.get("catalog_id", "")) or {},
+        lambda slug, ep, patch: calls.append(dict(patch)) or {},
     )
 
     assert ensure_default_bgm("demo", 1) is True
-    assert calls == ["rebirth_resolve"]
+    assert calls and calls[0].get("catalog_id") == "rebirth_resolve"
+
+
+def test_ensure_default_bgm_matches_intent(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr("tools.drama_audio.has_bgm", lambda mix: False)
+    monkeypatch.setattr(
+        "tools.drama_audio.load_mix",
+        lambda slug, ep: {"bgm": {}, "bgm_intent": "古风悬疑紧张暗流"},
+    )
+    monkeypatch.setattr("tools.drama_shots.load_doc", lambda slug, ep: {"meta": {}})
+    monkeypatch.setattr("tools.drama_profiles.resolve_quality_profile", lambda slug: "draft")
+    monkeypatch.setattr(
+        "tools.drama_audio.load_catalog",
+        lambda slug: {
+            "tracks": [
+                {"id": "rebirth_resolve", "mood": "励志", "title": "决意", "notes": "", "procedural": False},
+                {"id": "suspense_dark", "mood": "悬疑", "title": "暗涌", "notes": "紧张", "procedural": False},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "tools.drama_audio.patch_mix",
+        lambda slug, ep, patch: calls.append(dict(patch)) or {},
+    )
+    assert ensure_default_bgm("demo", 1) is True
+    assert calls[0].get("catalog_id") == "suspense_dark"

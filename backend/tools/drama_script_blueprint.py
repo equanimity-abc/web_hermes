@@ -248,7 +248,13 @@ def format_asset_sections(parsed: dict[str, Any]) -> list[str]:
 def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -> dict[str, Any]:
     """Upsert cast/scene/prop cards from structured script + bind shot ids; store BGM intent."""
     from tools.drama_audio import load_mix, save_mix
-    from tools.drama_characters import load_characters, match_character_token, upsert_character
+    from tools.drama_characters import (
+        load_characters,
+        match_character_token,
+        pick_default_voice,
+        upsert_character,
+        voice_hint_to_gender,
+    )
     from tools.drama_environment import ensure_locations_and_props_from_shots
     from tools.drama_produce import ensure_characters_from_shots
     from tools.drama_shots import load_doc, save_doc
@@ -273,6 +279,7 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
             for a in str(rec.get("别名") or "").replace("，", "、").split("、")
             if a.strip()
         ]
+        hint_gender = voice_hint_to_gender(str(rec.get("音色倾向") or ""))
         payload: dict[str, Any] = {
             "name": name,
             "look": look,
@@ -280,16 +287,34 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
             "catchphrase": str(rec.get("口头禅") or "").strip(),
             "aliases": aliases,
         }
-        existing = match_character_token(name, [c for c in cards if str(c.get("category") or "character") == "character"])
+        if hint_gender:
+            payload["gender"] = hint_gender
+        existing = match_character_token(
+            name, [c for c in cards if str(c.get("category") or "character") == "character"]
+        )
         if existing and existing.get("ref_locked"):
+            # Keep locked looks; only fill empty look / voice / gender.
+            patch: dict[str, Any] = {"id": existing["id"]}
             if not str(existing.get("look") or "").strip():
-                payload = {"id": existing["id"], "look": look}
-            else:
+                patch["look"] = look
+            if hint_gender and not str(existing.get("gender") or "").strip():
+                patch["gender"] = hint_gender
+            if hint_gender and not str(existing.get("voice") or "").strip():
+                patch["voice"] = pick_default_voice(slug, hint_gender, cards)
+            if len(patch) == 1:
                 continue
+            payload = patch
         elif existing:
             payload["id"] = existing["id"]
             if str(existing.get("look") or "").strip() and len(str(existing.get("look") or "")) > len(look):
                 payload.pop("look", None)
+            if hint_gender and not str(existing.get("voice") or "").strip():
+                payload["voice"] = pick_default_voice(slug, hint_gender, cards)
+            elif not hint_gender and not str(existing.get("voice") or "").strip():
+                pass
+        else:
+            if hint_gender:
+                payload["voice"] = pick_default_voice(slug, hint_gender, cards)
         card = upsert_character(slug, payload)
         cards = load_characters(slug)
         created["characters"].append(str(card.get("id") or name))

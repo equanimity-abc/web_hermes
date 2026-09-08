@@ -187,6 +187,20 @@ def pick_default_voice(slug: str | None, gender: str, existing: list[dict[str, A
     return DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
 
 
+def voice_hint_to_gender(hint: str) -> str:
+    """Map script「音色倾向」text to male/female/''."""
+    raw = str(hint or "").strip().lower()
+    if not raw:
+        return ""
+    female_keys = ("女", "female", "温柔", "软萌", "少女", "御姐", "萝莉", "甜")
+    male_keys = ("男", "male", "低沉", "沙哑", "少年", "大叔", "沉稳", "浑厚")
+    if any(k in raw for k in female_keys):
+        return "female"
+    if any(k in raw for k in male_keys):
+        return "male"
+    return ""
+
+
 def default_tts_voices() -> list[dict[str, str]]:
     return [{"id": vid, "label": label} for vid, label in DEFAULT_VOICES]
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
