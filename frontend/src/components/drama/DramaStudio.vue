@@ -18,6 +18,8 @@ const props = defineProps({
   saving: { type: Boolean, default: false },
   rendering: { type: Boolean, default: false },
   generatingCandidateNs: { type: Array, default: () => [] },
+  busyCharacterIds: { type: Array, default: () => [] },
+  busyShotNs: { type: Array, default: () => [] },
   videoGenProgress: { type: Object, default: null },
   error: { type: String, default: '' },
   notice: { type: String, default: '' },
@@ -315,7 +317,18 @@ const castRefModelLabel = computed(() => {
 
 const castRefInfo = computed(() => {
   const c = props.selectedCharacter
-  if (!c?.ref_exists) return null
+  if (!c) return null
+  const slide = castRefActiveSlide.value
+  if (slide?.key === 'face') {
+    if (!c.ref_face_exists) return null
+    return {
+      pixelSize: '正脸特写锚',
+      fileSize: '出图 / QC 优先',
+      model: castRefModelLabel.value,
+      locked: Boolean(c.ref_locked),
+    }
+  }
+  if (!c.ref_exists) return null
   const w = Number(c.ref_width || 0)
   const h = Number(c.ref_height || 0)
   const canvas = Number(c.ref_size || props.charDraft.ref_size || 0)
@@ -451,6 +464,61 @@ const refPreviewUrl = computed(() => {
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
+const facePreviewUrl = computed(() => {
+  const url = props.selectedCharacter?.ref_face_url || ''
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+})
+
+const castRefSlide = ref(0)
+
+const castRefSlides = computed(() => {
+  const char = props.selectedCharacter
+  if (!char || (char.category || 'character') !== 'character') {
+    return [
+      {
+        key: 'body',
+        label: '定妆图',
+        url: refPreviewUrl.value,
+        empty: '暂无定妆图',
+      },
+    ]
+  }
+  return [
+    {
+      key: 'body',
+      label: '全身定妆',
+      url: refPreviewUrl.value,
+      empty: '暂无全身定妆',
+    },
+    {
+      key: 'face',
+      label: '正脸特写',
+      url: facePreviewUrl.value,
+      empty: '尚未生成正脸特写',
+    },
+  ]
+})
+
+const castRefActiveSlide = computed(() => {
+  const slides = castRefSlides.value
+  if (!slides.length) return null
+  const idx = Math.min(Math.max(0, castRefSlide.value), slides.length - 1)
+  return slides[idx]
+})
+
+watch(
+  () => props.selectedCharacterId,
+  () => {
+    castRefSlide.value = 0
+  },
+)
+
+function stepCastRefSlide(delta) {
+  const n = castRefSlides.value.length
+  if (n < 2) return
+  castRefSlide.value = (castRefSlide.value + delta + n) % n
+}
 const mix = computed(() => props.episode?.mix || null)
 const bgmPreviewUrl = computed(() => {
   const mounted = mix.value?.file?.url || ''
@@ -558,6 +626,15 @@ function onChooseCandidate(cid) {
 function isGeneratingCandidates(n) {
   return (props.generatingCandidateNs || []).includes(n)
 }
+function isCharacterBusy(cid) {
+  return (props.busyCharacterIds || []).includes(String(cid || ''))
+}
+function isShotBusy(n) {
+  const sn = Number(n)
+  return (props.busyShotNs || []).includes(sn) || isGeneratingCandidates(sn)
+}
+const selectedCharacterBusy = computed(() => isCharacterBusy(props.selectedCharacterId))
+const selectedShotBusy = computed(() => isShotBusy(props.selectedN))
 function candidateUrls(shot) {
   return (shot?.candidates || []).map((c) => candUrl(c)).filter(Boolean)
 }
@@ -578,7 +655,7 @@ function sceneLayerDirty(shot) {
   return (shot?.dirty || []).includes('scene')
 }
 function shotStatusLabel(shot) {
-  if (isGeneratingCandidates(shot.n)) return '…'
+  if (isShotBusy(shot.n)) return '…'
   const locked = shot.locked || []
   if (locked.includes('shot')) return '锁'
   if (sceneLocked(shot) && !sceneLayerDirty(shot)) return '锁'
@@ -588,7 +665,7 @@ function shotStatusLabel(shot) {
   return '待'
 }
 function shotStatusClass(shot) {
-  if (isGeneratingCandidates(shot.n)) return 'is-busy'
+  if (isShotBusy(shot.n)) return 'is-busy'
   const locked = shot.locked || []
   if (locked.includes('shot')) return 'is-locked'
   if (sceneLocked(shot) && !sceneLayerDirty(shot)) return 'is-locked'
@@ -700,7 +777,7 @@ function shotVideoRowDesc(shot) {
 }
 
 function shotVideoStatusLabel(shot) {
-  if (isVideoGeneratingShot(shot.n)) return '…'
+  if (isShotBusy(shot.n) || isVideoGeneratingShot(shot.n)) return '…'
   const locked = shot.locked || []
   if (locked.includes('shot')) return '锁'
   const src = shot.i2v_source || ''
@@ -716,7 +793,7 @@ function shotVideoStatusLabel(shot) {
 }
 
 function shotVideoStatusClass(shot) {
-  if (isVideoGeneratingShot(shot.n)) return 'is-busy'
+  if (isShotBusy(shot.n) || isVideoGeneratingShot(shot.n)) return 'is-busy'
   const locked = shot.locked || []
   if (locked.includes('shot')) return 'is-locked'
   const src = shot.i2v_source || ''
@@ -926,7 +1003,7 @@ function shotVoiceRowDesc(shot) {
 }
 
 function shotVoiceStatusLabel(shot) {
-  if (props.rendering && props.selectedN === shot.n) return '…'
+  if (isShotBusy(shot.n)) return '…'
   const locked = shot.locked || []
   if (locked.includes('shot') || locked.includes('voice')) return '锁'
   if (shotHasLip(shot)) return '口'
@@ -938,7 +1015,7 @@ function shotVoiceStatusLabel(shot) {
 }
 
 function shotVoiceStatusClass(shot) {
-  if (props.rendering && props.selectedN === shot.n) return 'is-busy'
+  if (isShotBusy(shot.n)) return 'is-busy'
   const locked = shot.locked || []
   if (locked.includes('shot') || locked.includes('voice')) return 'is-locked'
   if (shotHasLip(shot)) return 'is-done'
@@ -1582,7 +1659,7 @@ const statusBar = computed(() => {
 
       <!-- ============ 阶段 2：定妆资产 ============ -->
       <section v-else-if="stage === 'cast'" class="drama-stage-panel drama-cast-stage">
-        <div class="drama-panel-body drama-cast-layout">
+        <div class="drama-panel-body drama-scene-layout drama-cast-layout">
           <div class="drama-cast-sidebar">
             <div class="drama-cast-tabs">
               <button
@@ -1603,7 +1680,7 @@ const statusBar = computed(() => {
                   :key="item.id"
                   type="button"
                   class="drama-cast-row"
-                  :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked }"
+                  :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked, busy: isCharacterBusy(item.id) }"
                   @click="emit('select-character', item.id)"
                 >
                   <div class="drama-cast-avatar">
@@ -1611,7 +1688,8 @@ const statusBar = computed(() => {
                     <span v-else class="drama-cast-avatar-empty">{{ (item.name || item.id || '?').slice(0, 1) }}</span>
                   </div>
                   <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
-                  <span v-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
+                  <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
+                  <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
                 </button>
               </div>
               <div v-else class="drama-cast-folder-grid">
@@ -1635,128 +1713,188 @@ const statusBar = computed(() => {
             </div>
           </div>
 
-          <div v-if="selectedCharacter && (selectedCharacter.category || 'character') === castCategory" class="drama-cast-detail">
-            <div class="drama-cast-detail-head">
+          <div v-if="selectedCharacter && (selectedCharacter.category || 'character') === castCategory" class="drama-scene-detail">
+            <div class="drama-scene-detail-head">
               <h3>{{ selectedCharacter.name || selectedCharacter.id }}</h3>
-              <div class="drama-cast-detail-actions">
-                <button type="button" class="btn-primary btn-sm" :disabled="saving" @click="emit('save-character')">保存</button>
-                <button type="button" class="btn-tiny" :disabled="saving || rendering || selectedCharacter.ref_locked" @click="emit('generate-character-ref', selectedCharacter.id)">
-                  {{ saving ? '生成中…' : '生成定妆图' }}
+              <div class="drama-scene-detail-actions">
+                <button type="button" class="btn-primary btn-sm" :disabled="selectedCharacterBusy" @click="emit('save-character')">保存</button>
+                <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || selectedCharacter.ref_locked" @click="emit('generate-character-ref', selectedCharacter.id)">
+                  {{ selectedCharacterBusy ? '生成中…' : '生成定妆图' }}
                 </button>
-                <button type="button" class="btn-tiny" :disabled="saving || !selectedCharacter.ref_exists" @click="emit('lock-ref', selectedCharacter.id)">
+                <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || !selectedCharacter.ref_exists" @click="emit('lock-ref', selectedCharacter.id)">
                   {{ selectedCharacter.ref_locked ? '解锁' : '锁定' }}
                 </button>
-                <button type="button" class="btn-tiny btn-tiny-danger" :disabled="saving" @click="emit('delete-character', selectedCharacter.id)">删除</button>
+                <button type="button" class="btn-tiny btn-tiny-danger" :disabled="selectedCharacterBusy" @click="emit('delete-character', selectedCharacter.id)">删除</button>
               </div>
             </div>
 
-            <div class="drama-cast-editor">
-              <div class="drama-cast-fields-row" :class="{ 'drama-cast-fields-row--no-alias': castCategory !== 'character' }">
-                <label class="drama-field">
-                  名称
-                  <input v-model="charDraft.name" type="text" placeholder="角色名称" />
-                </label>
-                <label v-if="castCategory === 'character'" class="drama-field">
-                  别名
-                  <input v-model="charDraft.aliases" type="text" placeholder="可选" />
-                </label>
-                <label class="drama-field">
-                  尺寸
-                  <select v-model.number="charDraft.ref_size">
-                    <option v-for="opt in CAST_REF_SIZES" :key="opt.value" :value="opt.value">
-                      {{ opt.hint }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-field">
-                  模型
-                  <select
-                    :value="charRefModelKey"
-                    :disabled="saving"
-                    @change="onCastRefModelChange"
-                  >
-                    <option
-                      v-for="opt in catalogOptions('character_ref')"
-                      :key="`${opt.provider}|${opt.model}`"
-                      :value="`${opt.provider}|${opt.model}`"
-                    >
-                      {{ opt.label }}
-                    </option>
-                  </select>
-                </label>
-                <label v-if="castCategory === 'character'" class="drama-field">
-                  性别
-                  <select v-model="charDraft.gender">
-                    <option v-for="g in GENDER_OPTIONS" :key="g.value" :value="g.value">{{ g.label }}</option>
-                  </select>
-                </label>
-                <label v-if="castCategory === 'character'" class="drama-field">
-                  音色
-                  <select v-model="charDraft.voice">
-                    <option value="">自动（按性别）</option>
-                    <option v-if="charDraft.voice && !voices.some((v) => v.id === charDraft.voice)" :value="charDraft.voice">
-                      {{ voices.find((v) => v.id === charDraft.voice)?.label || charDraft.voice }}
-                    </option>
-                    <option v-for="v in sortedVoices" :key="v.id" :value="v.id">
-                      {{ v.label || v.id }}
-                    </option>
-                  </select>
-                </label>
-              </div>
-              <label class="drama-field">
-                三视图
-                <textarea
-                  v-model="charDraft.look"
-                  rows="3"
-                  placeholder="正面、侧面、背面的发型、服装、配饰与气质等细节描述"
-                />
-              </label>
-            </div>
-
-            <div class="drama-cast-main">
-              <div class="drama-cast-ref-panel">
-                <div class="drama-cast-ref-preview-area">
-                  <div class="drama-cast-ref-preview">
-                    <img v-if="refPreviewUrl" :src="refPreviewUrl" :alt="selectedCharacter.name || selectedCharacter.id" />
-                    <span v-else class="drama-candidate-empty">暂无定妆图</span>
+            <div class="drama-scene-body">
+              <div class="drama-scene-left">
+                <div class="drama-scene-script drama-cast-form">
+                  <label class="drama-field">
+                    名称
+                    <input v-model="charDraft.name" type="text" placeholder="角色名称" />
+                  </label>
+                  <label v-if="castCategory === 'character'" class="drama-field">
+                    别名
+                    <input v-model="charDraft.aliases" type="text" placeholder="可选" />
+                  </label>
+                  <div v-if="castCategory === 'character'" class="drama-cast-fields-pair">
+                    <label class="drama-field">
+                      性别
+                      <select v-model="charDraft.gender">
+                        <option v-for="g in GENDER_OPTIONS" :key="g.value" :value="g.value">{{ g.label }}</option>
+                      </select>
+                    </label>
+                    <label class="drama-field">
+                      音色
+                      <select v-model="charDraft.voice">
+                        <option value="">自动（按性别）</option>
+                        <option v-if="charDraft.voice && !voices.some((v) => v.id === charDraft.voice)" :value="charDraft.voice">
+                          {{ voices.find((v) => v.id === charDraft.voice)?.label || charDraft.voice }}
+                        </option>
+                        <option v-for="v in sortedVoices" :key="v.id" :value="v.id">
+                          {{ v.label || v.id }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="drama-field">
+                    三视图
+                    <textarea
+                      v-model="charDraft.look"
+                      class="drama-scene-script-text"
+                      rows="4"
+                      placeholder="正面、侧面、背面的发型、服装、配饰与气质等细节描述"
+                    />
+                  </label>
+                  <div v-if="castCategory === 'character'" class="drama-cast-traits">
+                    <label class="drama-field">
+                      发型发色
+                      <input v-model="charDraft.hair" type="text" placeholder="如：黑色长直发、刘海" />
+                    </label>
+                    <label class="drama-field">
+                      瞳色五官
+                      <input v-model="charDraft.eyes" type="text" placeholder="如：杏眼、浅棕瞳" />
+                    </label>
+                    <label class="drama-field">
+                      服饰
+                      <input v-model="charDraft.outfit" type="text" placeholder="常服要点，跨镜锁定" />
+                    </label>
+                    <label class="drama-field">
+                      特征标记
+                      <input v-model="charDraft.marks" type="text" placeholder="如：右颊小痣、耳饰" />
+                    </label>
                   </div>
                 </div>
-                <dl v-if="castRefInfo" class="drama-cast-ref-meta">
-                  <div class="drama-cast-ref-meta-row">
-                    <dt>像素</dt>
-                    <dd>{{ castRefInfo.pixelSize }}</dd>
+
+                <div class="drama-stage-settings">
+                  <div class="drama-stage-settings-head">设置</div>
+                  <div class="drama-stage-settings-row">
+                    <label class="drama-field">
+                      尺寸
+                      <select v-model.number="charDraft.ref_size">
+                        <option v-for="opt in CAST_REF_SIZES" :key="opt.value" :value="opt.value">
+                          {{ opt.hint }}
+                        </option>
+                      </select>
+                    </label>
+                    <label class="drama-field">
+                      定妆模型
+                      <select
+                        class="drama-model-select"
+                        :value="charRefModelKey"
+                        :disabled="selectedCharacterBusy"
+                        @change="onCastRefModelChange"
+                      >
+                        <option
+                          v-for="opt in catalogOptions('character_ref')"
+                          :key="`${opt.provider}|${opt.model}`"
+                          :value="`${opt.provider}|${opt.model}`"
+                        >
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                    </label>
                   </div>
-                  <div class="drama-cast-ref-meta-row">
-                    <dt>文件</dt>
-                    <dd>{{ castRefInfo.fileSize }}</dd>
+                  <div v-if="castRefInfo" class="drama-scene-meta">
+                    <span class="drama-scene-meta-item"><strong>像素</strong>{{ castRefInfo.pixelSize }}</span>
+                    <span class="drama-scene-meta-item"><strong>文件</strong>{{ castRefInfo.fileSize }}</span>
+                    <span class="drama-scene-meta-item"><strong>模型</strong>{{ castRefInfo.model }}</span>
+                    <span class="drama-scene-meta-item"><strong>状态</strong>{{ castRefInfo.locked ? '已锁定' : '未锁定' }}</span>
                   </div>
-                  <div class="drama-cast-ref-meta-row">
-                    <dt>模型</dt>
-                    <dd>{{ castRefInfo.model }}</dd>
+                  <div class="drama-cast-upload-row">
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      :disabled="selectedCharacterBusy || selectedCharacter.ref_locked"
+                      @click="refInput?.click()"
+                    >
+                      上传参考图
+                    </button>
+                    <input ref="refInput" class="drama-file" type="file" accept="image/*" @change="onRefFile" />
                   </div>
-                  <div class="drama-cast-ref-meta-row">
-                    <dt>状态</dt>
-                    <dd>{{ castRefInfo.locked ? '已锁定' : '未锁定' }}</dd>
-                  </div>
-                </dl>
-                <button
-                  type="button"
-                  class="btn-ghost btn-sm drama-cast-ref-upload"
-                  :disabled="saving || selectedCharacter.ref_locked"
-                  @click="refInput?.click()"
-                >
-                  上传参考图
-                </button>
-                <input ref="refInput" class="drama-file" type="file" accept="image/*" @change="onRefFile" />
+                </div>
               </div>
-              <DramaCastChat
-                ref="castChatRef"
-                :messages="castChatMessages"
-                :loading="saving"
-                :disabled="selectedCharacter.ref_locked"
-                :character-name="selectedCharacter.name || selectedCharacter.id"
-                @send="onCastChatSend"
-              />
+
+              <div class="drama-scene-right">
+                <div class="drama-scene-candidates">
+                  <div class="drama-candidates-head">
+                    <h4>{{ castRefActiveSlide?.label || '定妆图' }}</h4>
+                    <div class="drama-candidates-actions">
+                      <span class="drama-candidate-count">
+                        {{ castRefSlides.length ? castRefSlide + 1 : 0 }}/{{ castRefSlides.length }}
+                      </span>
+                      <button
+                        type="button"
+                        class="btn-tiny"
+                        :disabled="selectedCharacterBusy || !selectedCharacter.ref_exists"
+                        @click="emit('lock-ref', selectedCharacter.id)"
+                      >
+                        {{ selectedCharacter.ref_locked ? '解锁' : '锁定' }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="drama-scene-carousel">
+                    <button
+                      type="button"
+                      class="drama-candidate-nav drama-candidate-prev"
+                      :disabled="castRefSlides.length < 2"
+                      aria-label="上一张"
+                      @click="stepCastRefSlide(-1)"
+                    >
+                      ‹
+                    </button>
+                    <div class="drama-candidate-frame">
+                      <img
+                        v-if="castRefActiveSlide?.url"
+                        :src="castRefActiveSlide.url"
+                        :alt="castRefActiveSlide.label"
+                      />
+                      <span v-else class="drama-candidate-empty">{{ castRefActiveSlide?.empty || '暂无定妆图' }}</span>
+                    </div>
+                    <button
+                      type="button"
+                      class="drama-candidate-nav drama-candidate-next"
+                      :disabled="castRefSlides.length < 2"
+                      aria-label="下一张"
+                      @click="stepCastRefSlide(1)"
+                    >
+                      ›
+                    </button>
+                  </div>
+                </div>
+
+                <DramaCastChat
+                  ref="castChatRef"
+                  class="drama-scene-chat"
+                  :messages="castChatMessages"
+                  :loading="selectedCharacterBusy"
+                  :disabled="selectedCharacter.ref_locked"
+                  :character-name="selectedCharacter.name || selectedCharacter.id"
+                  @send="onCastChatSend"
+                />
+              </div>
             </div>
           </div>
 
@@ -1806,8 +1944,8 @@ const statusBar = computed(() => {
             <div class="drama-scene-detail-head">
               <h3>Shot {{ selected.n }}</h3>
               <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-primary btn-sm" :disabled="rendering || shotFrozen || candidatesFull || selectedGeneratingCandidates" @click="onGenerateCandidate">
-                  {{ selectedGeneratingCandidates ? '生成中…' : '生成候选图' }}
+                <button type="button" class="btn-primary btn-sm" :disabled="selectedShotBusy || shotFrozen || candidatesFull" @click="onGenerateCandidate">
+                  {{ selectedGeneratingCandidates ? '生成中…' : selectedShotBusy ? '处理中…' : '生成候选图' }}
                 </button>
               </div>
             </div>
@@ -1847,10 +1985,10 @@ const statusBar = computed(() => {
                     <h4>候选图</h4>
                     <div class="drama-candidates-actions">
                       <span class="drama-candidate-count">{{ sceneCandidatesList.length ? currentCandidateIndex + 1 : 0 }}/{{ sceneCandidatesList.length }}</span>
-                      <button type="button" class="btn-tiny" :disabled="rendering || shotFrozen" @click="emit('toggle-lock', 'scene')">
+                      <button type="button" class="btn-tiny" :disabled="selectedShotBusy || shotFrozen" @click="emit('toggle-lock', 'scene')">
                         {{ isLocked('scene') ? '解锁' : '锁定' }}
                       </button>
-                      <button type="button" class="btn-tiny" :disabled="!currentCandidate" @click="emit('delete-candidate', currentCandidate && currentCandidate.id)">删除</button>
+                      <button type="button" class="btn-tiny" :disabled="selectedShotBusy || !currentCandidate" @click="emit('delete-candidate', currentCandidate && currentCandidate.id)">删除</button>
                     </div>
                   </div>
                   <div class="drama-scene-carousel">
@@ -1863,7 +2001,7 @@ const statusBar = computed(() => {
                   </div>
                 </div>
 
-                <DramaCastChat ref="sceneChatRef" class="drama-scene-chat" title="对话改画面" :character-name="`Shot ${selected.n}`" hint="用自然语言调整画面描述等；保存后可点「生成候选图」生效。" placeholder="例如：改成分镜特写、画面加一条小河…" disabled-placeholder="请先选择镜头" pending-label="正在理解并更新…" :messages="sceneChatMessages" :loading="saving" @send="onSceneChatSend" />
+                <DramaCastChat ref="sceneChatRef" class="drama-scene-chat" title="对话改画面" :character-name="`Shot ${selected.n}`" hint="用自然语言调整画面描述等；保存后可点「生成候选图」生效。" placeholder="例如：改成分镜特写、画面加一条小河…" disabled-placeholder="请先选择镜头" pending-label="正在理解并更新…" :messages="sceneChatMessages" :loading="selectedShotBusy" @send="onSceneChatSend" />
               </div>
             </div>
           </div>
@@ -1915,13 +2053,13 @@ const statusBar = computed(() => {
                 <h3>Shot {{ selected.n }}</h3>
               </div>
               <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-ghost btn-sm" :disabled="saving || !dirty" @click="emit('save')">
-                  {{ saving ? '保存中…' : dirty ? '保存' : '已保存' }}
+                <button type="button" class="btn-ghost btn-sm" :disabled="selectedShotBusy || !dirty" @click="emit('save')">
+                  {{ selectedShotBusy && dirty ? '保存中…' : dirty ? '保存' : '已保存' }}
                 </button>
                 <button
                   type="button"
                   class="btn-ghost btn-sm"
-                  :disabled="saving || rendering || !selected?.files?.motion?.exists"
+                  :disabled="selectedShotBusy || !selected?.files?.motion?.exists"
                   :title="selected?.motion_locked ? '解锁后允许重新生成覆盖 motion' : '锁定后声音/口型不会改写表演母带'"
                   @click="emit('toggle-lock', 'motion')"
                 >
@@ -1930,10 +2068,10 @@ const statusBar = computed(() => {
                 <button
                   type="button"
                   class="btn-primary btn-sm"
-                  :disabled="rendering || !canGenerateI2v"
+                  :disabled="selectedShotBusy || !canGenerateI2v"
                   @click="onGenerateVideo"
                 >
-                  {{ rendering ? '生成中…' : '生成视频' }}
+                  {{ isVideoGeneratingShot(selectedN) || (selectedShotBusy && !dirty) ? '生成中…' : '生成视频' }}
                 </button>
               </div>
             </div>
@@ -2051,7 +2189,7 @@ const statusBar = computed(() => {
                 disabled-placeholder="请先选择镜头"
                 pending-label="正在理解并更新…"
                 :messages="videoChatMessages"
-                :loading="saving"
+                :loading="selectedShotBusy"
                 @send="onVideoChatSend"
               />
               </div>
@@ -2105,16 +2243,16 @@ const statusBar = computed(() => {
                 <h3>Shot {{ selected.n }}</h3>
               </div>
               <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-ghost btn-sm" :disabled="saving || !dirty" @click="emit('save')">
-                  {{ saving ? '保存中…' : dirty ? '保存' : '已保存' }}
+                <button type="button" class="btn-ghost btn-sm" :disabled="selectedShotBusy || !dirty" @click="emit('save')">
+                  {{ selectedShotBusy && dirty ? '保存中…' : dirty ? '保存' : '已保存' }}
                 </button>
                 <button
                   type="button"
                   class="btn-primary btn-sm"
-                  :disabled="rendering || !canGenerateVoice"
+                  :disabled="selectedShotBusy || !canGenerateVoice"
                   @click="onGenerateVoice"
                 >
-                  {{ rendering ? '生成中…' : '生成配音' }}
+                  {{ selectedShotBusy && !dirty ? '生成中…' : '生成配音' }}
                 </button>
               </div>
             </div>
@@ -2271,7 +2409,7 @@ const statusBar = computed(() => {
                 disabled-placeholder="请先选择镜头"
                 pending-label="正在理解并更新…"
                 :messages="voiceChatMessages"
-                :loading="saving"
+                :loading="selectedShotBusy"
                 @send="onVoiceChatSend"
               />
               </div>

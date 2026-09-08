@@ -35,6 +35,7 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
         "load_project",
         lambda s: {"slug": s, "title": "大闹天宫"},
     )
+    monkeypatch.setattr(drama_studio, "load_project_file", lambda _s: None)
 
     class _Jobs:
         def remove_slug(self, _s):
@@ -44,16 +45,14 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
 
     monkeypatch.setattr(dq, "drama_jobs", _Jobs())
 
-    root = object()
-    target = object()
+    class _Root:
+        def is_dir(self):
+            return True
 
-    def fake_resolve(rel):
-        if rel == "dramas":
-            return root
-        return target
+        def iterdir(self):
+            return iter(())
 
-    monkeypatch.setattr(drama_studio, "resolve_safe", fake_resolve)
-    monkeypatch.setattr(drama_studio, "_rel", lambda *parts: "dramas/" + "/".join(parts))
+    root = _Root()
 
     class _Target:
         parents = [root]
@@ -61,7 +60,6 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
         def exists(self):
             return True
 
-    # Make `root not in target.parents` false and exists true
     target_path = _Target()
 
     def fake_resolve2(rel):
@@ -70,6 +68,7 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
         return target_path
 
     monkeypatch.setattr(drama_studio, "resolve_safe", fake_resolve2)
+    monkeypatch.setattr(drama_studio, "_rel", lambda *parts: "dramas/" + "/".join(parts))
     monkeypatch.setattr(drama_studio.shutil, "rmtree", lambda p: None)
 
     def fake_scrub(*terms):
@@ -85,4 +84,5 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
     assert result["ok"] is True
     assert result["jobs_removed"] == 2
     assert result["memory_scrubbed"] is True
+    assert result["removed"] == ["havoc-in-heaven"]
     assert calls == [("havoc-in-heaven", "大闹天宫")]

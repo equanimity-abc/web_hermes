@@ -7,6 +7,7 @@ null bytes, and symlink escapes are rejected (fail closed).
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -28,15 +29,35 @@ def workspace_root() -> Path:
     return root
 
 
+def _norm_fs_path(path: Path) -> str:
+    """Case-/prefix-normalized absolute path for containment checks (Windows-safe)."""
+    s = os.path.normcase(os.path.abspath(str(path)))
+    if s.startswith("\\\\?\\"):
+        s = s[4:]
+    return s
+
+
+def _is_under_root(root: Path, target: Path) -> bool:
+    try:
+        target.relative_to(root)
+        return True
+    except ValueError:
+        pass
+    # Windows: Path.relative_to is case-sensitive; resolve() may also add \\?\ —
+    # both can make a still-inside path look like an escape.
+    rs, ts = _norm_fs_path(root), _norm_fs_path(target)
+    return ts == rs or ts.startswith(rs + os.sep)
+
+
 def resolve_safe(rel_path: str) -> Path:
     """Resolve a user path strictly inside workspace. Raises ValueError on escape."""
     root = workspace_root()
-    raw = (rel_path or ".").strip() or "."
+    raw = (rel_path or ".").strip().replace("\\", "/") or "."
     if _UNSAFE_REL.search(raw):
-        raise ValueError("非法路径字符或绝对路径")
+        raise ValueError(f"非法路径字符或绝对路径：{raw!r}")
     candidate = Path(raw)
     if candidate.is_absolute():
-        raise ValueError("禁止使用绝对路径，请使用相对 workspace 的路径")
+        raise ValueError(f"禁止使用绝对路径，请使用相对 workspace 的路径：{raw!r}")
     # Normalize ".." before resolve so we fail early on obvious escapes
     parts = []
     for part in candidate.parts:
@@ -44,15 +65,13 @@ def resolve_safe(rel_path: str) -> Path:
             continue
         if part == "..":
             if not parts:
-                raise ValueError("路径越出 workspace 沙箱")
+                raise ValueError(f"路径越出 workspace 沙箱：{raw!r}")
             parts.pop()
             continue
         parts.append(part)
     target = (root.joinpath(*parts) if parts else root).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as e:
-        raise ValueError("路径越出 workspace 沙箱") from e
+    if not _is_under_root(root, target):
+        raise ValueError(f"路径越出 workspace 沙箱：{raw!r}")
     return target
 
 

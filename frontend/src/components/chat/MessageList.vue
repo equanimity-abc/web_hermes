@@ -7,7 +7,7 @@ defineProps({
   messages: { type: Array, required: true },
 })
 
-const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama', 'refresh-drama'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama', 'refresh-drama', 'resume-drama'])
 
 const containerRef = ref(null)
 const bottomSentinelRef = ref(null)
@@ -120,6 +120,7 @@ defineExpose({ scrollToBottom, containerRef })
       @dislike="emit('dislike', $event)"
       @open-drama="emit('open-drama', $event)"
       @refresh-drama="emit('refresh-drama', $event)"
+      @resume-drama="emit('resume-drama', $event)"
     />
     <div ref="bottomSentinelRef" class="messages-bottom-sentinel" aria-hidden="true" />
   </div>

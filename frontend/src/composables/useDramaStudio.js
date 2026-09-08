@@ -13,9 +13,13 @@ export function useDramaStudio() {
   const saving = ref(false)
   const rendering = ref(false)
   const generatingCandidateNs = ref([])
+  /** 单角色忙：生成定妆/保存卡时不锁死其它角色 */
+  const busyCharacterIds = ref([])
+  /** 单镜忙：出图/I2V/口型时不锁死其它镜 */
+  const busyShotNs = ref([])
   const error = ref('')
   const notice = ref('')
-  const bust = ref(0)
+  const bust = ref(Date.now())
   const scriptDraft = ref('')
   const scriptImpact = ref(null)
   const boardMode = ref('shots')
@@ -311,11 +315,15 @@ export function useDramaStudio() {
       id: '',
       name: '',
       look: '',
+      hair: '',
+      eyes: '',
+      outfit: '',
+      marks: '',
       gender: '',
       voice: '',
       aliases: '',
       colors: '',
-      ref_size: 1024,
+      ref_size: 1980,
       ref_image_provider: 'seedream',
       ref_image_model: 'doubao-seedream-5-0-pro-260628',
       category: 'character',
@@ -439,11 +447,15 @@ export function useDramaStudio() {
       id: char?.id || '',
       name: char?.name || '',
       look: char?.look || '',
+      hair: char?.hair || '',
+      eyes: char?.eyes || '',
+      outfit: char?.outfit || '',
+      marks: char?.marks || '',
       gender: char?.gender || '',
       voice: char?.voice || '',
       aliases: (char?.aliases || []).join('、'),
       colors: char?.colors || '',
-      ref_size: [640, 1024, 1980].includes(Number(char?.ref_size)) ? Number(char.ref_size) : 1024,
+      ref_size: [640, 1024, 1980].includes(Number(char?.ref_size)) ? Number(char.ref_size) : 1980,
       ref_image_provider: refProvider,
       ref_image_model: refModel,
       category: char?.category || 'character',
@@ -457,7 +469,36 @@ export function useDramaStudio() {
 
   async function refreshProjects() {
     const data = await dramaApi.listProjects()
-    projects.value = data.projects || []
+    const raw = data.projects || []
+    // 后端已按素材量去重；若仍有同名，按 substance / 创建时间保留一份
+    const winners = new Map()
+    for (const item of raw) {
+      const key = String(item?.title || '')
+        .trim()
+        .replace(/^[《"“‘']+|[》"”’']+$/g, '') || String(item?.slug || '')
+      const prev = winners.get(key)
+      if (!prev) {
+        winners.set(key, item)
+        continue
+      }
+      const prevScore = Number(prev.substance || 0)
+      const nextScore = Number(item.substance || 0)
+      if (nextScore !== prevScore) {
+        if (nextScore > prevScore) winners.set(key, item)
+        continue
+      }
+      // 无 substance 时优先更早创建的主副本（重启产生的新 slug 通常更新）
+      if (!prevScore && !nextScore) {
+        const prevC = String(prev.created_at || '9999')
+        const nextC = String(item.created_at || '9999')
+        if (nextC < prevC) winners.set(key, item)
+        continue
+      }
+      const prevT = String(prev.updated_at || prev.created_at || '')
+      const nextT = String(item.updated_at || item.created_at || '')
+      if (nextT >= prevT) winners.set(key, item)
+    }
+    projects.value = [...winners.values()]
     return projects.value
   }
 
@@ -647,8 +688,13 @@ export function useDramaStudio() {
   async function deleteProject(targetSlug) {
     error.value = ''
     notice.value = ''
-    await dramaApi.deleteProject(targetSlug)
-    if (slug.value === targetSlug) {
+    const result = await dramaApi.deleteProject(targetSlug)
+    const removed = new Set(
+      Array.isArray(result?.removed) && result.removed.length
+        ? result.removed.map(String)
+        : [String(targetSlug)],
+    )
+    if (removed.has(String(slug.value || ''))) {
       slug.value = null
       project.value = null
       episodeN.value = null
@@ -659,7 +705,7 @@ export function useDramaStudio() {
       fillCharDraft(null)
     }
     await refreshProjects()
-    return true
+    return result
   }
 
   async function openProject(nextSlug) {
@@ -696,13 +742,17 @@ export function useDramaStudio() {
     void refreshJobs(slug.value)
     const keep = (data.shots || []).some((s) => s.n === selectedN.value)
     const next = keep ? selectedN.value : data.shots?.[0]?.n || null
-    selectShot(next)
+    // 同镜刷新时保留未保存草稿，避免并行改另一镜时被刷掉
+    selectShot(next, { force: !keep || !dirty.value })
   }
 
-  function selectShot(n) {
+  function selectShot(n, { force = true } = {}) {
+    const same = Number(selectedN.value) === Number(n)
     selectedN.value = n
-    const shot = shots.value.find((s) => s.n === n)
-    fillDraft(shot || null)
+    if (!same || force) {
+      const shot = shots.value.find((s) => s.n === n)
+      fillDraft(shot || null)
+    }
   }
 
   function mergeEpisodeShot(updatedShot) {
@@ -711,14 +761,47 @@ export function useDramaStudio() {
     const idx = episode.value.shots.findIndex((s) => Number(s.n) === n)
     if (idx < 0) return
     episode.value.shots.splice(idx, 1, updatedShot)
-    if (Number(selectedN.value) === n) {
+    if (Number(selectedN.value) === n && !dirty.value) {
       fillDraft(updatedShot)
     }
   }
 
   function finishCandidateGeneration(shotN) {
     generatingCandidateNs.value = generatingCandidateNs.value.filter((n) => n !== shotN)
-    if (!generatingCandidateNs.value.length) rendering.value = false
+    markShotIdle(shotN)
+  }
+
+  function isCharacterBusy(cid) {
+    return busyCharacterIds.value.includes(String(cid || ''))
+  }
+
+  function isShotBusy(n) {
+    const sn = Number(n)
+    return busyShotNs.value.includes(sn) || generatingCandidateNs.value.includes(sn)
+  }
+
+  function markCharacterBusy(cid) {
+    const id = String(cid || '')
+    if (!id || busyCharacterIds.value.includes(id)) return false
+    busyCharacterIds.value = [...busyCharacterIds.value, id]
+    return true
+  }
+
+  function markCharacterIdle(cid) {
+    const id = String(cid || '')
+    busyCharacterIds.value = busyCharacterIds.value.filter((x) => x !== id)
+  }
+
+  function markShotBusy(n) {
+    const sn = Number(n)
+    if (!sn || busyShotNs.value.includes(sn)) return false
+    busyShotNs.value = [...busyShotNs.value, sn]
+    return true
+  }
+
+  function markShotIdle(n) {
+    const sn = Number(n)
+    busyShotNs.value = busyShotNs.value.filter((x) => x !== sn)
   }
 
   function toggleShotSelected(n) {
@@ -867,7 +950,9 @@ export function useDramaStudio() {
 
   async function saveShot() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
-    saving.value = true
+    const shotN = selectedN.value
+    if (isShotBusy(shotN)) return
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     try {
@@ -909,7 +994,7 @@ export function useDramaStudio() {
         notice.value = '没有改动'
         return
       }
-      await dramaApi.patchShot(slug.value, episodeN.value, selectedN.value, body)
+      await dramaApi.patchShot(slug.value, episodeN.value, shotN, body)
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = Object.prototype.hasOwnProperty.call(body, 'duration')
@@ -918,22 +1003,23 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markShotIdle(shotN)
     }
   }
 
   async function toggleLock(layer) {
     if (!slug.value || !episodeN.value || !selectedN.value || !layer) return
+    const shotN = selectedN.value
+    if (!markShotBusy(shotN)) return
     const locked = selected.value?.locked || []
     const has = locked.includes(layer)
-    saving.value = true
     error.value = ''
     notice.value = ''
     try {
       const result = await dramaApi.lockShot(
         slug.value,
         episodeN.value,
-        selectedN.value,
+        shotN,
         has ? { unlock: [layer] } : { lock: [layer] },
       )
       if (result.shot) {
@@ -950,24 +1036,25 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markShotIdle(shotN)
     }
   }
 
   async function rerenderLayer(layer) {
     if (!slug.value || !episodeN.value || !selectedN.value) return
+    const shotN = selectedN.value
     if (dirty.value) {
       await saveShot()
       if (error.value) return
     }
-    rendering.value = true
+    if (!markShotBusy(shotN)) return
     error.value = ''
     notice.value = ''
     try {
       const result = await dramaApi.rerenderShot(
         slug.value,
         episodeN.value,
-        selectedN.value,
+        shotN,
         layer ? [layer] : undefined,
       )
       bust.value = Date.now()
@@ -977,7 +1064,7 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      rendering.value = false
+      markShotIdle(shotN)
     }
   }
 
@@ -1229,7 +1316,13 @@ export function useDramaStudio() {
     if (!slug.value) return
     project.value = await dramaApi.getProject(slug.value)
     const keep = characters.value.some((c) => c.id === selectedCharacterId.value)
-    selectCharacter(keep ? selectedCharacterId.value : characters.value[0]?.id || null)
+    const nextId = keep ? selectedCharacterId.value : characters.value[0]?.id || null
+    // 同角色刷新时不覆盖本地未保存编辑，便于并行改多个角色
+    if (String(nextId || '') !== String(selectedCharacterId.value || '')) {
+      selectCharacter(nextId)
+    } else {
+      selectedCharacterId.value = nextId
+    }
     if (episodeN.value) {
       try {
         await openEpisode(episodeN.value)
@@ -1287,16 +1380,21 @@ export function useDramaStudio() {
       error.value = '请填写名称'
       return
     }
-    saving.value = true
+    const busyId = cid || `__new__:${charDraft.value.name}`
+    if (!markCharacterBusy(busyId)) return
     error.value = ''
     try {
       const body = {
         name: String(charDraft.value.name || '').trim(),
         look: charDraft.value.look,
+        hair: charDraft.value.hair || '',
+        eyes: charDraft.value.eyes || '',
+        outfit: charDraft.value.outfit || '',
+        marks: charDraft.value.marks || '',
         gender: charDraft.value.gender || '',
         voice: charDraft.value.voice,
         aliases: String(charDraft.value.aliases || '').trim(),
-        ref_size: charDraft.value.ref_size || 1024,
+        ref_size: charDraft.value.ref_size || 1980,
         ref_image_provider: charDraft.value.ref_image_provider,
         ref_image_model: charDraft.value.ref_image_model,
         category: charDraft.value.category || 'character',
@@ -1309,16 +1407,16 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markCharacterIdle(busyId)
     }
   }
 
   async function lockSelectedRef(cid) {
     const targetId = String(cid || selectedCharacterId.value || '').trim()
     if (!slug.value || !targetId) return
+    if (!markCharacterBusy(targetId)) return
     const target = characters.value.find((c) => c.id === targetId) || null
     const locked = !target?.ref_locked
-    saving.value = true
     error.value = ''
     try {
       await dramaApi.lockCharacterRef(slug.value, targetId, locked)
@@ -1326,29 +1424,30 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markCharacterIdle(targetId)
     }
   }
 
   async function uploadSelectedRef(file) {
-    if (!slug.value || !selectedCharacterId.value || !file) return
-    saving.value = true
+    const targetId = String(selectedCharacterId.value || '').trim()
+    if (!slug.value || !targetId || !file) return
+    if (!markCharacterBusy(targetId)) return
     error.value = ''
     try {
-      await dramaApi.uploadCharacterRef(slug.value, selectedCharacterId.value, file)
+      await dramaApi.uploadCharacterRef(slug.value, targetId, file)
       bust.value = Date.now()
       await refreshCast()
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markCharacterIdle(targetId)
     }
   }
 
   async function deleteSelectedCharacter(cid) {
     const targetId = String(cid || selectedCharacterId.value || '').trim()
     if (!slug.value || !targetId) return
-    saving.value = true
+    if (!markCharacterBusy(targetId)) return
     error.value = ''
     try {
       await dramaApi.deleteCharacter(slug.value, targetId)
@@ -1357,16 +1456,16 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markCharacterIdle(targetId)
     }
   }
 
   async function generateShotCandidates(count = 1) {
     const shotN = selectedN.value
     if (!slug.value || !episodeN.value || !shotN) return
-    if (generatingCandidateNs.value.includes(shotN)) return
+    if (generatingCandidateNs.value.includes(shotN) || busyShotNs.value.includes(Number(shotN))) return
     generatingCandidateNs.value = [...generatingCandidateNs.value, shotN]
-    rendering.value = true
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     try {
@@ -1432,36 +1531,40 @@ export function useDramaStudio() {
   }
 
   async function deleteCandidate(cid) {
-    if (!slug.value || !episodeN.value || !selectedN.value || !cid) return
-    saving.value = true
+    const shotN = selectedN.value
+    if (!slug.value || !episodeN.value || !shotN || !cid) return
+    if (isShotBusy(shotN)) return
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     try {
-      const result = await dramaApi.deleteCandidate(slug.value, episodeN.value, selectedN.value, cid)
+      const result = await dramaApi.deleteCandidate(slug.value, episodeN.value, shotN, cid)
       if (result.shot) mergeEpisodeShot(result.shot)
       bust.value = Date.now()
       notice.value = `已删除候选 ${cid}`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markShotIdle(shotN)
     }
   }
 
   async function uploadShotScene(file) {
-    if (!slug.value || !episodeN.value || !selectedN.value || !file) return
-    rendering.value = true
+    const shotN = selectedN.value
+    if (!slug.value || !episodeN.value || !shotN || !file) return
+    if (isShotBusy(shotN)) return
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     try {
-      const result = await dramaApi.uploadShotScene(slug.value, episodeN.value, selectedN.value, file)
+      const result = await dramaApi.uploadShotScene(slug.value, episodeN.value, shotN, file)
       bust.value = Date.now()
       await openEpisode(episodeN.value)
       notice.value = `已用手传图覆盖 ${result.chosen || '画面'}（配音保留）`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      rendering.value = false
+      markShotIdle(shotN)
     }
   }
 
@@ -1581,7 +1684,8 @@ export function useDramaStudio() {
       await saveShot()
       if (error.value) return
     }
-    rendering.value = true
+    if (isShotBusy(shotN)) return
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     setVideoGenProgress({
@@ -1617,7 +1721,7 @@ export function useDramaStudio() {
         message: error.value,
       })
     } finally {
-      rendering.value = false
+      markShotIdle(shotN)
       window.setTimeout(() => {
         if (videoGenProgress.value?.status !== 'running') setVideoGenProgress(null)
       }, 2500)
@@ -1626,16 +1730,18 @@ export function useDramaStudio() {
 
   async function generateShotLip() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
+    const shotN = selectedN.value
     if (dirty.value) {
       await saveShot()
       if (error.value) return
     }
-    rendering.value = true
+    if (isShotBusy(shotN)) return
+    markShotBusy(shotN)
     error.value = ''
     notice.value = ''
     try {
       // 声音页：配音 + 旁白叠层 + 口型一起重建（与批量一致）
-      const result = await dramaApi.rerenderShot(slug.value, episodeN.value, selectedN.value, [
+      const result = await dramaApi.rerenderShot(slug.value, episodeN.value, shotN, [
         'overlay',
         'voice',
         'lip',
@@ -1645,11 +1751,11 @@ export function useDramaStudio() {
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = `Shot ${selectedN.value} 配音与口型已完成`
+      notice.value = `Shot ${shotN} 配音与口型已完成`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      rendering.value = false
+      markShotIdle(shotN)
     }
   }
 
@@ -2091,19 +2197,26 @@ export function useDramaStudio() {
 
   async function generateCharacterRef(cid) {
     if (!slug.value || !cid) return
-    saving.value = true
+    if (!markCharacterBusy(cid)) return
     error.value = ''
     try {
+      const selected = String(selectedCharacterId.value || '') === String(cid)
+      const card = characters.value.find((c) => String(c.id) === String(cid)) || {}
+      const src = selected ? charDraft.value : card
       await dramaApi.saveCharacter(slug.value, cid, {
-        name: String(charDraft.value.name || '').trim(),
-        look: charDraft.value.look,
-        gender: charDraft.value.gender || '',
-        voice: charDraft.value.voice,
-        aliases: String(charDraft.value.aliases || '').trim(),
-        ref_size: charDraft.value.ref_size || 1024,
-        ref_image_provider: charDraft.value.ref_image_provider,
-        ref_image_model: charDraft.value.ref_image_model,
-        category: charDraft.value.category || 'character',
+        name: String(src.name || '').trim(),
+        look: src.look,
+        hair: src.hair || '',
+        eyes: src.eyes || '',
+        outfit: src.outfit || '',
+        marks: src.marks || '',
+        gender: src.gender || '',
+        voice: src.voice,
+        aliases: String(src.aliases || '').trim(),
+        ref_size: src.ref_size || 1980,
+        ref_image_provider: src.ref_image_provider,
+        ref_image_model: src.ref_image_model,
+        category: src.category || 'character',
       })
       const rec = await dramaApi.generateCharacterRef(slug.value, cid)
       bust.value = Date.now()
@@ -2112,13 +2225,13 @@ export function useDramaStudio() {
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
-      saving.value = false
+      markCharacterIdle(cid)
     }
   }
 
   async function refineCharacterRef(cid, instruction) {
     if (!slug.value || !cid || !String(instruction || '').trim()) return null
-    saving.value = true
+    if (!markCharacterBusy(cid)) return null
     error.value = ''
     try {
       const data = await dramaApi.refineCharacterRef(slug.value, cid, instruction)
@@ -2132,7 +2245,7 @@ export function useDramaStudio() {
       error.value = e.message || String(e)
       return null
     } finally {
-      saving.value = false
+      markCharacterIdle(cid)
     }
   }
 
@@ -2185,8 +2298,9 @@ export function useDramaStudio() {
   async function refineShotChat(stage, shotN, instruction) {
     const text = String(instruction || '').trim()
     if (!slug.value || !episodeN.value || !shotN || !text) return null
+    if (isShotBusy(shotN)) return null
     pushShotChatMessage(stage, shotN, 'user', text)
-    saving.value = true
+    markShotBusy(shotN)
     error.value = ''
     try {
       const data = await dramaApi.refineShot(slug.value, episodeN.value, shotN, text, stage)
@@ -2205,7 +2319,7 @@ export function useDramaStudio() {
       pushShotChatMessage(stage, shotN, 'assistant', error.value)
       return null
     } finally {
-      saving.value = false
+      markShotIdle(shotN)
     }
   }
 
@@ -2237,8 +2351,13 @@ export function useDramaStudio() {
       await runPool(
         cards,
         async (c) => {
-          await dramaApi.generateCharacterRef(slug.value, c.id)
-          return c
+          markCharacterBusy(c.id)
+          try {
+            await dramaApi.generateCharacterRef(slug.value, c.id)
+            return c
+          } finally {
+            markCharacterIdle(c.id)
+          }
         },
         {
           onProgress: (completed, total, item, result) => {
@@ -2411,8 +2530,13 @@ export function useDramaStudio() {
       await runPool(
         targets,
         async (s) => {
-          const result = await runI2vForShot(s.n)
-          return result
+          markShotBusy(s.n)
+          try {
+            const result = await runI2vForShot(s.n)
+            return result
+          } finally {
+            markShotIdle(s.n)
+          }
         },
         {
           onProgress: (completed, total, item, result) => {
@@ -2495,8 +2619,13 @@ export function useDramaStudio() {
       await runPool(
         targets,
         async (s) => {
-          await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice', 'lip'])
-          return s
+          markShotBusy(s.n)
+          try {
+            await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice', 'lip'])
+            return s
+          } finally {
+            markShotIdle(s.n)
+          }
         },
         {
           onProgress: (completed, total, item, result) => {
@@ -2553,6 +2682,10 @@ export function useDramaStudio() {
     saving,
     rendering,
     generatingCandidateNs,
+    busyCharacterIds,
+    busyShotNs,
+    isCharacterBusy,
+    isShotBusy,
     videoGenProgress,
     batchProgress,
     error,

@@ -10,7 +10,7 @@ const props = defineProps({
   index: { type: Number, required: true },
 })
 
-const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama', 'refresh-drama'])
+const emit = defineEmits(['copy', 'edit', 'regenerate', 'like', 'dislike', 'open-drama', 'refresh-drama', 'resume-drama'])
 
 const htmlContent = computed(() => {
   const html = renderMarkdown(props.message.content)
@@ -46,8 +46,16 @@ const dramaPct = computed(() => {
 const canRefreshDrama = computed(() => {
   const j = dramaJob.value
   if (!j?.jobId) return false
-  if (j.refreshing) return false
+  if (j.refreshing || j.resuming) return false
   return j.canRefresh || j.state === 'idle' || j.state === 'error'
+})
+const canResumeDrama = computed(() => {
+  const j = dramaJob.value
+  if (!j) return false
+  if (j.refreshing || j.resuming) return false
+  if (j.state === 'running' || j.state === 'pending') return false
+  if (j.state === 'done' && j.mediaReady) return false
+  return j.canResume || j.state === 'error' || j.state === 'idle'
 })
 const dramaProgressTitle = computed(() => {
   const s = dramaJob.value?.state
@@ -138,10 +146,19 @@ const showMarkdown = computed(() => {
               :message="dramaProgressMessage"
             />
             <button
+              v-if="canResumeDrama"
+              type="button"
+              class="drama-refresh-btn drama-resume-btn"
+              :disabled="!!dramaJob?.resuming || !!dramaJob?.refreshing"
+              @click="emit('resume-drama', index)"
+            >
+              {{ dramaJob?.resuming ? '续跑中…' : '继续渲染' }}
+            </button>
+            <button
               v-if="canRefreshDrama"
               type="button"
               class="drama-refresh-btn"
-              :disabled="!!dramaJob?.refreshing"
+              :disabled="!!dramaJob?.refreshing || !!dramaJob?.resuming"
               @click="emit('refresh-drama', index)"
             >
               {{ dramaJob?.refreshing ? '查询中…' : '查询进度' }}
@@ -278,5 +295,15 @@ const showMarkdown = computed(() => {
 .drama-refresh-btn:disabled {
   opacity: 0.65;
   cursor: default;
+}
+
+.drama-resume-btn {
+  border-color: #86efac;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.drama-resume-btn:hover:not(:disabled) {
+  background: #d1fae5;
 }
 </style>

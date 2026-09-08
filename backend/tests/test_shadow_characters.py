@@ -32,6 +32,18 @@ def test_face_exempt_and_shadow_card():
     assert character_requires_face_identity(face) is True
 
 
+def test_atmospheric_eyes_not_face_locked():
+    from tools.drama_characters import is_atmospheric_partial_face
+
+    assert is_atmospheric_partial_face("月亮背面的眼睛") is True
+    assert is_atmospheric_partial_face("嫦娥") is False
+    atm = {"name": "月亮背面的眼睛", "look": "红眼睛", "category": "character"}
+    face = {"name": "嫦娥", "look": "月白宫装", "category": "character"}
+    assert is_shadow_stage_card(atm) is False  # 可保留角色栏，但不锁脸
+    assert character_requires_face_identity(atm) is False
+    assert character_requires_face_identity(face) is True
+
+
 def test_match_prefers_face_card_over_silhouette():
     face = {
         "id": "houyi",

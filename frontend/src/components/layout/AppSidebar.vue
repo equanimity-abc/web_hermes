@@ -85,7 +85,10 @@ const emit = defineEmits([
           <rect x="3" y="4" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.5" />
           <path d="M6 8h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
         </svg>
-        <span class="session-title">{{ item.title }}</span>
+        <span class="session-title-stack">
+          <span class="session-title">{{ item.title }}</span>
+          <span v-if="item.slug" class="session-sub">{{ item.slug }}</span>
+        </span>
         <button
           type="button"
           class="btn-delete"

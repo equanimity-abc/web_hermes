@@ -39,6 +39,7 @@ from tools.drama_studio import (
     rerender_dirty_shots,
     rerender_one_shot,
     retry_render_job,
+    resume_render_job,
     save_character,
     save_script,
     upload_character_ref,
@@ -169,6 +170,10 @@ class CharacterBody(BaseModel):
     category: str | None = None
     aliases: list[str] | str | None = None
     look: str | None = None
+    hair: str | None = None
+    eyes: str | None = None
+    outfit: str | None = None
+    marks: str | None = None
     colors: str | None = None
     ref_size: int | None = None
     ref_image_provider: str | None = None
@@ -784,6 +789,38 @@ async def drama_cancel_job(job_id: str):
 async def drama_retry_job(job_id: str):
     try:
         return retry_render_job(job_id)
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
+
+
+class JobResumeBody(BaseModel):
+    job_id: str = ""
+    kind: str = ""
+    slug: str = ""
+    episode: int = 0
+    force: bool | None = None
+    shot: int | None = None
+    layers: list[str] | None = None
+
+
+@router.post("/jobs/resume")
+async def drama_resume_job(body: JobResumeBody):
+    """历史失败会话续跑：有 job_id 则重试；否则按 slug/episode/kind 新建同类型任务。"""
+    try:
+        params: dict = {}
+        if body.shot is not None:
+            params["shot"] = body.shot
+        if body.layers is not None:
+            params["layers"] = body.layers
+        if body.force is not None:
+            params["force"] = body.force
+        return resume_render_job(
+            job_id=body.job_id,
+            kind=body.kind,
+            slug=body.slug,
+            episode=body.episode,
+            params=params or None,
+        )
     except (DramaNotFound, DramaBadRequest) as e:
         raise _http(e) from e
 

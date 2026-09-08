@@ -21,6 +21,7 @@ def test_prompt_with_identity_refs():
     assert "定妆" in one and "全新构图" in one
     two = ark_providers._prompt_with_identity_refs("双人镜", ref_count=2)
     assert "图1" in two and "身份锁" in two and "图2" in two
+    assert "拼贴" in two or "叠印" in two
     none = ark_providers._prompt_with_identity_refs("空镜", ref_count=0)
     assert none == "空镜"
 

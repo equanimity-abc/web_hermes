@@ -192,7 +192,10 @@ def rewrite_scene_for_plan(scene: str, plan: dict[str, Any]) -> str:
     identity = next((s for s in slots if s.get("role") == "identity"), slots[0])
     name = str(identity.get("character_name") or identity.get("character_id") or "").strip()
     text2 = re.sub(r"竖屏远景", "竖屏中近景", text)
+    text2 = re.sub(r"竖屏全景", "竖屏中近景", text2)
     text2 = re.sub(r"(?<![中近])远景", "中近景", text2)
+    text2 = re.sub(r"(?<![中近])全景", "中近景", text2)
+    text2 = re.sub(r"镜头拉远", "镜头保持主体面部清晰", text2)
     if name and name not in text2:
         text2 = f"{text2}，以「{name}」面部为画面主脸"
     elif name:

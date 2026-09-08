@@ -516,10 +516,12 @@ def _subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None
 
 
 def locked_ref_path(slug: str, shot: dict[str, Any]) -> Path | None:
+    from tools.drama_characters import identity_ref_rel
+
     char = _subject_character(slug, shot)
     if not char or not char.get("ref_locked") or not ref_exists(slug, char):
         return None
-    rel = str(char.get("ref") or ref_rel(slug, str(char.get("id") or "")))
+    rel = identity_ref_rel(slug, char)
     try:
         path = resolve_safe(rel)
     except ValueError:
@@ -528,9 +530,13 @@ def locked_ref_path(slug: str, shot: dict[str, Any]) -> Path | None:
 
 
 def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
+    from tools.drama_characters import identity_ref_rel
+
     if not char or not char.get("ref_locked") or not ref_exists(slug, char):
         return None
-    rel = str(char.get("ref") or ref_rel(slug, str(char.get("id") or ""))).replace("\\", "/")
+    rel = identity_ref_rel(slug, char)
+    if not rel:
+        return None
     try:
         path = resolve_safe(rel)
     except ValueError:
@@ -1170,7 +1176,22 @@ def score_ssim_paths(paths: list[Path]) -> dict[str, Any]:
         return _skip_check("too_short", hint="帧数不足，闪烁脚本未能出分，不得记为通过")
     scores = [_ssim_gray(frames[i], frames[i + 1]) for i in range(len(frames) - 1)]
     mean = round(sum(scores) / len(scores), 4)
-    return {"status": "ok", "method": "ssim", "ssim": mean, "pairs": len(scores)}
+    ordered = sorted(scores)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        median = round(ordered[mid], 4)
+    else:
+        median = round((ordered[mid - 1] + ordered[mid]) / 2, 4)
+    # 用 mean 与 median 的较高者过闸：单对异常帧（粒子/切光）不误杀整镜
+    score = max(mean, median)
+    return {
+        "status": "ok",
+        "method": "ssim",
+        "ssim": score,
+        "ssim_mean": mean,
+        "ssim_median": median,
+        "pairs": len(scores),
+    }
 
 
 def _extract_gray_frames(video: Path, *, count: int = FLICKER_FRAMES) -> list[Path]:
@@ -1236,6 +1257,8 @@ def qc_shot_flicker(slug: str, shot: dict[str, Any], *, apply: bool = True) -> d
         "hint": "" if passed else f"闪烁 SSIM {ssim} < {thresholds['ssim_min']}，请重做运动（不重配音）",
         "method": "ssim",
         "ssim": ssim,
+        "ssim_mean": scored.get("ssim_mean"),
+        "ssim_median": scored.get("ssim_median"),
         "ssim_min": thresholds["ssim_min"],
         "pairs": scored.get("pairs") or 0,
         "dirtied": [],

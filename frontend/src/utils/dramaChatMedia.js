@@ -108,13 +108,23 @@ export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
       progressBits.push(`已结束回调 ${finished}/${total}`)
     }
   }
-  if (shot != null) progressBits.push(`失败于第 ${shot} 镜`)
+  // 导出/整集 QC 失败时 progress.shot 常是最后完成的镜号，勿误报「失败于第 N 镜」
+  const shotFromReason = raw.match(/第\s*(\d+)\s*镜/) || raw.match(/Shot\s*(\d+)/i)
+  const exportGate = /QC 硬闸|导出被|响度验收/i.test(raw)
+  if (shotFromReason) {
+    progressBits.push(`失败于第 ${shotFromReason[1]} 镜`)
+  } else if (shot != null && !exportGate) {
+    progressBits.push(`失败于第 ${shot} 镜`)
+  }
 
   let reason = raw
   let tip = ''
   if (/缺少本镜画面/.test(raw)) {
     tip =
       '请打开漫剧工作台 →「画面」页为该镜生成并锁定候选图，再重新渲染。'
+  } else if (/闪烁|SSIM/i.test(raw)) {
+    tip =
+      '多为运动层抖动。继续渲染会自动重做该镜运动；仍失败可到工作台「视频」页单独重生成运动。'
   } else if (/未达阈值|手工重抽|cosine=/i.test(raw)) {
     tip =
       '定妆多半已锁定。请打开漫剧工作台 → 该镜「画面」候选墙手工重抽/换图（保证说话人正脸清晰），再重新渲染该镜。'
@@ -124,7 +134,7 @@ export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
   } else if (/缺少可用模型 Key|ARK_API_KEY|专业档缺少/i.test(raw)) {
     tip = '请在设置里配置对应模型 API Key 后重试。'
   } else if (/QC 硬闸|响度/i.test(raw)) {
-    tip = '可在工作台查看 QC 详情；工作台允许强制导出，对话 Agent 不会强制放行。'
+    tip = '可在工作台查看 QC 详情；继续渲染会按脏层重做。工作台允许强制导出，对话 Agent 不会强制放行。'
   } else if (/真 I2V|Ken Burns|mock/i.test(raw)) {
     tip = '请检查 Seedance/I2V 密钥与配额后重试该镜。'
   }
@@ -248,14 +258,17 @@ function setMessageDramaJob(message, patch) {
   const state = String(message.dramaJob.state || '')
   if (state === 'error') {
     message.dramaJob.canRefresh = patch.canRefresh !== false
+    message.dramaJob.canResume = patch.canResume !== false
   } else if (state === 'done') {
     message.dramaJob.canRefresh = false
+    message.dramaJob.canResume = false
     // Keep brief done record then drop so banner disappears.
     upsertDramaChatJob(jobId, { ...message.dramaJob, state: 'done' })
     clearDramaChatJob(jobId)
     return
   } else if (state === 'running' || state === 'pending') {
     message.dramaJob.canRefresh = false
+    message.dramaJob.canResume = false
   }
   upsertDramaChatJob(jobId, {
     ...message.dramaJob,

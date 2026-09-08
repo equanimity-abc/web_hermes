@@ -6,6 +6,7 @@ Intended for chat agent `produce_episode` and background queue `produce_episode`
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -359,17 +360,22 @@ def ensure_character_refs(
     from tools.drama_characters import (
         character_requires_face_identity,
         find_character,
+        identity_ref_rel,
         load_characters,
         ref_exists,
+        ref_face_exists,
         ref_rel,
         set_ref_locked,
     )
+    from tools.drama_common import parse_slug
     from tools.drama_parallel import parallel_map, shot_concurrency
     from tools.drama_qc import validate_character_ref
     from tools.drama_series import invalidate_character_embedding
     from tools.drama_studio import generate_character_ref
+    from tools.drama_video import generate_character_face_portrait
     from tools.workspace import resolve_safe
 
+    slug = parse_slug(slug)
     generated: list[str] = []
     pending: list[tuple[str, str]] = []
     cards = load_characters(slug)
@@ -385,11 +391,28 @@ def ensure_character_refs(
         if not str(rec.get("look") or "").strip():
             continue
         if rec.get("ref_locked") and ref_exists(slug, rec):
-            continue  # 已锁定且存在：不可变，跳过
+            # 已锁定全身定妆：若缺正脸特写则补生成（不改全身）
+            if not ref_face_exists(slug, rec):
+                pending.append((cid, str(rec.get("name") or cid)))
+            continue  # 已锁定且存在：不可变，跳过全身重生成
+        # 已有未锁定定妆：也视为用户资产，流水线不得覆盖（只在完全缺失时生成）
+        if ref_exists(slug, rec):
+            if not ref_face_exists(slug, rec):
+                pending.append((cid, str(rec.get("name") or cid)))
+            elif lock and not rec.get("ref_locked"):
+                try:
+                    set_ref_locked(slug, cid, True)
+                except Exception:
+                    pass
+            else:
+                continue
+            continue
         pending.append((cid, str(rec.get("name") or cid)))
 
     def _ref_path(rec: dict[str, Any]) -> Path | None:
-        rel = str(rec.get("ref") or ref_rel(slug, str(rec.get("id") or ""))).replace("\\", "/")
+        rel = identity_ref_rel(slug, rec)
+        if not rel:
+            return None
         try:
             return resolve_safe(rel)
         except ValueError:
@@ -402,17 +425,37 @@ def ensure_character_refs(
             except Exception:
                 pass
 
+    def _ensure_face(rec: dict[str, Any], name: str) -> dict[str, Any]:
+        if ref_face_exists(slug, rec):
+            return rec
+        _progress(on_progress, message=f"正脸特写 {name}")
+        face_rel = generate_character_face_portrait(slug, rec, seed=None)
+        if not face_rel:
+            return rec
+        from tools.drama_characters import upsert_character
+
+        cid_local = str(rec.get("id") or "")
+        upsert_character(slug, {"id": cid_local, "ref_face": face_rel})
+        invalidate_character_embedding(slug, cid_local)
+        return find_character(load_characters(slug), cid_local) or rec
+
     def _one(item: tuple[str, str]) -> str:
         cid, name = item
         rec = find_character(load_characters(slug), cid)
         if rec is None:
             raise RuntimeError(f"角色「{name}」（{cid}）角色卡不存在，无法生成定妆")
-        # 已有未锁定的 ref：先校验，通过就直接锁，避免无谓重生成。
+        # 已有未锁定的 ref：先补特写，再校验，通过就直接锁，避免无谓重生成。
         if ref_exists(slug, rec):
+            rec = _ensure_face(rec, name)
             check = validate_character_ref(_ref_path(rec))
             if check["ok"]:
                 _lock_if_needed(rec)
                 return cid
+            if rec.get("ref_locked"):
+                raise RuntimeError(
+                    f"角色「{name}」已锁定定妆未通过身份校验："
+                    f"{check.get('hint') or check.get('reason')}；请在工作台解锁后重生成正脸特写"
+                )
             raise RuntimeError(
                 f"角色「{name}」已有定妆未通过锁定前校验："
                 f"{check.get('hint') or check.get('reason')}；请在工作台手工重生成或上传"
@@ -426,6 +469,8 @@ def ensure_character_refs(
         rec = find_character(load_characters(slug), cid)
         if rec is None:
             raise RuntimeError(f"角色「{name}」（{cid}）定妆生成后角色卡丢失")
+        if not ref_face_exists(slug, rec):
+            rec = _ensure_face(rec, name)
         check = validate_character_ref(_ref_path(rec))
         if check["ok"]:
             _lock_if_needed(rec)
@@ -488,8 +533,8 @@ def _hq_process_one_shot(
 ) -> dict[str, Any]:
     """Render one shot end-to-end for HQ produce (thread-safe via merge_save_shot).
 
-    单次出图 + 身份验收：不通过则 Fail Loud。禁止自动重抽/换种子/分层重试；
-    候选墙仅供工作台手工重抽。
+    单次出图 + 身份验收；若因构图/脸面积/锁脸失败，自动加强制露脸提示并换种子重抽画面 **至多 1 次**，
+    仍失败则 Fail Loud（不再无限重试）。
     """
     import copy
 
@@ -514,7 +559,26 @@ def _hq_process_one_shot(
             return {"shot": sn, "skipped": True, "reason": "missing"}
         if "shot" in set(shot.get("locked") or []):
             return {"shot": sn, "skipped": True, "reason": "locked"}
-        shot = copy.deepcopy(shot)
+        # 续跑：clip+身份通过且无脏层时，再验闪烁；闪烁不过则重做运动，不整镜重跑。
+        if not force:
+            assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
+            identity = shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
+            dirty = set(shot.get("dirty") or [])
+            if assets.get("clip") and identity.get("pass") and not (dirty & {"motion", "clip", "scene"}):
+                from tools.drama_qc import check_allows_pass, qc_shot_flicker
+
+                flicker = shot.get("qc_flicker") if isinstance(shot.get("qc_flicker"), dict) else {}
+                if str(flicker.get("status") or "") != "ok":
+                    flicker = qc_shot_flicker(slug, shot, apply=False)
+                if check_allows_pass(flicker):
+                    return {"shot": sn, "skipped": True, "reason": "already_ok"}
+                # 闪烁未过：只走运动/成片重做路径
+                shot = copy.deepcopy(shot)
+                shot["_flicker_only_repair"] = True
+            else:
+                shot = copy.deepcopy(shot)
+        else:
+            shot = copy.deepcopy(shot)
 
     from tools.drama_series import apply_dual_speaker_notes
 
@@ -526,89 +590,136 @@ def _hq_process_one_shot(
     if force or not (shot.get("assets") or {}).get("clip"):
         layers = list(HQ_SHOT_LAYERS)
 
-    if cancel_check:
-        cancel_check()
-    info = render_shot_layers(
-        slug,
-        n,
-        shot,
-        layers,
-        title=ep_title,
-        candidate_count=1,
+    degrades: list[Any] = []
+    identity_last: dict[str, Any] = (
+        shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
     )
-    degrades = list(info.get("degrades") or [])
-    merge_save_shot(slug, n, shot)
+    flicker_only = bool(shot.pop("_flicker_only_repair", None))
 
-    # 出图后按字幕/角色重算说话人与空间主体，再验身份（避免脏 plan/speaker 串戏）
-    from tools.drama_models import apply_shot_class
-    from tools.drama_spatial import build_spatial_plan
+    if not flicker_only:
+        def _run_scene_and_qc(*, retry: int) -> tuple[dict[str, Any], dict[str, Any]]:
+            if cancel_check:
+                cancel_check()
+            local_layers = list(layers)
+            if retry > 0:
+                # 身份失败只重抽画面相关层，避免重复烧 TTS
+                local_layers = ["scene", "overlay", "clip"]
+                shot["_identity_retry"] = retry
+                shot["_identity_framing_boost"] = True
+                dirty = list(shot.get("dirty") or [])
+                for layer in ("scene", "clip", "motion"):
+                    if layer not in dirty:
+                        dirty.append(layer)
+                shot["dirty"] = dirty
+            info_local = render_shot_layers(
+                slug,
+                n,
+                shot,
+                local_layers,
+                title=ep_title,
+                candidate_count=1,
+            )
+            merge_save_shot(slug, n, shot)
 
-    apply_shot_class(shot, force=False)
-    build_spatial_plan(slug, shot)
-    identity_last = qc_shot_identity(slug, n, shot, apply=True)
-    merge_save_shot(slug, n, shot)
+            from tools.drama_models import apply_shot_class
+            from tools.drama_spatial import build_spatial_plan
 
-    if str(identity_last.get("status") or "") == "skipped":
-        identity_reason = str(identity_last.get("reason") or "").strip()
-        identity_hint = str(identity_last.get("hint") or "").strip()
-        role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
-        if identity_reason == "no_locked_ref":
-            detail = f"角色「{role}」缺少锁定定妆图（角色卡参考图未锁定）"
-        elif identity_reason == "no_scene":
-            detail = f"角色「{role}」本镜缺少画面"
-        elif identity_reason == "proxy_identity":
-            detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
-        elif identity_reason == "no_face":
-            detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；请在工作台手工重抽该镜画面）"
-        elif identity_reason == "unmatched_face":
-            detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '请在工作台手工重抽并保证说话人露脸'}）"
-        elif identity_reason == "no_embedding":
-            detail = f"角色「{role}」本镜画面未能提取人脸嵌入，请在工作台手工重抽该镜画面"
-        elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
-            detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
-        elif identity_reason in ("missing_left", "missing_right"):
-            detail = f"角色「{role}」定妆参考图或本镜画面文件缺失"
-        elif identity_reason == "no_ok_checks":
-            detail = f"角色「{role}」无可打分画面（回退参考缺依赖）"
-        else:
-            detail = identity_hint or f"角色「{role}」缺少定妆或依赖"
-        raise RuntimeError(
-            f"第{sn}镜身份验收未通过（{detail}），专业档不得记为通过"
-        )
+            apply_shot_class(shot, force=False)
+            build_spatial_plan(slug, shot)
+            identity_local = qc_shot_identity(slug, n, shot, apply=True)
+            merge_save_shot(slug, n, shot)
+            return info_local, identity_local
 
-    if str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass"):
-        role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
-        hint = str(identity_last.get("hint") or "")
-        raise RuntimeError(
-            f"第{sn}镜角色「{role}」身份相似度未达阈值"
-            f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
-            f"{('；' + hint) if hint else ''}），请在工作台手工重抽或提高定妆质量"
-        )
+        info, identity_last = _run_scene_and_qc(retry=0)
+        degrades = list(info.get("degrades") or [])
 
-    # P2：通过后写入跨镜轨迹
-    try:
-        from tools.drama_track import record_shot_identity_pass
+        def _identity_needs_retry(identity: dict[str, Any]) -> bool:
+            status = str(identity.get("status") or "")
+            reason = str(identity.get("reason") or "")
+            if status == "ok" and not identity.get("pass"):
+                return True
+            if status == "skipped" and reason in (
+                "no_face",
+                "unmatched_face",
+                "no_embedding",
+                "face_too_small",
+            ):
+                return True
+            return False
 
-        record_shot_identity_pass(slug, n, shot, identity_last)
-    except Exception:
-        pass
-    # P3：通过帧入库，供后续镜检索构图记忆
-    try:
-        from tools.drama_frame_memory import add_passed_frame
+        if _identity_needs_retry(identity_last):
+            try:
+                info, identity_last = _run_scene_and_qc(retry=1)
+                degrades = list(info.get("degrades") or [])
+            finally:
+                shot.pop("_identity_framing_boost", None)
+                shot.pop("_identity_retry", None)
 
-        add_passed_frame(slug, episode=n, shot=shot, identity=identity_last)
-    except Exception:
-        pass
-    merge_save_shot(slug, n, shot)
-    if cancel_check:
-        cancel_check()
+        if str(identity_last.get("status") or "") == "skipped":
+            identity_reason = str(identity_last.get("reason") or "").strip()
+            identity_hint = str(identity_last.get("hint") or "").strip()
+            role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
+            if identity_reason == "no_locked_ref":
+                detail = f"角色「{role}」缺少锁定定妆图（角色卡参考图未锁定）"
+            elif identity_reason == "no_scene":
+                detail = f"角色「{role}」本镜缺少画面"
+            elif identity_reason == "proxy_identity":
+                detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
+            elif identity_reason == "no_face":
+                detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；已自动重抽仍失败）"
+            elif identity_reason == "unmatched_face":
+                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '已自动重抽仍失败'}）"
+            elif identity_reason == "no_embedding":
+                detail = f"角色「{role}」本镜画面未能提取人脸嵌入（已自动重抽仍失败）"
+            elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
+                detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
+            elif identity_reason in ("missing_left", "missing_right"):
+                detail = f"角色「{role}」定妆参考图或本镜画面文件缺失"
+            elif identity_reason == "no_ok_checks":
+                detail = f"角色「{role}」无可打分画面（回退参考缺依赖）"
+            else:
+                detail = identity_hint or f"角色「{role}」缺少定妆或依赖"
+            raise RuntimeError(
+                f"第{sn}镜身份验收未通过（{detail}），专业档不得记为通过"
+            )
+
+        if str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass"):
+            role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
+            hint = str(identity_last.get("hint") or "")
+            raise RuntimeError(
+                f"第{sn}镜角色「{role}」身份相似度未达阈值"
+                f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
+                f"{('；' + hint) if hint else ''}），已自动重抽画面仍失败"
+            )
+
+        # P2：通过后写入跨镜轨迹
+        try:
+            from tools.drama_track import record_shot_identity_pass
+
+            record_shot_identity_pass(slug, n, shot, identity_last)
+        except Exception:
+            pass
+        # P3：通过帧入库，供后续镜检索构图记忆
+        try:
+            from tools.drama_frame_memory import add_passed_frame
+
+            add_passed_frame(slug, episode=n, shot=shot, identity=identity_last)
+        except Exception:
+            pass
+        merge_save_shot(slug, n, shot)
+        if cancel_check:
+            cancel_check()
 
     models = models_with_overrides(slug, shot=shot, episode=n)
     from tools.drama_motion_floors import assert_motion_floor
 
     assert_motion_floor(shot, slug=slug, models=models)
     planned = effective_motion_ladder(shot, slug=slug, models=models)
-    i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
+
+    def _run_i2v() -> dict[str, Any]:
+        return generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
+
+    i2v = _run_i2v()
     src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
     kind = infer_kind(shot)
     if planned not in ("L0",) and kind not in ("establishing", "insert", "crowd", "title"):
@@ -624,6 +735,33 @@ def _hq_process_one_shot(
             )
     merge_save_shot(slug, n, shot)
 
+    # 闪烁验收：失败则自动换一次运动（不重配音），仍失败则 Fail Loud（避免拖到导出才拦）
+    from tools.drama_qc import check_allows_pass, qc_shot_flicker
+
+    flicker = qc_shot_flicker(slug, shot, apply=True)
+    merge_save_shot(slug, n, shot)
+    if not check_allows_pass(flicker) and src in ("ai", "keys"):
+        shot["_flicker_retry"] = 1
+        # 解锁后强制重做运动，避免被 auto-lock 挡住
+        locked = [x for x in (shot.get("locked") or []) if x != "motion"]
+        shot["locked"] = locked
+        dirty = list(shot.get("dirty") or [])
+        for layer in ("motion", "clip"):
+            if layer not in dirty:
+                dirty.append(layer)
+        shot["dirty"] = dirty
+        i2v = _run_i2v()
+        src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
+        merge_save_shot(slug, n, shot)
+        flicker = qc_shot_flicker(slug, shot, apply=True)
+        merge_save_shot(slug, n, shot)
+        shot.pop("_flicker_retry", None)
+    if not check_allows_pass(flicker):
+        hint = str(flicker.get("hint") or flicker.get("reason") or "闪烁未通过")
+        raise RuntimeError(
+            f"第{sn}镜闪烁验收未通过（{hint}），已自动重做运动仍失败"
+        )
+
     if cancel_check:
         cancel_check()
     rerender_shot(slug, n, sn, layers=["clip"])
@@ -634,6 +772,7 @@ def _hq_process_one_shot(
         "i2v_tried": bool(i2v.get("tried")),
         "i2v_source": src,
         "degrades": degrades,
+        "flicker_ssim": flicker.get("ssim"),
     }
 
 
@@ -652,7 +791,8 @@ def produce_episode_hq(
 
     Phase A studio profile: Fail Loud — missing keys / identity fail / fake I2V /
     QC fail all raise. Agent must keep allow_qc_fail_export=False.
-    出图与定妆均为单次生成，禁止自动重抽；候选墙仅供工作台手工重抽。
+    身份构图失败至多自动重抽画面 1 次；闪烁失败至多自动重做运动 1 次；定妆仍为单次；
+    候选墙供工作台手工微调。
 
     Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
     """
@@ -707,11 +847,17 @@ def produce_episode_hq(
     clock.end("sync")
 
     clock.start("cast")
-    from tools.drama_characters import ensure_character_looks_expanded, ensure_character_anchors, purge_shadow_character_cards
+    from tools.drama_characters import (
+        ensure_character_looks_expanded,
+        ensure_character_anchors,
+        ensure_character_traits,
+        purge_shadow_character_cards,
+    )
 
     purged_shadows = purge_shadow_character_cards(slug)
     created_chars = ensure_characters_from_shots(slug, doc)
     expanded_looks = ensure_character_looks_expanded(slug)
+    trait_cids = ensure_character_traits(slug)
     anchored = ensure_character_anchors(slug)
     _assert_identity_deps_ready(slug)
     ref_chars = ensure_character_refs(slug, on_progress=on_progress)
@@ -721,7 +867,8 @@ def produce_episode_hq(
         stage="cast",
         message=(
             f"角色 {len(created_chars)} 新建 · 清除影子卡 {len(purged_shadows)} · "
-            f"look 扩写 {len(expanded_looks)} · 特征锚 {len(anchored)} · 定妆 {len(ref_chars)} 生成"
+            f"look 扩写 {len(expanded_looks)} · 特征字段 {len(trait_cids)} · "
+            f"特征锚 {len(anchored)} · 定妆 {len(ref_chars)} 生成"
         ),
     )
     clock.end(
@@ -729,6 +876,7 @@ def produce_episode_hq(
         characters=len(created_chars),
         refs=len(ref_chars),
         looks=len(expanded_looks),
+        traits=len(trait_cids),
         anchors=len(anchored),
         shadows_purged=len(purged_shadows),
     )
@@ -1007,29 +1155,67 @@ def init_project_from_premise(
     title: str = "",
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Create dramas/{slug}/project.json from a one-line premise."""
-    from tools.drama_common import parse_slug, utc_now
-    from tools.drama_studio import DramaBadRequest, load_project_file, save_project
+    """Create dramas/{slug}/project.json from a one-line premise.
+
+    同一聊天多次重启续写时：即使传入新 slug，也优先复用同名/同梗概项目，
+    避免侧栏堆出多个《嫦娥奔月》。
+    """
+    from tools.drama_common import (
+        DramaBadRequest,
+        find_project_slug_by_logline,
+        find_project_slug_by_title,
+        load_drama_project_file,
+        parse_slug,
+        utc_now,
+    )
     from tools.workspace import resolve_safe
+
+    def _normalize_title(value: str) -> str:
+        return str(value or "").strip().strip("《》\"'“”‘’")
+
+    def _save_project_local(project_slug: str, data: dict[str, Any]) -> None:
+        data = dict(data)
+        data["updated_at"] = utc_now()
+        path = resolve_safe(f"dramas/{project_slug}/project.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     text = str(premise or "").strip()
     if not text:
         raise DramaBadRequest("请先给一句故事梗概")
 
-    if slug:
+    given_title = _normalize_title(title)
+
+    # 先按标题/梗概撞车（覆盖显式 slug），除非 overwrite
+    reused = None
+    if not overwrite:
+        if given_title:
+            reused = find_project_slug_by_title(given_title)
+        if not reused:
+            reused = find_project_slug_by_logline(text)
+        # 尚未起名时，从梗概里抽《标题》再撞一次
+        if not reused and not given_title:
+            m = re.search(r"《([^》]{1,32})》", text)
+            if m:
+                reused = find_project_slug_by_title(m.group(1))
+
+    if reused:
+        sid = parse_slug(reused)
+    elif slug:
         sid = parse_slug(slug)
     else:
-        sid = parse_slug(suggest_project_slug(text, title))
+        sid = parse_slug(suggest_project_slug(text, given_title))
 
-    existing = load_project_file(sid)
-    given_title = str(title or "").strip()
+    existing = load_drama_project_file(sid)
 
     if existing and not overwrite:
         existing["logline"] = text
         if given_title:
             existing["title"] = given_title
         existing["updated_at"] = utc_now()
-        save_project(sid, existing)
+        existing.pop("archived", None)
+        existing.pop("hidden", None)
+        _save_project_local(sid, existing)
         ensure_hq_preset(sid)
         return existing
 
@@ -1043,14 +1229,26 @@ def init_project_from_premise(
         "updated_at": now,
         "episodes": (existing or {}).get("episodes") if existing and not overwrite else [],
     }
-    save_project(sid, project)
+    _save_project_local(sid, project)
     ensure_hq_preset(sid)
     resolve_safe(f"dramas/{sid}/episodes").mkdir(parents=True, exist_ok=True)
 
     if not given_title:
         project["title"] = _draft_title(sid, text)
         project["updated_at"] = utc_now()
-        save_project(sid, project)
+        # 起名后再按标题撞车复用，避免同名剧多份目录
+        collided = find_project_slug_by_title(project["title"])
+        if collided and collided != sid and not overwrite:
+            other = load_drama_project_file(collided)
+            if other:
+                other["logline"] = text
+                other["updated_at"] = utc_now()
+                other.pop("archived", None)
+                other.pop("hidden", None)
+                _save_project_local(collided, other)
+                ensure_hq_preset(collided)
+                return other
+        _save_project_local(sid, project)
 
     readme = resolve_safe(f"dramas/{sid}/README.md")
     if not readme.is_file():
@@ -1125,6 +1323,47 @@ def create_from_premise(
         episode_numbers = [start_ep]
     else:
         episode_numbers = list(range(1, ep_total + 1))
+
+    # 已有分集内容时直接复用，绝不自动重跑成片（避免覆盖用户刚改的定妆/画面）
+    existing_eps = [ep for ep in (project.get("episodes") or []) if int(ep.get("n") or 0) >= 1]
+    if existing_eps and not overwrite:
+        first = episode_numbers[0]
+        _progress(on_progress, stage="reuse", message=f"复用已有项目 {slug}（不重渲）…")
+        play_url = None
+        play_path = None
+        try:
+            rel = output_rel(slug, first)
+            from tools.workspace import resolve_safe as _resolve
+
+            if _resolve(rel).is_file():
+                play_path = rel
+                play_url = f"/api/workspace/file?path={rel}"
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "action": "create_from_premise",
+            "reused": True,
+            "slug": slug,
+            "title": title,
+            "episode": first,
+            "series": project["series"],
+            "logline": text,
+            "scripts": [
+                {
+                    "episode": int(ep.get("n") or 0),
+                    "title": ep.get("title"),
+                    "seconds": ep.get("seconds"),
+                }
+                for ep in existing_eps
+            ],
+            "play_url": play_url,
+            "path": play_path,
+            "hint": (
+                f"已复用项目 {slug}（{title}），保留现有定妆/分镜/成片，未自动重渲。"
+                "若要重做某集，请显式调用 produce_episode。"
+            ),
+        }
 
     if cancel_check:
         cancel_check()

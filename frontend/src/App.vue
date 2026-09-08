@@ -34,6 +34,8 @@ const {
   saving: dramaSaving,
   rendering: dramaRendering,
   generatingCandidateNs: dramaGeneratingCandidateNs,
+  busyCharacterIds: dramaBusyCharacterIds,
+  busyShotNs: dramaBusyShotNs,
   videoGenProgress: dramaVideoGenProgress,
   batchProgress: dramaBatchProgress,
   error: dramaError,
@@ -202,6 +204,7 @@ const {
   toggleDislike,
   stashCurrent,
   refreshDramaJob,
+  resumeDramaJob,
 } = useChat({
   getSessionId: () => currentSessionId.value,
   setSessionId: (id) => {
@@ -362,12 +365,17 @@ async function openDramaFromChat({ slug, episode } = {}) {
 }
 
 async function deleteDramaProject(slug) {
-  if (!window.confirm(`确定删除漫剧项目「${slug}」？该操作会删除剧本、分镜、配音与成片，不可恢复。`)) {
+  if (!window.confirm(`确定删除漫剧项目「${slug}」？\n同名副本会一并删除，剧本/分镜/成片不可恢复。`)) {
     return
   }
   try {
-    await deleteProject(slug)
-    showToast(`已删除项目 ${slug}`)
+    const result = await deleteProject(slug)
+    const removed = Array.isArray(result?.removed) ? result.removed : [slug]
+    showToast(
+      removed.length > 1
+        ? `已删除 ${removed.length} 个同名项目（${removed.join('、')}）`
+        : `已删除项目 ${slug}`,
+    )
   } catch (e) {
     console.error('删除漫剧项目失败:', e)
     showToast(e.message || '删除项目失败')
@@ -403,6 +411,15 @@ async function onRefreshDramaJob(index) {
   } catch (e) {
     console.error('查询任务进度失败:', e)
     showToast(e?.message || '查询任务进度失败')
+  }
+}
+
+async function onResumeDramaJob(index) {
+  try {
+    await resumeDramaJob(index)
+  } catch (e) {
+    console.error('继续渲染失败:', e)
+    showToast(e?.message || '继续渲染失败')
   }
 }
 </script>
@@ -441,6 +458,7 @@ async function onRefreshDramaJob(index) {
       @dislike="toggleDislike"
       @open-drama="openDramaFromChat"
       @refresh-drama="onRefreshDramaJob"
+      @resume-drama="onResumeDramaJob"
     />
 
     <DramaStudio
@@ -457,6 +475,8 @@ async function onRefreshDramaJob(index) {
       :saving="dramaSaving"
       :rendering="dramaRendering"
       :generating-candidate-ns="dramaGeneratingCandidateNs"
+      :busy-character-ids="dramaBusyCharacterIds"
+      :busy-shot-ns="dramaBusyShotNs"
       :video-gen-progress="dramaVideoGenProgress"
       :error="dramaError"
       :notice="dramaNotice"

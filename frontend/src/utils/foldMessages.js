@@ -90,8 +90,10 @@ export function foldMessagesForUi(rawMessages = []) {
               jobId: String(parsed.job_id),
               slug: parsed.slug || '',
               episode: parsed.episode || 1,
+              kind: parsed.kind || parsed.action || 'produce_episode',
               line: String(parsed.error || parsed.message || '任务失败'),
               canRefresh: true,
+              canResume: true,
             }
             continue
           }
@@ -103,8 +105,10 @@ export function foldMessagesForUi(rawMessages = []) {
             jobId: String(parsed.job_id),
             slug: parsed.slug || '',
             episode: parsed.episode || 1,
-            line: '历史任务未完成，可手动查询进度',
+            kind: parsed.kind || parsed.action || 'produce_episode',
+            line: '历史任务未完成，可查询进度或继续渲染',
             canRefresh: true,
+            canResume: true,
           }
         } catch {
           /* ignore */
@@ -158,9 +162,10 @@ export function foldMessagesForUi(rawMessages = []) {
             slug: pendingSlug,
             episode: pendingEpisode,
             line: pendingTools.some((t) => t.status === 'error')
-              ? '历史任务失败，可手动查询进度'
-              : '历史任务未完成，可手动查询进度',
+              ? '历史任务失败，可点「继续渲染」'
+              : '历史任务未完成，可查询进度或继续渲染',
             canRefresh: true,
+            canResume: true,
           }
         : undefined,
     }

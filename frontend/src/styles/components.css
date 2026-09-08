@@ -98,6 +98,26 @@
   color: var(--color-text-secondary);
 }
 
+.session-title-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-title-stack .session-title {
+  flex: none;
+}
+
+.session-sub {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-item.active .session-title {
   color: var(--color-text);
   font-weight: 500;

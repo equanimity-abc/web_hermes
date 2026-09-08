@@ -577,11 +577,19 @@ def _scene_prompt(
     if not speaker:
         speaker = infer_speaker(shot).strip()
     if needs_face:
-        # 「远景+配角拎主体」会只画出配角正脸；文案与运镜一并收到中近景。
+        # 「远景/全景+配角抢脸」会让主体脸过小或侧脸；文案与运镜收到中近景。
         scene = re.sub(r"竖屏远景", "竖屏中近景", scene)
+        scene = re.sub(r"竖屏全景", "竖屏中近景", scene)
         scene = re.sub(r"(?<![中近])远景", "中近景", scene)
+        scene = re.sub(r"(?<![中近])全景", "中近景", scene)
+        scene = re.sub(r"镜头拉远", "镜头保持主体中近景、面部清晰可辨", scene)
         if style == "pull_out":
             style = "punch_in"
+    if shot.get("_identity_framing_boost") and needs_face:
+        scene = (
+            f"{scene}，强制中近景或近景，身份锁角色正面或四分之三正面，"
+            "面部占画面足够大，禁止侧脸背影、禁止把第二人物整脸拼进月亮/背景抢主体"
+        )
     kinetic_map = {
         "punch_in": "动态姿态，隐含运动感，衣摆飘动",
         "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
@@ -932,22 +940,112 @@ def _generate_scene_image(
 def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: str | None = None, seed: int | None = None) -> str | None:
     """文生图出定妆图（角色三视图 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None.
 
-    ``seed`` 显式传入时用于「重生成换一张脸」（定妆锁定前校验失败重试）；None 时保持
-    原有的确定性种子（slug:cid:out_rel），兼容既有调用。
+    ``seed`` 显式传入时用于重试；``None`` 时用时间扰动，避免「重新生成」仍画出同一张脸。
+    写入前会把旧定妆备份为 ``*.prev.png``，防止误覆盖无法找回。
     """
+    import time
     import zlib
 
     from tools.drama_characters import build_asset_ref_prompt, character_ref_shot, ref_canvas_size, ref_rel
+    from tools.drama_common import parse_slug
 
-    cid = str(char.get("id") or "")
+    slug = parse_slug(slug)
+    cid = str(char.get("id") or "").strip()
     prompt = build_asset_ref_prompt(char)
-    out_rel = str(dest_rel or ref_rel(slug, cid)).replace("\\", "/")
+    canonical = ref_rel(slug, cid) if cid else ""
+    if not canonical:
+        raise ValueError("定妆生成失败：角色 id 为空")
+    # 只接受落在规范 characters/{id}.png 的 dest；坏 dest_rel（含 ../）一律忽略
+    out_rel = canonical
+    if dest_rel:
+        cand = str(dest_rel).replace("\\", "/").strip()
+        if cand == canonical:
+            out_rel = cand
+        else:
+            try:
+                resolve_safe(cand)
+                # 允许同目录合法别名，但仍优先规范路径，避免写散
+                if cand.startswith(f"dramas/{slug}/characters/") and ".." not in cand.split("/"):
+                    out_rel = cand
+            except ValueError:
+                out_rel = canonical
     dest = resolve_safe(out_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    seed = seed if seed is not None else (zlib.crc32(f"{slug}:{cid}:{out_rel}".encode()) & 0x7FFFFFFF)
+    if seed is None:
+        seed = (zlib.crc32(f"{slug}:{cid}:{out_rel}:{time.time_ns()}".encode()) & 0x7FFFFFFF)
+    else:
+        seed = int(seed) & 0x7FFFFFFF
+    # 覆盖前备份，方便误覆盖后找回
+    if dest.is_file() and dest.stat().st_size > 0:
+        bak = dest.with_suffix(".prev.png")
+        try:
+            bak.write_bytes(dest.read_bytes())
+        except OSError:
+            pass
     gen_w, gen_h = ref_canvas_size(char)
     ok = _generate_scene_image(
         prompt, dest, seed=seed, slug=slug, shot=character_ref_shot(char), width=gen_w, height=gen_h
+    )
+    if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
+        return None
+    return out_rel
+
+
+def generate_character_face_portrait(
+    slug: str,
+    char: dict[str, Any],
+    *,
+    seed: int | None = None,
+) -> str | None:
+    """基于全身定妆（若有）生成正脸特写锚，写入 ``{cid}_face.png``。"""
+    import time
+    import zlib
+
+    from tools.drama_characters import (
+        build_face_ref_prompt,
+        character_ref_shot,
+        ref_canvas_size,
+        ref_exists,
+        ref_face_rel,
+        ref_rel,
+    )
+    from tools.drama_common import parse_slug
+
+    slug = parse_slug(slug)
+    cid = str(char.get("id") or "").strip()
+    if not cid:
+        raise ValueError("正脸特写生成失败：角色 id 为空")
+    out_rel = ref_face_rel(slug, cid)
+    dest = resolve_safe(out_rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if seed is None:
+        seed = (zlib.crc32(f"{slug}:{cid}:face:{out_rel}:{time.time_ns()}".encode()) & 0x7FFFFFFF)
+    else:
+        seed = (int(seed) + 97) & 0x7FFFFFFF
+    if dest.is_file() and dest.stat().st_size > 0:
+        bak = dest.with_name(dest.stem + ".prev.png")
+        try:
+            bak.write_bytes(dest.read_bytes())
+        except OSError:
+            pass
+    prompt = build_face_ref_prompt(char)
+    refs: tuple[str, ...] = ()
+    body_rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    if ref_exists(slug, char):
+        refs = (body_rel,)
+    gen_w, gen_h = ref_canvas_size(char)
+    # 特写略收一点边长仍保持方形，便于脸占比
+    face_w = max(1024, min(int(gen_w), 1980))
+    face_h = face_w
+    ok = _generate_scene_image(
+        prompt,
+        dest,
+        seed=seed,
+        slug=slug,
+        shot=character_ref_shot(char),
+        width=face_w,
+        height=face_h,
+        refs=refs,
     )
     if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
         return None
@@ -1031,6 +1129,9 @@ def generate_shot_candidates(
     shot.pop("_memory_hits", None)
     shot["prompt"] = prompt
     base_seed = character_seed(slug, cast, int(shot.get("n") or 1)) & 0x7FFFFFFF
+    retry_n = int(shot.get("_identity_retry") or 0)
+    if retry_n:
+        base_seed = (base_seed + retry_n * 9973) & 0x7FFFFFFF
     ids = next_candidate_ids(shot, count)
     created: list[dict[str, Any]] = []
     used_ai = False

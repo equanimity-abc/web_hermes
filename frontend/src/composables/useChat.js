@@ -6,6 +6,7 @@ import {
   streamChat,
   uploadWorkspaceFile,
 } from '@/api/chat'
+import * as dramaApi from '@/api/drama'
 import {
   attachDramaMedia,
   awaitPendingDramaVideos,
@@ -425,7 +426,7 @@ export function useChat(deps) {
     const msg = list[index]
     if (!msg || msg.role !== 'assistant') return false
     const job = msg.dramaJob
-    if (!job?.jobId || job.refreshing) return false
+    if (!job?.jobId || job.refreshing || job.resuming) return false
 
     msg.dramaJob = {
       ...job,
@@ -461,6 +462,10 @@ export function useChat(deps) {
           msg.dramaJob.state === 'error' ||
           msg.dramaJob.state === 'idle' ||
           (msg.dramaJob.state !== 'done' && !msg.media?.length)
+        msg.dramaJob.canResume =
+          msg.dramaJob.state === 'error' ||
+          msg.dramaJob.state === 'idle' ||
+          (msg.dramaJob.state !== 'done' && !msg.media?.length)
       }
       if (!msg.dramaJob || (msg.dramaJob.state !== 'running' && msg.dramaJob.state !== 'pending')) {
         msg.isStreaming = false
@@ -474,6 +479,144 @@ export function useChat(deps) {
         msg.dramaJob.state = 'error'
         msg.dramaJob.line = e?.message || '查询失败'
         msg.dramaJob.canRefresh = true
+        msg.dramaJob.canResume = true
+      }
+      msg.isStreaming = false
+      throw e
+    }
+  }
+
+  async function resumeDramaJob(index) {
+    const list = messages.value || []
+    const msg = list[index]
+    if (!msg || msg.role !== 'assistant') return false
+    const job = msg.dramaJob || {}
+    if (job.resuming || job.refreshing) return false
+
+    let kind = job.kind || ''
+    let slug = job.slug || ''
+    let episode = Number(job.episode || 0) || 0
+    let oldJobId = job.jobId || ''
+    let toolHit = null
+    for (const tool of msg.toolCalls || []) {
+      if (String(tool.name || '') !== 'tiktok_drama') continue
+      try {
+        const data = JSON.parse(tool.result || '')
+        if (!data?.job_id && !data?.slug) continue
+        toolHit = tool
+        oldJobId = String(data.job_id || oldJobId || '')
+        slug = String(data.slug || slug || '')
+        episode = Number(data.episode || episode || 0) || episode
+        kind = String(data.kind || data.action || kind || 'produce_episode')
+        if (kind === 'create_from_premise') kind = 'produce_episode'
+        break
+      } catch {
+        /* */
+      }
+    }
+    if (!slug && !oldJobId) return false
+
+    msg.dramaJob = {
+      ...job,
+      resuming: true,
+      refreshing: false,
+      state: 'running',
+      line: '正在继续渲染…',
+      canRefresh: false,
+      canResume: false,
+      slug,
+      episode: episode || 1,
+      kind: kind || 'produce_episode',
+    }
+    msg.isStreaming = true
+    msg.status = '正在继续渲染…'
+    statusText.value = '正在继续渲染…'
+
+    try {
+      let next
+      try {
+        next = await dramaApi.resumeJob({
+          job_id: oldJobId,
+          kind: kind || 'produce_episode',
+          slug,
+          episode: episode || 1,
+        })
+      } catch (e) {
+        // 旧 job 丢失时直接按项目集新建 produce
+        if (!slug) throw e
+        next = await dramaApi.createJob(slug, episode || 1, {
+          kind: kind || 'produce_episode',
+        })
+      }
+      const newId = String(next?.job_id || '')
+      if (!newId) throw new Error('续跑未返回 job_id')
+
+      const payload = {
+        ok: true,
+        action: kind || 'produce_episode',
+        kind: next?.kind || kind || 'produce_episode',
+        job_id: newId,
+        slug: next?.slug || slug,
+        episode: next?.episode || episode || 1,
+        status: next?.status || 'pending',
+      }
+      if (toolHit) {
+        toolHit.result = JSON.stringify(payload)
+        toolHit.status = 'running'
+      } else {
+        msg.toolCalls = [
+          ...(msg.toolCalls || []),
+          {
+            id: `resume-${newId}`,
+            name: 'tiktok_drama',
+            arguments: '',
+            result: JSON.stringify(payload),
+            status: 'running',
+          },
+        ]
+      }
+      msg.dramaJob = {
+        state: 'running',
+        jobId: newId,
+        slug: payload.slug,
+        episode: payload.episode,
+        kind: payload.kind,
+        line: '成片生成中，续跑已启动…',
+        resuming: false,
+        canRefresh: false,
+        canResume: false,
+      }
+      msg.content = ''
+
+      await awaitPendingDramaVideos(msg, {
+        sessionId: deps.getSessionId?.() || '',
+        forcePoll: true,
+        onStatus: (text) => {
+          msg.status = text || msg.status || ''
+          statusText.value = text || ''
+        },
+      })
+      if (msg.dramaJob) {
+        msg.dramaJob.resuming = false
+        msg.dramaJob.canRefresh =
+          msg.dramaJob.state === 'error' ||
+          msg.dramaJob.state === 'idle' ||
+          (msg.dramaJob.state !== 'done' && !msg.media?.length)
+        msg.dramaJob.canResume = msg.dramaJob.canRefresh
+      }
+      if (!msg.dramaJob || (msg.dramaJob.state !== 'running' && msg.dramaJob.state !== 'pending')) {
+        msg.isStreaming = false
+      }
+      stashCurrent(deps.getSessionId?.() || '')
+      scrollToBottom()
+      return true
+    } catch (e) {
+      if (msg.dramaJob) {
+        msg.dramaJob.resuming = false
+        msg.dramaJob.state = 'error'
+        msg.dramaJob.line = e?.message || '续跑失败'
+        msg.dramaJob.canRefresh = true
+        msg.dramaJob.canResume = true
       }
       msg.isStreaming = false
       throw e
@@ -505,5 +648,6 @@ export function useChat(deps) {
     stashCurrent,
     resumeAfterMessagesLoad,
     refreshDramaJob,
+    resumeDramaJob,
   }
 }

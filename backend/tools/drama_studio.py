@@ -7,6 +7,22 @@ import shutil
 from typing import Any
 from urllib.parse import quote
 
+# drama_common 必须最先导入：其它 tools 子模块可能回勾 drama_studio，
+# 若此时尚未绑定 normalize_project_title 等，会触发 ImportError。
+from tools.drama_common import (
+    DramaBadRequest,
+    DramaNotFound,
+    find_project_slug_by_logline,
+    find_project_slug_by_title,
+    load_drama_project_file,
+    normalize_project_title,
+    parse_episode,
+    parse_shot_n,
+    parse_slug,
+    project_substance_score,
+)
+from tools.workspace import resolve_safe, workspace_root
+
 from tools.drama_characters import (
     CharacterError,
     delete_character,
@@ -58,14 +74,6 @@ from tools.drama_snapshots import (
     restore_snapshot as _restore_snapshot,
     take_snapshot as _take_snapshot,
 )
-from tools.workspace import resolve_safe, workspace_root
-from tools.drama_common import (
-    DramaBadRequest,
-    DramaNotFound,
-    parse_episode,
-    parse_shot_n,
-    parse_slug,
-)
 
 _ROOT = "dramas"
 CAMERAS = (
@@ -106,16 +114,7 @@ def _write_text(rel: str, content: str) -> str:
 
 
 def load_project_file(name: str) -> dict[str, Any] | None:
-    raw = _read_text(_rel(name, "project.json"))
-    if raw is None:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data
+    return load_drama_project_file(name)
 
 
 def load_project(slug: str) -> dict[str, Any]:
@@ -251,23 +250,46 @@ def list_projects() -> dict[str, Any]:
     for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
         if not child.is_dir():
             continue
+        if child.name.startswith("_"):
+            continue
         data = load_project_file(child.name)
         if not data:
             continue
+        if data.get("archived") or data.get("hidden"):
+            continue
         episodes = data.get("episodes") or []
         videos = data.get("videos") or []
+        sid = str(data.get("slug") or child.name)
         items.append(
             {
-                "slug": data.get("slug") or child.name,
+                "slug": sid,
                 "title": data.get("title") or child.name,
                 "logline": data.get("logline") or "",
                 "episodes": len(episodes),
                 "videos": len(videos),
                 "path": _rel(child.name),
                 "updated_at": data.get("updated_at"),
+                "created_at": data.get("created_at"),
+                "substance": project_substance_score(sid),
             }
         )
-    return {"workspace": str(workspace_root()), "count": len(items), "projects": items}
+    # 同名剧只保留内容最全的一份，避免侧栏堆出多个《嫦娥奔月》
+    winners: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = normalize_project_title(item.get("title")) or str(item.get("slug") or "")
+        prev = winners.get(key)
+        if prev is None or _project_rank(item) > _project_rank(prev):
+            winners[key] = item
+    out = list(winners.values())
+    out.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
+    return {"workspace": str(workspace_root()), "count": len(out), "projects": out}
+
+
+def _project_rank(item: dict[str, Any]) -> tuple:
+    return (
+        int(item.get("substance") or 0),
+        str(item.get("updated_at") or item.get("created_at") or ""),
+    )
 
 
 def get_project(slug: str) -> dict[str, Any]:
@@ -325,27 +347,62 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     return get_project(slug)
 
 
-def remove_project(slug: str) -> dict[str, Any]:
-    """Delete a whole drama project directory and its queue records (fail closed)."""
+def remove_project(slug: str, *, purge_same_title: bool = True) -> dict[str, Any]:
+    """Delete a whole drama project directory and its queue records (fail closed).
+
+    侧栏按标题去重后只显示一份；若磁盘上还有同名副本，删除时一并清掉，
+    否则会出现「删了嫦娥奔月又冒出来一个」的错觉。
+    """
     slug = parse_slug(slug)
     project = load_project(slug)
     title = str((project or {}).get("title") or "").strip()
+    title_key = normalize_project_title(title)
     from tools.drama_queue import drama_jobs
 
-    jobs_removed = drama_jobs.remove_slug(slug)
+    targets = [slug]
+    if purge_same_title and title_key:
+        root = resolve_safe(_ROOT)
+        if root.is_dir():
+            for child in root.iterdir():
+                if not child.is_dir() or child.name.startswith("_"):
+                    continue
+                other_slug = child.name
+                if other_slug == slug:
+                    continue
+                data = load_project_file(other_slug)
+                if not data:
+                    continue
+                if normalize_project_title(str(data.get("title") or "")) == title_key:
+                    targets.append(other_slug)
 
-    root = resolve_safe(_ROOT)
-    target = resolve_safe(_rel(slug))
-    if target == root or root not in target.parents:
-        raise DramaBadRequest("非法项目路径，拒绝删除")
-    if target.exists():
-        shutil.rmtree(target)
+    removed: list[str] = []
+    jobs_removed = 0
+    errors: list[str] = []
+    for sid in targets:
+        try:
+            jobs_removed += int(drama_jobs.remove_slug(sid) or 0)
+            target = resolve_safe(_rel(sid))
+            root = resolve_safe(_ROOT)
+            if target == root or root not in target.parents:
+                raise DramaBadRequest("非法项目路径，拒绝删除")
+            if target.exists():
+                shutil.rmtree(target)
+            removed.append(sid)
+        except DramaBadRequest:
+            raise
+        except OSError as e:
+            errors.append(f"{sid}: {e}")
+
+    if not removed:
+        detail = "；".join(errors) if errors else "项目目录不存在或正在被占用"
+        raise DramaBadRequest(f"删除失败：{detail}")
 
     memory_scrubbed = False
     try:
         from agent.memory_store import scrub_memory_terms
 
-        scrub_memory_terms(slug, title)
+        for sid in removed:
+            scrub_memory_terms(sid, title)
         memory_scrubbed = True
     except Exception:
         # Deleting disk project must succeed even if MEMORY.md is locked/corrupt.
@@ -354,9 +411,11 @@ def remove_project(slug: str) -> dict[str, Any]:
     return {
         "ok": True,
         "slug": slug,
+        "removed": removed,
         "path": _rel(slug),
         "jobs_removed": jobs_removed,
         "memory_scrubbed": memory_scrubbed,
+        "errors": errors,
     }
 
 
@@ -1501,6 +1560,37 @@ def retry_render_job(job_id: str) -> dict[str, Any]:
         raise DramaBadRequest(str(e)) from e
 
 
+def resume_render_job(
+    *,
+    job_id: str = "",
+    kind: str = "",
+    slug: str = "",
+    episode: int = 0,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """失败/中断后的续跑入口（历史会话「继续渲染」）。"""
+    from tools.drama_queue import drama_jobs
+
+    try:
+        if slug:
+            slug = parse_slug(slug)
+        if episode:
+            episode = parse_episode(episode)
+        return drama_jobs.resume_or_retry(
+            job_id,
+            kind=kind,
+            slug=slug,
+            episode=int(episode or 0),
+            params=params,
+        )
+    except KeyError as e:
+        raise DramaNotFound(f"任务不存在：{job_id or slug}") from e
+    except ValueError as e:
+        raise DramaBadRequest(str(e)) from e
+    except RuntimeError as e:
+        raise DramaBadRequest(str(e)) from e
+
+
 def _assert_budget(slug: str, episode: int) -> None:
     """预算闸已移除：不再因超支拦截任何生成动作。
 
@@ -2021,6 +2111,9 @@ def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
     pub["ref_bytes"] = int(meta.get("bytes") or 0)
     pub["ref_width"] = int(meta.get("width") or 0)
     pub["ref_height"] = int(meta.get("height") or 0)
+    face_meta = _asset_meta(str(char.get("ref_face") or ""))
+    pub["ref_face_exists"] = bool(face_meta["exists"])
+    pub["ref_face_url"] = face_meta.get("url")
     chosen = str(char.get("chosen_ref") or "")
     pub["candidates"] = []
     for item in char.get("candidates") or []:
@@ -2095,7 +2188,10 @@ def save_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     if before:
         if str(before.get("look") or "") != str(rec.get("look") or "") or str(
             before.get("colors") or ""
-        ) != str(rec.get("colors") or ""):
+        ) != str(rec.get("colors") or "") or any(
+            str(before.get(k) or "") != str(rec.get(k) or "")
+            for k in ("hair", "eyes", "outfit", "marks")
+        ):
             layers.extend(["scene", "clip"])
         if str(before.get("voice") or "") != str(rec.get("voice") or ""):
             layers.extend(["voice", "clip"])
@@ -2145,10 +2241,18 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
     Autopilot passes lock=True so the plate is frozen for identity consistency.
     Workbench fine-tune keeps lock=False until the user clicks 锁定.
     ``seed`` 用于锁定前校验失败后「换一张脸」重生成（None 时走默认确定性种子）。
+    全身定妆成功后会再生成正脸特写锚（``ref_face``），供出图图1与 ArcFace。
     """
     load_project(slug)
     slug = parse_slug(slug)
-    from tools.drama_characters import find_character, load_characters, ref_exists, set_ref_locked, upsert_character
+    from tools.drama_characters import (
+        find_character,
+        load_characters,
+        ref_exists,
+        ref_face_exists,
+        set_ref_locked,
+        upsert_character,
+    )
 
     rec = find_character(load_characters(slug), cid)
     if rec is None:
@@ -2158,18 +2262,35 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
     if not (str(rec.get("look") or "").strip()):
         raise DramaBadRequest("请先填写三视图再生成")
 
-    from tools.drama_video import generate_character_portrait
+    from tools.drama_video import generate_character_face_portrait, generate_character_portrait
 
     rel = generate_character_portrait(slug, rec, seed=seed)
     if not rel:
         raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常），可改用手动上传")
-    upsert_character(slug, {"id": cid, "ref": rel})
+    patch: dict[str, Any] = {"id": cid, "ref": rel}
+    rec = {**rec, "ref": rel}
+    face_rel = generate_character_face_portrait(slug, rec, seed=seed)
+    if face_rel:
+        patch["ref_face"] = face_rel
+    upsert_character(slug, patch)
+    try:
+        from tools.drama_series import invalidate_character_embedding
+
+        invalidate_character_embedding(slug, cid)
+    except Exception:
+        pass
     if lock:
         try:
             set_ref_locked(slug, cid, True)
         except Exception:
             pass
-    return enrich_character(slug, find_character(load_characters(slug), cid) or rec)
+    out = find_character(load_characters(slug), cid) or rec
+    # 特写缺失时仍返回全身定妆，但提示工作台可重试
+    if not ref_face_exists(slug, out):
+        enriched = enrich_character(slug, out)
+        enriched["face_ref_missing"] = True
+        return enriched
+    return enrich_character(slug, out)
 
 
 def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any]:
@@ -2224,14 +2345,25 @@ def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any
     upsert_character(slug, {"id": cid, "look": new_look})
     rec = find_character(load_characters(slug), cid) or rec
 
-    from tools.drama_video import generate_character_portrait
+    from tools.drama_video import generate_character_face_portrait, generate_character_portrait
 
     rel = generate_character_portrait(slug, rec)
     if not rel:
         raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常）")
-    upsert_character(slug, {"id": cid, "ref": rel})
+    patch: dict[str, Any] = {"id": cid, "ref": rel}
+    rec = {**rec, "ref": rel}
+    face_rel = generate_character_face_portrait(slug, rec)
+    if face_rel:
+        patch["ref_face"] = face_rel
+    upsert_character(slug, patch)
     rec = find_character(load_characters(slug), cid) or rec
-    reply = f"已根据「{text}」更新设定并重新生成定妆图。"
+    try:
+        from tools.drama_series import invalidate_character_embedding
+
+        invalidate_character_embedding(slug, cid)
+    except Exception:
+        pass
+    reply = f"已根据「{text}」更新设定并重新生成定妆与正脸特写。"
     return {
         "character": enrich_character(slug, rec),
         "reply": reply,

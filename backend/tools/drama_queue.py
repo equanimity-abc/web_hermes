@@ -104,6 +104,8 @@ class DramaQueue:
             shot_conc = 3
         self.max_workers = max(1, int(max_workers or default_workers))
         self.shot_concurrency = max(1, shot_conc)
+        # 启动时从磁盘回载失败/中断任务，历史会话可「继续渲染」而无需再踩一次失败
+        self._restore_from_disk()
 
     def _persist(self, job: DramaJob) -> None:
         if job.discarded:
@@ -113,9 +115,100 @@ class DramaQueue:
         payload.pop("cancel_event", None)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    def _job_from_payload(self, data: dict[str, Any]) -> DramaJob | None:
+        jid = str(data.get("job_id") or "").strip()
+        kind = str(data.get("kind") or "").strip()
+        slug = str(data.get("slug") or "").strip()
+        if not jid or kind not in KINDS or not slug:
+            return None
+        try:
+            episode = int(data.get("episode") or 0)
+        except (TypeError, ValueError):
+            return None
+        if episode < 1:
+            return None
+        status = str(data.get("status") or "pending").strip() or "pending"
+        error = data.get("error")
+        # 进程重启后：内存里的 running/pending 实际已中断，标成 error 以便 retry
+        if status in ("pending", "running"):
+            status = "error"
+            error = str(error or "服务重启，任务中断；可继续渲染").strip()
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        return DramaJob(
+            job_id=jid,
+            kind=kind,
+            slug=slug,
+            episode=episode,
+            params=dict(params),
+            idem_key=str(data.get("idem_key") or ""),
+            status=status,
+            progress=dict(data.get("progress") or {}) if isinstance(data.get("progress"), dict) else {},
+            result=data.get("result") if isinstance(data.get("result"), dict) else None,
+            error=str(error) if error else None,
+            created_at=str(data.get("created_at") or utc_now()),
+            updated_at=str(data.get("updated_at") or utc_now()),
+        )
+
+    def _hydrate_locked(self, job_id: str) -> DramaJob | None:
+        """Caller must hold self._lock. Load one job json into memory if missing."""
+        jid = str(job_id or "").strip()
+        if not jid:
+            return None
+        hit = self._jobs.get(jid)
+        if hit is not None:
+            return hit
+        path = _queue_dir() / f"{jid}.json"
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        job = self._job_from_payload(data)
+        if job is None:
+            return None
+        self._jobs[job.job_id] = job
+        # 写回中断标记，避免下次启动仍显示 running
+        if job.status == "error" and str(data.get("status") or "") in ("pending", "running"):
+            try:
+                self._persist(job)
+            except OSError:
+                pass
+        return job
+
+    def _restore_from_disk(self) -> None:
+        try:
+            root = _queue_dir()
+        except Exception:
+            return
+        for path in root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            with self._lock:
+                if data.get("job_id") in self._jobs:
+                    continue
+                job = self._job_from_payload(data)
+                if job is None:
+                    continue
+                self._jobs[job.job_id] = job
+                if job.status == "error" and str(data.get("status") or "") in ("pending", "running"):
+                    try:
+                        self._persist(job)
+                    except OSError:
+                        pass
+
     def get(self, job_id: str) -> DramaJob | None:
         with self._lock:
-            return self._jobs.get(job_id)
+            hit = self._jobs.get(job_id)
+            if hit is not None:
+                return hit
+            return self._hydrate_locked(job_id)
 
     def list_jobs(
         self,
@@ -233,9 +326,44 @@ class DramaQueue:
         old = self.get(job_id)
         if old is None:
             raise KeyError(job_id)
-        if old.status != "error":
-            raise ValueError("只能重试失败的任务")
+        if old.status not in ("error", "cancelled"):
+            raise ValueError("只能重试失败或已取消的任务")
         return self.submit(old.kind, old.slug, old.episode, params=dict(old.params or {}))
+
+    def resume_or_retry(
+        self,
+        job_id: str = "",
+        *,
+        kind: str = "",
+        slug: str = "",
+        episode: int = 0,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """历史会话续跑：优先按 job_id 重试；磁盘/内存都没有时按 slug+episode+kind 新建。"""
+        jid = str(job_id or "").strip()
+        if jid:
+            try:
+                return self.retry(jid)
+            except KeyError:
+                pass
+            except ValueError:
+                # 已是 done/running —— 若仍要续跑则走新建
+                cur = self.get(jid)
+                if cur and cur.status in ("pending", "running"):
+                    return public_job(cur)
+                if cur and cur.status == "done":
+                    return public_job(cur)
+        kind = str(kind or "").strip() or "produce_episode"
+        slug = str(slug or "").strip()
+        if not slug:
+            raise KeyError(jid or "missing_job")
+        try:
+            ep = int(episode or 0)
+        except (TypeError, ValueError):
+            ep = 0
+        if ep < 1:
+            raise ValueError("续跑需要合法 episode")
+        return self.submit(kind, slug, ep, params=dict(params or {}))
 
     def remove_slug(self, slug: str) -> int:
         """Cancel and drop in-memory jobs for a slug and remove persisted records.

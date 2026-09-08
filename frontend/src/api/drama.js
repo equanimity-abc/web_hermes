@@ -374,6 +374,14 @@ export function retryJob(jobId) {
   })
 }
 
+/** 历史失败/中断任务续跑：优先 job_id 重试，否则按 slug+episode+kind 新建 */
+export function resumeJob(body = {}) {
+  return request(`/api/drama/jobs/resume`, {
+    method: 'POST',
+    body: JSON.stringify(body || {}),
+  })
+}
+
 export function generateI2v(slug, episode, shot) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/i2v`,

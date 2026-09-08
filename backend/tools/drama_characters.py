@@ -192,7 +192,7 @@ def default_tts_voices() -> list[dict[str, str]]:
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
 CHAR_CANDIDATE_MAX = 4
 REF_SIZE_OPTIONS = (640, 1024, 1980)
-DEFAULT_REF_SIZE = 1024
+DEFAULT_REF_SIZE = 1980
 REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = (
     {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "label": "方舟 · Seedream 5.0 Pro"},
     {"provider": "kling-image", "model": "kling/kling-v3-omni-image-generation", "label": "可灵 · Kling V3 Omni"},
@@ -255,6 +255,71 @@ def ref_rel(slug: str, cid: str) -> str:
     return f"dramas/{slug}/characters/{cid}.png"
 
 
+def ref_face_rel(slug: str, cid: str) -> str:
+    """正脸特写锚路径（ArcFace / 出图图1 优先用它）。"""
+    return f"dramas/{slug}/characters/{cid}_face.png"
+
+
+TRAIT_KEYS: tuple[tuple[str, str], ...] = (
+    ("hair", "发型发色"),
+    ("eyes", "瞳色五官"),
+    ("outfit", "服饰"),
+    ("marks", "特征标记"),
+)
+
+
+def traits_phrase(char: dict[str, Any] | None) -> str:
+    if not isinstance(char, dict):
+        return ""
+    bits: list[str] = []
+    for key, label in TRAIT_KEYS:
+        val = str(char.get(key) or "").strip()
+        if val:
+            bits.append(f"{label}：{val}")
+    return "，".join(bits)
+
+
+def enriched_look(char: dict[str, Any] | None) -> str:
+    """look + 结构化特征，供出图 / 定妆 prompt。"""
+    if not isinstance(char, dict):
+        return ""
+    look = str(char.get("look") or "").strip()
+    traits = traits_phrase(char)
+    if traits and traits not in look:
+        return f"{look}，{traits}" if look else traits
+    return look
+
+
+def identity_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
+    """身份锚相对路径：有正脸特写用特写，否则全身定妆。"""
+    if not isinstance(char, dict):
+        return ""
+    cid = str(char.get("id") or "").strip()
+    face = str(char.get("ref_face") or (ref_face_rel(slug, cid) if cid else "")).replace("\\", "/").strip()
+    if face:
+        try:
+            path = resolve_safe(face)
+            if path.is_file() and path.stat().st_size > 0:
+                return face
+        except ValueError:
+            pass
+    return str(char.get("ref") or (ref_rel(slug, cid) if cid else "")).replace("\\", "/")
+
+
+def ref_face_exists(slug: str, char: dict[str, Any] | None) -> bool:
+    if not isinstance(char, dict):
+        return False
+    cid = str(char.get("id") or "").strip()
+    rel = str(char.get("ref_face") or (ref_face_rel(slug, cid) if cid else "")).replace("\\", "/")
+    if not rel:
+        return False
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        return False
+    return path.is_file() and path.stat().st_size > 0
+
+
 def candidate_ref_rel(slug: str, cid: str, cand_id: str) -> str:
     return f"dramas/{slug}/characters/{cid}/candidates/{cand_id}.png"
 
@@ -301,6 +366,21 @@ _FACE_EXEMPT_MARKERS = (
     "shadow only",
     "shadow-only",
 )
+# 氛围/局部元素：可留在角色栏，但禁止定妆锁脸、禁止分层贴脸（否则会把两张定妆拼进一镜）。
+_ATMOSPHERIC_FACE_EXEMPT_MARKERS = (
+    "背面的眼睛",
+    "一双眼睛",
+    "诡异的眼睛",
+    "红眼睛",
+    "仅眼睛",
+    "只有眼睛",
+    "眼珠",
+    "瞳孔特写",
+    "目光",
+)
+_ATMOSPHERIC_NAME_RE = re.compile(
+    r"(的眼睛|的目光|的瞳孔|的阴影|的影子|的轮廓)$"
+)
 
 
 def canonical_role_name(token: str) -> str:
@@ -320,8 +400,23 @@ def role_token_face_exempt(token: str) -> bool:
     return any(m.lower() in s for m in _FACE_EXEMPT_MARKERS)
 
 
+def is_atmospheric_partial_face(token: str) -> bool:
+    """「月亮背面的眼睛」等氛围/局部元素：不做人脸定妆与 ArcFace。"""
+    s = str(token or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if any(m.lower() in low for m in _ATMOSPHERIC_FACE_EXEMPT_MARKERS):
+        return True
+    return bool(_ATMOSPHERIC_NAME_RE.search(s))
+
+
 def is_shadow_stage_card(char: dict[str, Any] | None) -> bool:
-    """是否为不应存在的「影子/剪影」角色卡（按名称判定，不看 look）。"""
+    """是否为不应存在的「影子/剪影」角色卡（按名称判定，不看 look）。
+
+    氛围局部（如「月亮背面的眼睛」）不算影子卡，可保留角色栏条目，但见
+    ``character_requires_face_identity``。
+    """
     if not isinstance(char, dict):
         return False
     if normalize_category(char.get("category")) != "character":
@@ -330,15 +425,20 @@ def is_shadow_stage_card(char: dict[str, Any] | None) -> bool:
 
 
 def character_requires_face_identity(char: dict[str, Any] | None) -> bool:
-    """是否需要定妆人脸 + ArcFace 身份闸。剪影/仅影子角色返回 False。"""
+    """是否需要定妆人脸 + ArcFace 身份闸。剪影/氛围局部返回 False。"""
     if not isinstance(char, dict):
         return False
     if normalize_category(char.get("category")) != "character":
         return False
     if is_shadow_stage_card(char):
         return False
-    blob = f"{char.get('name') or ''} {char.get('look') or ''}"
-    return not role_token_face_exempt(blob)
+    name = str(char.get("name") or "")
+    if is_atmospheric_partial_face(name):
+        return False
+    blob = f"{name} {char.get('look') or ''}"
+    if role_token_face_exempt(blob) or is_atmospheric_partial_face(blob):
+        return False
+    return True
 
 
 def purge_shadow_character_cards(slug: str) -> list[str]:
@@ -385,7 +485,7 @@ def character_ref_negative_prompt() -> str:
 
 def build_asset_ref_prompt(char: dict[str, Any]) -> str:
     """角色定妆：单张正面全身立绘；物品/场景仍走各自设定图 prompt。"""
-    look = str(char.get("look") or "").strip() or "原创设计"
+    look = enriched_look(char) or str(char.get("look") or "").strip() or "原创设计"
     colors = str(char.get("colors") or "").strip()
     category = normalize_category(char.get("category"))
     no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
@@ -415,6 +515,24 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
         f"外形：{look}",
         "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
         "完整上色插画，高质量二次元立绘",
+        no_text,
+    ]
+    return "，".join(b for b in bits if b)
+
+
+def build_face_ref_prompt(char: dict[str, Any]) -> str:
+    """正脸特写定妆：肩上以上，中性表情，专供身份锁与 ArcFace。"""
+    name = str(char.get("name") or char.get("id") or "角色").strip() or "角色"
+    look = enriched_look(char) or str(char.get("look") or "").strip() or "原创二次元角色"
+    no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
+    bits = [
+        "一张正方形二次元角色正脸特写",
+        f"角色「{name}」",
+        "肩部以上近景，正面平视，五官清晰居中，中性表情",
+        f"外形：{look}",
+        "同一张脸同一发型同一妆面，禁止侧面背面多视角拼图",
+        "均匀浅色纯色背景，无分栏无网格",
+        "高质量面部细节，瞳色与五官可辨识",
         no_text,
     ]
     return "，".join(b for b in bits if b)
@@ -492,6 +610,80 @@ def expand_character_look(
     return out[:400]
 
 
+def traits_incomplete(char: dict[str, Any] | None) -> bool:
+    if not isinstance(char, dict):
+        return True
+    # 发型/瞳色/服饰至少填两项才算够结构化
+    filled = sum(1 for key, _ in TRAIT_KEYS[:3] if str(char.get(key) or "").strip())
+    return filled < 2
+
+
+def extract_character_traits(slug: str, char: dict[str, Any]) -> dict[str, str]:
+    """从 look 抽出结构化特征；失败返回空字段。"""
+    look = enriched_look(char) or str(char.get("look") or "").strip()
+    if not look:
+        return {k: "" for k, _ in TRAIT_KEYS}
+    try:
+        from tools.drama_script import draft_text_sync
+    except Exception:
+        return {k: str(char.get(k) or "").strip() for k, _ in TRAIT_KEYS}
+    name = str(char.get("name") or char.get("id") or "角色")
+    system = (
+        "你从角色外形描述中抽取字段。只输出 4 行，格式严格为：\n"
+        "发型：...\n瞳色：...\n服饰：...\n标记：...\n"
+        "标记指疤痕/花钿/配饰等可辨识点；没有则写「无」。不要其它文字。"
+    )
+    user = f"角色：{name}\n外形：{look[:500]}"
+    try:
+        raw = str(draft_text_sync(slug, user, system=system) or "")
+    except Exception:
+        return {k: str(char.get(k) or "").strip() for k, _ in TRAIT_KEYS}
+    mapping = {"发型": "hair", "瞳色": "eyes", "服饰": "outfit", "标记": "marks"}
+    out = {k: str(char.get(k) or "").strip() for k, _ in TRAIT_KEYS}
+    for line in raw.splitlines():
+        line = line.strip().lstrip("-•").strip()
+        for cn, key in mapping.items():
+            if line.startswith(cn + "：") or line.startswith(cn + ":"):
+                val = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+                if val and val not in ("无", "没有", "无。"):
+                    out[key] = val[:80]
+                break
+    return out
+
+
+def ensure_character_traits(slug: str) -> list[str]:
+    """为空的结构化特征从 look 抽取并写回；返回更新的 cid。"""
+    updated: list[str] = []
+    for rec in load_characters(slug):
+        if normalize_category(rec.get("category")) != "character":
+            continue
+        if not character_requires_face_identity(rec):
+            continue
+        cid = str(rec.get("id") or "")
+        if not cid or not traits_incomplete(rec):
+            continue
+        if not str(rec.get("look") or "").strip():
+            continue
+        traits = extract_character_traits(slug, rec)
+        patch = {"id": cid}
+        changed = False
+        for key, _ in TRAIT_KEYS:
+            cur = str(rec.get(key) or "").strip()
+            nxt = str(traits.get(key) or "").strip()
+            if not cur and nxt:
+                patch[key] = nxt
+                changed = True
+        if not changed:
+            continue
+        # 特征更新后刷新未手写的 anchor
+        if not str(rec.get("anchor_prompt") or "").strip():
+            merged = {**rec, **patch}
+            patch["anchor_prompt"] = character_anchor_prompt(merged)
+        upsert_character(slug, patch)
+        updated.append(cid)
+    return updated
+
+
 def character_anchor_prompt(char: dict[str, Any] | None) -> str:
     """冻结的角色特征锚短句：出图层时必注入，优先已写入的 anchor_prompt。"""
     if not char:
@@ -500,7 +692,7 @@ def character_anchor_prompt(char: dict[str, Any] | None) -> str:
     if frozen:
         return frozen
     name = str(char.get("name") or char.get("id") or "").strip() or "角色"
-    look = str(char.get("look") or "").strip()
+    look = enriched_look(char) or str(char.get("look") or "").strip()
     if look:
         # 控制长度，避免冲淡构图指令
         short = look if len(look) <= 160 else look[:157] + "…"
@@ -592,6 +784,10 @@ def normalize_char_candidates(
             continue
         seen.add(cand_id)
         rel = str(item.get("path") or candidate_ref_rel(slug, cid, cand_id)).replace("\\", "/")
+        try:
+            resolve_safe(rel)
+        except ValueError:
+            rel = candidate_ref_rel(slug, cid, cand_id)
         out.append(
             {
                 "id": cand_id,
@@ -630,18 +826,34 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
             voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
     catalog = list_voice_catalog(slug)
     gender = normalize_gender(raw.get("gender"), voice, catalog)
-    ref = str(raw.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    canonical = ref_rel(slug, cid)
+    ref = str(raw.get("ref") or canonical).replace("\\", "/").strip() or canonical
+    # 坏路径（含 ../、绝对路径等）一律回落到规范定妆路径，避免产线 resolve_safe 炸沙箱
+    try:
+        resolve_safe(ref)
+    except ValueError:
+        ref = canonical
     chosen_ref = str(raw.get("chosen_ref") or "").strip()
     candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)
     ref_image_provider, ref_image_model = normalize_ref_image_route(
         raw.get("ref_image_provider"), raw.get("ref_image_model")
     )
+    face_canonical = ref_face_rel(slug, cid)
+    ref_face = str(raw.get("ref_face") or face_canonical).replace("\\", "/").strip() or face_canonical
+    try:
+        resolve_safe(ref_face)
+    except ValueError:
+        ref_face = face_canonical
     return {
         "id": cid,
         "name": name,
         "category": normalize_category(raw.get("category")),
         "aliases": _as_str_list(raw.get("aliases")),
         "look": str(raw.get("look") or "").strip(),
+        "hair": str(raw.get("hair") or "").strip(),
+        "eyes": str(raw.get("eyes") or "").strip(),
+        "outfit": str(raw.get("outfit") or "").strip(),
+        "marks": str(raw.get("marks") or "").strip(),
         "colors": str(raw.get("colors") or "").strip(),
         "ref_size": normalize_ref_size(raw.get("ref_size")),
         "ref_image_provider": ref_image_provider,
@@ -650,9 +862,11 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "gender": gender,
         "voice": voice,
         "ref": ref,
+        "ref_face": ref_face,
         "ref_locked": bool(raw.get("ref_locked")),
         "chosen_ref": chosen_ref,
         "candidates": candidates,
+        "anchor_prompt": str(raw.get("anchor_prompt") or "").strip(),
     }
 
 
@@ -1041,7 +1255,15 @@ def character_prompt_clause(characters: list[dict[str, Any]], *, slug: str = "")
     parts: list[str] = []
     for char in characters:
         name = char.get("name") or char.get("id")
-        look = str(char.get("look") or "").strip() or "保持原作角色设计一致"
+        look = enriched_look(char) or str(char.get("look") or "").strip() or "保持原作角色设计一致"
+        if not character_requires_face_identity(char):
+            # 氛围/剪影：禁止被模型画成第二主角整脸，避免与主体定妆「拼图」。
+            short = look[:72] + ("…" if len(look) > 72 else "")
+            parts.append(
+                f"{name}：氛围或局部元素（{short}），"
+                "禁止画成与主角对等的完整正脸人物，不得抢占主要人脸"
+            )
+            continue
         anchor = str(char.get("anchor_prompt") or "").strip()
         colors = palette_phrase(slug, char) if slug else str(char.get("colors") or "")
         bit = f"{name}：{look}"
