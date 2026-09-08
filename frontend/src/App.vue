@@ -4,7 +4,6 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
 import ChatView from '@/components/chat/ChatView.vue'
 import DramaStudio from '@/components/drama/DramaStudio.vue'
-import DramaJobBar from '@/components/drama/DramaJobBar.vue'
 import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 import ApprovalModal from '@/components/chat/ApprovalModal.vue'
 import { useChat } from '@/composables/useChat'
@@ -74,10 +73,6 @@ const {
   uploadSelectedRef,
   deleteSelectedCharacter,
   generateCharacterRef,
-  sendCastChatRefine,
-  castChatMessages,
-  shotChatMessages,
-  refineShotChat,
   generateAllCharacterRefs,
   generateAllScenes,
   generateAllVideo,
@@ -161,16 +156,7 @@ const {
   uploadBgm,
   applyMix,
   clearBgm,
-  renderJobs: dramaRenderJobs,
-  activeJobs: dramaActiveJobs,
-  cancelRenderJob,
-  retryRenderJob,
 } = useDramaStudio()
-
-const dramaCastChatMessages = computed(() => castChatMessages(dramaSelectedCharacterId.value))
-const dramaVideoChatMessages = computed(() => shotChatMessages('video', dramaSelectedN.value))
-const dramaVoiceChatMessages = computed(() => shotChatMessages('voice', dramaSelectedN.value))
-const dramaSceneChatMessages = computed(() => shotChatMessages('scene', dramaSelectedN.value))
 
 const {
   currentSessionId,
@@ -503,10 +489,6 @@ async function onResumeDramaJob(index) {
       :selected-character-id="dramaSelectedCharacterId"
       :selected-character="dramaSelectedCharacter"
       :char-draft="dramaCharDraft"
-      :cast-chat-messages="dramaCastChatMessages"
-      :video-chat-messages="dramaVideoChatMessages"
-      :voice-chat-messages="dramaVoiceChatMessages"
-      :scene-chat-messages="dramaSceneChatMessages"
       :timeline-order="dramaTimelineOrder"
       :tl-draft="dramaTlDraft"
       :timeline-items="dramaTimelineItems"
@@ -573,8 +555,6 @@ async function onResumeDramaJob(index) {
       @upload-ref="uploadSelectedRef"
       @delete-character="deleteSelectedCharacter"
       @generate-character-ref="generateCharacterRef"
-      @refine-character-ref="(cid, instruction) => sendCastChatRefine(cid, instruction)"
-      @refine-shot-chat="(stage, shotN, instruction) => refineShotChat(stage, shotN, instruction)"
       @generate-all-refs="(cat) => generateAllCharacterRefs(cat)"
       @generate-all-scenes="generateAllScenes"
       @generate-all-video="generateAllVideo"
@@ -612,23 +592,13 @@ async function onResumeDramaJob(index) {
       @clear-bgm="clearBgm"
     />
 
-    <aside
-      v-if="view === 'drama' && (dramaBatchProgress || (dramaActiveJobs && dramaActiveJobs.length))"
-      class="drama-job-bar"
-    >
+    <aside v-if="view === 'drama' && dramaBatchProgress" class="drama-job-bar">
       <DramaProgressStatusBar
-        v-if="dramaBatchProgress"
         class="drama-job-bar-progress"
         :pct="dramaBatchPct"
         :status="dramaBatchProgress.status || 'idle'"
         :title="dramaBatchStatusTitle"
         :message="dramaBatchStatusMessage"
-      />
-      <DramaJobBar
-        v-if="dramaActiveJobs?.length"
-        :jobs="dramaActiveJobs"
-        @cancel="cancelRenderJob"
-        @retry="retryRenderJob"
       />
     </aside>
 

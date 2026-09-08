@@ -1,7 +1,6 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import DramaThumbImg from '@/components/drama/DramaThumbImg.vue'
-import DramaCastChat from '@/components/drama/DramaCastChat.vue'
 import DramaScriptChat from '@/components/drama/DramaScriptChat.vue'
 import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 
@@ -35,10 +34,6 @@ const props = defineProps({
   selectedCharacterId: { type: [String, null], default: null },
   selectedCharacter: { type: Object, default: null },
   charDraft: { type: Object, required: true },
-  castChatMessages: { type: Array, default: () => [] },
-  videoChatMessages: { type: Array, default: () => [] },
-  voiceChatMessages: { type: Array, default: () => [] },
-  sceneChatMessages: { type: Array, default: () => [] },
   timelineOrder: { type: Array, default: () => [] },
   tlDraft: { type: Object, required: true },
   timelineItems: { type: Array, default: () => [] },
@@ -95,8 +90,6 @@ const emit = defineEmits([
   'delete-character',
   'delete-candidate',
   'generate-character-ref',
-  'refine-character-ref',
-  'refine-shot-chat',
   'generate-all-refs',
   'generate-all-scenes',
   'toggle-role',
@@ -155,13 +148,9 @@ const stage = ref('script')
 const refInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
-const videoChatRef = ref(null)
-const voiceChatRef = ref(null)
-const sceneChatRef = ref(null)
 const voiceVideoRef = ref(null)
 const voiceAudioRef = ref(null)
 const selectedKeyId = ref(null)
-const castChatRef = ref(null)
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
@@ -352,27 +341,6 @@ function onGenerateAllCastRefs() {
   emit('generate-all-refs', castCategory.value)
 }
 
-function onCastChatSend(instruction) {
-  const char = props.selectedCharacter
-  if (!char?.id || char.ref_locked) return
-  emit('refine-character-ref', char.id, instruction)
-}
-
-function onVideoChatSend(instruction) {
-  if (!props.selectedN) return
-  emit('refine-shot-chat', 'video', props.selectedN, instruction)
-}
-
-function onVoiceChatSend(instruction) {
-  if (!props.selectedN) return
-  emit('refine-shot-chat', 'voice', props.selectedN, instruction)
-}
-
-function onSceneChatSend(instruction) {
-  if (!props.selectedN) return
-  emit('refine-shot-chat', 'scene', props.selectedN, instruction)
-}
-
 // 画面候选图轮播
 const currentCandidateIndex = ref(0)
 const sceneCandidatesList = computed(() => props.selected?.candidates || [])
@@ -395,26 +363,6 @@ watch(
   () => {
     currentCandidateIndex.value = 0
   },
-)
-
-watch(
-  () => props.castChatMessages.length,
-  () => nextTick(() => castChatRef.value?.scrollToBottom?.()),
-)
-
-watch(
-  () => props.videoChatMessages.length,
-  () => nextTick(() => videoChatRef.value?.scrollToBottom?.()),
-)
-
-watch(
-  () => props.voiceChatMessages.length,
-  () => nextTick(() => voiceChatRef.value?.scrollToBottom?.()),
-)
-
-watch(
-  () => props.sceneChatMessages.length,
-  () => nextTick(() => sceneChatRef.value?.scrollToBottom?.()),
 )
 
 watch(castCategory, () => {
@@ -1929,16 +1877,6 @@ const statusBar = computed(() => {
                     </button>
                   </div>
                 </div>
-
-                <DramaCastChat
-                  ref="castChatRef"
-                  class="drama-scene-chat"
-                  :messages="castChatMessages"
-                  :loading="selectedCharacterBusy"
-                  :disabled="selectedCharacter.ref_locked"
-                  :character-name="selectedCharacter.name || selectedCharacter.id"
-                  @send="onCastChatSend"
-                />
               </div>
             </div>
           </div>
@@ -2053,8 +1991,6 @@ const statusBar = computed(() => {
                     <button type="button" class="drama-candidate-nav drama-candidate-next" :disabled="sceneCandidatesList.length <= 1" @click="nextCandidate">›</button>
                   </div>
                 </div>
-
-                <DramaCastChat ref="sceneChatRef" class="drama-scene-chat" title="对话改画面" :character-name="`Shot ${selected.n}`" hint="用自然语言调整画面描述等；保存后可点「生成候选图」生效。" placeholder="例如：改成分镜特写、画面加一条小河…" disabled-placeholder="请先选择镜头" pending-label="正在理解并更新…" :messages="sceneChatMessages" :loading="selectedShotBusy" @send="onSceneChatSend" />
               </div>
             </div>
           </div>
@@ -2232,19 +2168,6 @@ const statusBar = computed(() => {
                   </div>
                 </div>
               </div>
-              <DramaCastChat
-                ref="videoChatRef"
-                class="drama-scene-chat"
-                title="对话改视频"
-                :character-name="`Shot ${selected.n}`"
-                hint="用自然语言调整运镜、时长、I2V 模式等；保存后可点「生成视频」生效。"
-                placeholder="例如：运镜改成缓慢推进，时长改成 4 秒…"
-                disabled-placeholder="请先选择镜头"
-                pending-label="正在理解并更新…"
-                :messages="videoChatMessages"
-                :loading="selectedShotBusy"
-                @send="onVideoChatSend"
-              />
               </div>
             </div>
           </div>
@@ -2452,19 +2375,6 @@ const statusBar = computed(() => {
                   @ended="onVoiceAudioEnded"
                 />
               </div>
-              <DramaCastChat
-                ref="voiceChatRef"
-                class="drama-scene-chat"
-                title="对话改配音"
-                :character-name="`Shot ${selected.n}`"
-                hint="用自然语言改字幕或旁白；保存后可点「生成配音」生效。说话人用上方下拉选择，音色只读跟随角色卡。"
-                placeholder="例如：字幕改成更狠一点，旁白删掉…"
-                disabled-placeholder="请先选择镜头"
-                pending-label="正在理解并更新…"
-                :messages="voiceChatMessages"
-                :loading="selectedShotBusy"
-                @send="onVoiceChatSend"
-              />
               </div>
             </div>
           </div>

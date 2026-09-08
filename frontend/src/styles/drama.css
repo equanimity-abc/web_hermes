@@ -404,70 +404,6 @@
   margin: 8px 12px;
 }
 
-.drama-job-bar-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 16px 4px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.drama-job-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 12px 10px;
-}
-
-.drama-job-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--color-bg-muted);
-  margin-bottom: 6px;
-}
-
-.drama-job-item.is-run {
-  background: var(--color-primary-soft);
-}
-
-.drama-job-item.is-err {
-  background: #fef2f2;
-}
-
-.drama-job-item.is-ok {
-  background: #ecfdf5;
-}
-
-.drama-job-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.drama-job-title {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.drama-job-progress,
-.drama-job-error {
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.drama-job-error {
-  color: var(--color-danger);
-}
-
-.drama-job-actions {
-  flex-shrink: 0;
-}
-
 .drama-board-tabs button {
   border: none;
   background: var(--color-border-soft);
@@ -2281,101 +2217,6 @@
   transform: none;
 }
 
-.drama-cast-chat {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-}
-
-.drama-cast-chat-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.drama-cast-chat-head h4 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.drama-cast-chat-sub {
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.drama-cast-chat-messages {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.drama-cast-chat-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  line-height: 1.5;
-}
-
-.drama-cast-chat-msg {
-  display: flex;
-}
-
-.drama-cast-chat-msg.user {
-  justify-content: flex-end;
-}
-
-.drama-cast-chat-bubble {
-  max-width: 92%;
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 13px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.drama-cast-chat-msg.user .drama-cast-chat-bubble {
-  background: var(--color-primary);
-  color: #fff;
-  border-bottom-right-radius: 4px;
-}
-
-.drama-cast-chat-msg.assistant .drama-cast-chat-bubble {
-  background: var(--color-bg-muted);
-  color: var(--color-text);
-  border-bottom-left-radius: 4px;
-}
-
-.drama-cast-chat-bubble--pending {
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-
-.drama-cast-chat-input {
-  border-top: 1px solid var(--color-border);
-  padding: 6px 8px 8px;
-}
-
-.drama-cast-chat-input .composer--normal {
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 6px 8px;
-}
-
-.drama-cast-chat-input .input-box {
-  font-size: 13px;
-  min-height: 36px;
-}
-
 .drama-cast-empty {
   display: grid;
   place-items: center;
@@ -3031,7 +2872,7 @@
   margin-top: 10px;
 }
 
-/* —— 画面页：左侧信息 + 右侧轮播/聊天 —— */
+/* —— 画面页：左侧信息 + 右侧预览 —— */
 .drama-scene-body {
   flex: 1;
   min-height: 0;
@@ -3067,21 +2908,20 @@
 }
 
 .drama-scene-right .drama-scene-candidates {
-  flex: 3 1 0;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 .drama-scene-right .drama-av-preview-panel {
-  flex: 3 1 0;
+  flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+  max-width: none;
   border-right: none;
-}
-
-.drama-scene-right .drama-cast-chat {
-  flex: 2 1 0 !important;
+  border-radius: 10px;
+  overflow: hidden;
 }
 
 .drama-scene-carousel {
@@ -3157,13 +2997,6 @@
   background: #ecfdf5;
   color: #16a34a;
   font-weight: 600;
-}
-
-.drama-scene-chat {
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: #fff;
-  overflow: hidden;
 }
 
 .btn-sm {
