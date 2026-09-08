@@ -69,6 +69,7 @@ _SHOT_HEAD = re.compile(
     re.IGNORECASE,
 )
 _FIELD = re.compile(r"^-\s*\*{0,2}(画面|字幕|旁白|对白|角色|地点|道具)\*{0,2}\s*[:：]\s*(.*)\s*$")
+_META_FIELD = re.compile(r"^-\s*\*{0,2}(时长|钩子|悬念|配乐)\*{0,2}\s*[:：]\s*(.*)$")
 _POSTPRODUCTION_CUES = (
     "画面切黑",
     "切黑",
@@ -155,24 +156,29 @@ def ffmpeg_available() -> bool:
 
 
 def parse_episode_markdown(text: str) -> dict[str, Any]:
-    """Parse save_episode markdown into title / hook / shots."""
+    """Parse save_episode markdown into title / hook / asset sections / shots."""
     lines = str(text or "").replace("\r\n", "\n").split("\n")
     title = ""
     meta: dict[str, str] = {}
     shots: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    in_shots = False
 
     for raw in lines:
         line = raw.rstrip()
-        if line.startswith("# ") and not title:
+        if line.startswith("# ") and not title and not line.startswith("##"):
             title = line[2:].strip()
             continue
-        m_meta = re.match(r"^-\s*\*{0,2}(时长|钩子|悬念)\*{0,2}\s*[:：]\s*(.*)$", line)
-        if m_meta and current is None:
+        if line.startswith("## ") and line[3:].strip().startswith("分镜"):
+            in_shots = True
+            continue
+        m_meta = _META_FIELD.match(line)
+        if m_meta and current is None and not in_shots:
             meta[m_meta.group(1)] = m_meta.group(2).strip()
             continue
         m_shot = _SHOT_HEAD.match(line)
         if m_shot:
+            in_shots = True
             if current:
                 shots.append(current)
             idx = int(m_shot.group(1))
@@ -204,11 +210,21 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
     if current:
         shots.append(current)
 
+    from tools.drama_script_blueprint import parse_asset_sections
     from tools.drama_shots import migrate_shot_script_fields
 
+    assets = parse_asset_sections(text)
     shots = [migrate_shot_script_fields(s) for s in shots]
     shots.sort(key=lambda s: int(s["n"]))
-    return {"title": title, "meta": meta, "shots": shots, "count": len(shots)}
+    return {
+        "title": title,
+        "meta": meta,
+        "cast": assets.get("cast") or [],
+        "locations": assets.get("locations") or [],
+        "props": assets.get("props") or [],
+        "shots": shots,
+        "count": len(shots),
+    }
 
 
 def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str:

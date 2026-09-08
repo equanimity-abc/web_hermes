@@ -54,6 +54,7 @@ def empty_mix() -> dict[str, Any]:
             "start": 0.0,
         },
         "sfx": [],
+        "bgm_intent": "",
     }
 
 
@@ -128,6 +129,7 @@ def normalize_mix(raw: Any) -> dict[str, Any]:
             }
         )
     base["sfx"] = sfx
+    base["bgm_intent"] = str(data.get("bgm_intent") or "").strip()
     return base
 
 

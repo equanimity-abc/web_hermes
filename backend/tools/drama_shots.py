@@ -1330,7 +1330,7 @@ def script_impact(
             }
         )
     meta_changed: list[str] = []
-    for key in ("钩子", "悬念", "时长"):
+    for key in ("钩子", "悬念", "时长", "配乐"):
         if str((old_meta or {}).get(key) or "") != str((new_meta or {}).get(key) or ""):
             meta_changed.append(key)
     affected = [x["n"] for x in items if x["changed"] and not x["frozen"]]

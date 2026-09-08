@@ -155,7 +155,7 @@ const selectedKeyId = ref(null)
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
 const stageList = computed(() => [
-  { id: 'script', label: '剧本', title: '步骤一：编写与对话生成剧本', done: Boolean(props.episode?.script) },
+  { id: 'script', label: '剧本', title: '步骤一：结构化剧本（角色/场景/道具/配乐/分镜）', done: Boolean(props.episode?.script) },
   { id: 'cast', label: '角色', title: '步骤二：文生图生成定妆图，定角色、物品、场景', done: (props.characters || []).some((c) => c.ref_exists) },
   { id: 'scene', label: '画面', title: '步骤三：分镜文生图与候选墙锁图', done: hasLayer('scene') },
   { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动），时长取自剧本', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
@@ -1629,7 +1629,7 @@ const statusBar = computed(() => {
                   :value="scriptDraft"
                   spellcheck="false"
                   rows="22"
-                  placeholder="在右侧对话生成或修改剧本；也可在此直接编辑后保存。"
+                  placeholder="右侧对话可一句话生成完整结构化剧本（角色/场景/道具/配乐/分镜）；也可在此直接编辑后保存。"
                   @input="emit('update:scriptDraft', $event.target.value)"
                 />
               </div>
@@ -1640,7 +1640,7 @@ const statusBar = computed(() => {
                 :messages="scriptChatMessages"
                 :loading="scriptChatLoading"
                 :disabled="!project || saving"
-                hint="用一句话描述故事即可生成剧本；已有剧本时可继续对话修改。首条可来自主聊天。"
+                hint="用一句话描述故事即可生成结构化剧本（角色设定、场景、道具、配乐、台词旁白与分镜）；已有剧本时可继续对话修改。"
                 placeholder="例如：豪门养女重生复仇，共1集60秒…"
                 pending-label="正在生成 / 修改剧本…"
                 @send="onScriptChatSend"

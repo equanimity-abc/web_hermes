@@ -1356,6 +1356,12 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
     )
     payload = get_episode(slug, n)
     payload["impact"] = impact
+    try:
+        from tools.drama_script_blueprint import materialize_script_assets
+
+        payload["blueprint"] = materialize_script_assets(slug, n, parsed)
+    except Exception:
+        payload["blueprint"] = {"error": "materialize_failed"}
     return payload
 
 
@@ -1420,32 +1426,35 @@ def generate_episode_script(
     # File format still uses EP{n:02d} header for the workbench path; keep it internal.
     title_line = f"# EP{n:02d} 标题" if multi else "# 标题"
 
-    system = (
-        "你是专业竖屏漫剧编剧。只写【一支】完整短片剧本 Markdown，"
-        "严格使用以下格式，不要输出任何多余说明，禁止写多集：\n\n"
-        f"{title_line}\n"
-        f"- 时长: {ep_sec}s\n"
-        "- 钩子: 一句话吸引人的开头\n"
-        "- 悬念: 结尾留一个反转或悬念\n\n"
-        "## 分镜\n"
-        "### Shot 1 (0-3s)\n"
-        "- 画面: 画面描述（含人物、动作、场景、镜头感）\n"
-        "- 地点: 本镜固定场景名（跨镜复用同一地名）\n"
-        "- 道具: 本镜关键物品（顿号分隔，可空）\n"
-        "- 字幕: 角色台词（配音 + 底部字幕）\n"
-        "- 旁白: 画外说明（左上角竖排）\n"
-        "- 角色: 出场角色\n\n"
-        "### Shot 2 (3-6s)\n"
-        "……\n\n"
-        f"硬性要求：{series_rule}"
-        f"整集总时长必须约 {ep_sec} 秒（允许 ±5 秒）；"
-        f"镜头数 {shot_lo}–{shot_hi} 个；"
-        "时间轴必须从 0s 连续排到目标时长（如 0-3s、3-8s…）；"
-        "剧情紧凑、有钩子和反转；画面与台词要具体可拍；"
-        "每镜必须填写地点（稳定场景名），关键道具写入道具字段。"
+    from tools.drama_script_blueprint import (
+        build_episode_script_system,
+        build_episode_user_prompt,
+        ensure_bible_and_outline,
+        load_bible_outline,
+        materialize_script_assets,
     )
 
-    user_prompt = f"系列故事梗概：{text}\n{user_series}"
+    ensure_bible_and_outline(
+        slug,
+        text,
+        title=str(project.get("title") or ""),
+        series=spec,
+    )
+    bible, outline = load_bible_outline(slug)
+
+    system = build_episode_script_system(
+        title_line=title_line,
+        ep_sec=ep_sec,
+        shot_lo=shot_lo,
+        shot_hi=shot_hi,
+        series_rule=series_rule,
+    )
+    user_prompt = build_episode_user_prompt(
+        text,
+        user_series=user_series,
+        bible=bible,
+        outline=outline,
+    )
 
     draft = draft_text_sync(slug, user_prompt, system=system)
     if not str(draft or "").strip():
@@ -1464,7 +1473,8 @@ def generate_episode_script(
             slug,
             user_prompt
             + f"\n上次稿不合格（镜头数={shot_n}）。请重写：仅 EP{n:02d}，"
-            f"{shot_lo}-{shot_hi} 镜，总时长 {ep_sec}s。",
+            f"{shot_lo}-{shot_hi} 镜，总时长 {ep_sec}s；"
+            "必须保留角色设定/场景设定/道具设定/配乐与分镜结构化字段。",
             system=system,
         )
         if str(draft2 or "").strip():
@@ -1488,7 +1498,14 @@ def generate_episode_script(
         project["logline"] = text
     save_project(slug, project)
 
-    return save_script(slug, n, cleaned)
+    payload = save_script(slug, n, cleaned)
+    try:
+        assets = materialize_script_assets(slug, n, parse_episode_markdown(cleaned))
+        payload["blueprint"] = assets
+    except Exception:
+        # Script is already saved; asset upsert is best-effort enrichment.
+        payload["blueprint"] = {"error": "materialize_failed"}
+    return payload
 
 
 def generate_scripts_from_premise(

@@ -14,7 +14,8 @@ _SCRIPT_START_RE = re.compile(
 )
 _SCRIPT_LINE_RE = re.compile(
     r"^(?:#{1,3}\s|"
-    r"-\s*\*{0,2}(?:时长|钩子|悬念|画面|地点|道具|字幕|旁白|角色|对白)\*{0,2}\s*[:：]|"
+    r"-\s*\*{0,2}(?:时长|钩子|悬念|配乐|画面|地点|道具|字幕|旁白|角色|对白|"
+    r"外形|性格|音色倾向|口头禅|别名|描述|光影色调|标志物|材质外形|剧情作用)\*{0,2}\s*[:：]|"
     r"```)",
 )
 _TRAILING_PROSE_RE = re.compile(
@@ -32,9 +33,11 @@ _REFINE_SYSTEM = (
     "1. 只输出完整剧本 Markdown 正文，从标题行（# …）或分镜（## 分镜 / ### Shot）开始；\n"
     "2. 禁止任何开场白、解释、改动说明、总结、希望语、列表点评；\n"
     "3. 禁止用 ``` 代码围栏包裹；\n"
-    "4. 保留原有结构字段：标题、时长/钩子/悬念、### Shot N (…s)、"
+    "4. 保留并维护结构化字段：标题、时长/钩子/悬念/配乐、"
+    "## 角色设定 / ## 场景设定 / ## 道具设定、### Shot N (…s)、"
     "画面/地点/道具/字幕/旁白/角色；\n"
-    "5. 用户修改要求只影响剧情与文案，不要把要求本身写进剧本。"
+    "5. 角色/场景/道具名称必须全局一致，修改设定时同步更新分镜引用；\n"
+    "6. 用户修改要求只影响剧情与文案，不要把要求本身写进剧本。"
 )
 
 
@@ -142,16 +145,23 @@ def scrub_script_markdown(text: str) -> str:
 
 def format_episode_markdown(parsed: dict[str, Any]) -> str:
     """Rebuild compact script markdown from parse_episode_markdown output."""
+    from tools.drama_script_blueprint import format_asset_sections
+
     title = str(parsed.get("title") or "").strip() or "标题"
     meta = parsed.get("meta") if isinstance(parsed.get("meta"), dict) else {}
     shots = parsed.get("shots") if isinstance(parsed.get("shots"), list) else []
 
     lines: list[str] = [f"# {title}"]
-    for key in ("时长", "钩子", "悬念"):
+    for key in ("时长", "钩子", "悬念", "配乐"):
         val = str(meta.get(key) or "").strip()
         if val:
             lines.append(f"- {key}: {val}")
     lines.append("")
+    asset_lines = format_asset_sections(parsed)
+    if asset_lines:
+        lines.extend(asset_lines)
+        if lines[-1] != "":
+            lines.append("")
     lines.append("## 分镜")
     for shot in shots:
         if not isinstance(shot, dict):
