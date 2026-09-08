@@ -997,6 +997,60 @@ def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: st
     return out_rel
 
 
+def generate_location_plate(
+    slug: str,
+    char: dict[str, Any],
+    *,
+    seed: int | None = None,
+) -> str | None:
+    """生成地点主底板（无人物竖屏空镜），写入 ``{cid}_plate.png``。"""
+    import time
+    import zlib
+
+    from tools.drama_characters import (
+        build_location_plate_prompt,
+        character_ref_shot,
+        normalize_category,
+        ref_canvas_size,
+        ref_plate_rel,
+    )
+    from tools.drama_common import parse_slug
+
+    slug = parse_slug(slug)
+    if normalize_category(char.get("category")) != "scene":
+        return None
+    cid = str(char.get("id") or "").strip()
+    if not cid:
+        return None
+    out_rel = ref_plate_rel(slug, cid)
+    dest = resolve_safe(out_rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if seed is None:
+        seed = (zlib.crc32(f"{slug}:{cid}:plate:{time.time_ns()}".encode()) & 0x7FFFFFFF)
+    else:
+        seed = int(seed) & 0x7FFFFFFF
+    if dest.is_file() and dest.stat().st_size > 0:
+        bak = dest.with_suffix(".prev.png")
+        try:
+            bak.write_bytes(dest.read_bytes())
+        except OSError:
+            pass
+    prompt = build_location_plate_prompt(char)
+    gen_w, gen_h = ref_canvas_size(char)
+    ok = _generate_scene_image(
+        prompt,
+        dest,
+        seed=seed,
+        slug=slug,
+        shot={**character_ref_shot(char), "kind": "establishing"},
+        width=gen_w,
+        height=gen_h,
+    )
+    if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
+        return None
+    return out_rel
+
+
 def generate_character_face_portrait(
     slug: str,
     char: dict[str, Any],

@@ -352,3 +352,135 @@ def prop_prompt_clause(props: list[dict[str, Any]] | None) -> str:
     if not parts:
         return ""
     return "可见道具须与设定一致：" + "；".join(parts)
+
+
+def ensure_environment_looks_expanded(slug: str) -> list[str]:
+    """Expand thin scene/prop looks via script LLM (quality-first)."""
+    from tools.drama_characters import look_needs_expand, upsert_character
+    from tools.drama_script import draft_text_sync
+
+    updated: list[str] = []
+    for rec in load_characters(slug):
+        cat = normalize_category(rec.get("category"))
+        if cat not in ("scene", "prop"):
+            continue
+        cid = str(rec.get("id") or "")
+        look = str(rec.get("look") or "").strip()
+        if not cid or not look_needs_expand(look):
+            continue
+        name = str(rec.get("name") or cid)
+        if cat == "scene":
+            system = (
+                "你是场景美术指导。只输出一段简体中文场景外形描述："
+                "建筑轮廓、标志物、主光方向、地面材质、主色调。不要标题不要列表。"
+            )
+            prompt = f"地点名：{name}\n现有描述：{look}\n请扩写成可稳定复现的场景设定。"
+        else:
+            system = (
+                "你是道具美术指导。只输出一段简体中文道具外形描述："
+                "形状、材质、颜色、标志细节。不要标题不要列表。"
+            )
+            prompt = f"道具名：{name}\n现有描述：{look}\n请扩写成可稳定复现的道具设定。"
+        try:
+            expanded = str(draft_text_sync(slug, prompt, system=system) or "").strip()
+        except Exception:
+            continue
+        expanded = expanded.strip().strip("\"'“”")
+        if len(expanded) < 24:
+            continue
+        upsert_character(slug, {"id": cid, "look": expanded[:400]})
+        updated.append(cid)
+    return updated
+
+
+def ensure_environment_refs(
+    slug: str,
+    *,
+    lock: bool = True,
+    on_progress: Any = None,
+) -> dict[str, list[str]]:
+    """Generate + lock scene detail refs, location plates, and prop refs.
+
+    Characters are handled by ``ensure_character_refs``; this only touches scene/prop.
+    """
+    from tools.drama_characters import (
+        environment_anchor_prompt,
+        find_character,
+        ref_exists,
+        ref_plate_exists,
+        ref_plate_rel,
+        set_ref_locked,
+        upsert_character,
+    )
+    from tools.drama_common import parse_slug
+    from tools.drama_video import generate_character_portrait, generate_location_plate
+
+    slug = parse_slug(slug)
+    detail_ok: list[str] = []
+    plates_ok: list[str] = []
+    props_ok: list[str] = []
+
+    def _progress(message: str) -> None:
+        if callable(on_progress):
+            try:
+                on_progress(message=message, stage="environment")
+            except TypeError:
+                on_progress(message=message)
+
+    for rec in list(load_characters(slug)):
+        cat = normalize_category(rec.get("category"))
+        if cat not in ("scene", "prop"):
+            continue
+        cid = str(rec.get("id") or "")
+        name = str(rec.get("name") or cid)
+        if not cid or not str(rec.get("look") or "").strip():
+            continue
+
+        # Detail / prop setting image
+        need_detail = not ref_exists(slug, rec)
+        if need_detail and not (rec.get("ref_locked") and ref_exists(slug, rec)):
+            _progress(f"{'场景设定' if cat == 'scene' else '道具设定'} {name}")
+            rel = generate_character_portrait(slug, rec, seed=None)
+            if not rel:
+                raise RuntimeError(f"{'地点' if cat == 'scene' else '道具'}「{name}」设定图生成失败")
+            upsert_character(slug, {"id": cid, "ref": rel})
+            rec = find_character(load_characters(slug), cid) or {**rec, "ref": rel}
+        if cat == "prop":
+            props_ok.append(cid)
+        else:
+            detail_ok.append(cid)
+
+        # Location master plate
+        if cat == "scene":
+            rec = find_character(load_characters(slug), cid) or rec
+            if not ref_plate_exists(slug, rec):
+                if rec.get("ref_locked") and ref_exists(slug, rec):
+                    # Locked but plate missing: still generate plate (does not overwrite detail ref)
+                    pass
+                _progress(f"地点底板 {name}")
+                plate_rel = generate_location_plate(slug, rec, seed=None)
+                if not plate_rel:
+                    raise RuntimeError(f"地点「{name}」主底板生成失败")
+                upsert_character(slug, {"id": cid, "ref_plate": plate_rel or ref_plate_rel(slug, cid)})
+                plates_ok.append(cid)
+            else:
+                plates_ok.append(cid)
+
+        # Anchor + lock
+        rec = find_character(load_characters(slug), cid) or rec
+        patch: dict[str, Any] = {"id": cid}
+        if not str(rec.get("anchor_prompt") or "").strip():
+            patch["anchor_prompt"] = environment_anchor_prompt(rec)
+            upsert_character(slug, patch)
+        if lock and not rec.get("ref_locked"):
+            # Require detail; for scene also require plate
+            ready = ref_exists(slug, find_character(load_characters(slug), cid) or rec)
+            if cat == "scene":
+                ready = ready and ref_plate_exists(slug, find_character(load_characters(slug), cid) or rec)
+            if ready:
+                try:
+                    set_ref_locked(slug, cid, True)
+                except Exception:
+                    pass
+
+    return {"scenes": detail_ok, "plates": plates_ok, "props": props_ok}

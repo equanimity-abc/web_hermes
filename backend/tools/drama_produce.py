@@ -880,6 +880,10 @@ def produce_episode_hq(
     anchored = ensure_character_anchors(slug)
     _assert_identity_deps_ready(slug)
     ref_chars = ensure_character_refs(slug, on_progress=on_progress)
+    from tools.drama_environment import ensure_environment_looks_expanded, ensure_environment_refs
+
+    env_looks = ensure_environment_looks_expanded(slug)
+    env_refs = ensure_environment_refs(slug, lock=True, on_progress=on_progress)
     emb_cids = ensure_cast_embeddings(slug)
     _progress(
         on_progress,
@@ -887,8 +891,10 @@ def produce_episode_hq(
         message=(
             f"角色 {len(created_chars)} 新建 · 地点 {len(env_summary.get('locations_created') or [])} · "
             f"道具 {len(env_summary.get('props_created') or [])} · 清除影子卡 {len(purged_shadows)} · "
-            f"look 扩写 {len(expanded_looks)} · 特征字段 {len(trait_cids)} · "
-            f"特征锚 {len(anchored)} · 定妆 {len(ref_chars)} 生成"
+            f"look 扩写 {len(expanded_looks)}+{len(env_looks)} · 特征字段 {len(trait_cids)} · "
+            f"特征锚 {len(anchored)} · 定妆 {len(ref_chars)} · "
+            f"场景设定 {len(env_refs.get('scenes') or [])} · 底板 {len(env_refs.get('plates') or [])} · "
+            f"道具图 {len(env_refs.get('props') or [])}"
         ),
     )
     clock.end(
@@ -897,6 +903,9 @@ def produce_episode_hq(
         locations=len(env_summary.get("locations_created") or []),
         props=len(env_summary.get("props_created") or []),
         refs=len(ref_chars),
+        env_scenes=len(env_refs.get("scenes") or []),
+        env_plates=len(env_refs.get("plates") or []),
+        env_props=len(env_refs.get("props") or []),
         looks=len(expanded_looks),
         traits=len(trait_cids),
         anchors=len(anchored),
@@ -912,6 +921,8 @@ def produce_episode_hq(
         "characters_created": created_chars,
         "locations_created": env_summary.get("locations_created") or [],
         "props_created": env_summary.get("props_created") or [],
+        "environment_refs": env_refs,
+        "environment_looks": env_looks,
         "shadows_purged": purged_shadows,
         "looks_expanded": expanded_looks,
         "refs_generated": ref_chars,

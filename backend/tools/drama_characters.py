@@ -260,6 +260,11 @@ def ref_face_rel(slug: str, cid: str) -> str:
     return f"dramas/{slug}/characters/{cid}_face.png"
 
 
+def ref_plate_rel(slug: str, cid: str) -> str:
+    """地点主底板路径（无人物竖屏空镜，跨镜复用）。"""
+    return f"dramas/{slug}/characters/{cid}_plate.png"
+
+
 TRAIT_KEYS: tuple[tuple[str, str], ...] = (
     ("hair", "发型发色"),
     ("eyes", "瞳色五官"),
@@ -318,6 +323,33 @@ def ref_face_exists(slug: str, char: dict[str, Any] | None) -> bool:
     except ValueError:
         return False
     return path.is_file() and path.stat().st_size > 0
+
+
+def ref_plate_exists(slug: str, char: dict[str, Any] | None) -> bool:
+    if not isinstance(char, dict):
+        return False
+    cid = str(char.get("id") or "").strip()
+    rel = str(char.get("ref_plate") or (ref_plate_rel(slug, cid) if cid else "")).replace("\\", "/")
+    if not rel:
+        return False
+    try:
+        path = resolve_safe(rel)
+    except ValueError:
+        return False
+    return path.is_file() and path.stat().st_size > 0
+
+
+def environment_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
+    """出图环境参考：地点优先主底板，否则设定图。"""
+    if not isinstance(char, dict):
+        return ""
+    cat = normalize_category(char.get("category"))
+    cid = str(char.get("id") or "").strip()
+    if cat == "scene" and ref_plate_exists(slug, char):
+        return str(char.get("ref_plate") or ref_plate_rel(slug, cid)).replace("\\", "/")
+    if ref_exists(slug, char):
+        return str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    return ""
 
 
 def candidate_ref_rel(slug: str, cid: str, cand_id: str) -> str:
@@ -495,16 +527,18 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
             f"外形：{look}",
             f"配色：{colors}" if colors else "",
             "纯白满幅背景占满画面，无黑边白边留白",
-            "产品展示风格，高清细节",
+            "产品展示风格，高清细节，标志性轮廓清晰可复现",
+            "禁止人物、禁止场景杂物抢戏",
             no_text,
         ]
         return "，".join(b for b in bits if b)
     if category == "scene":
         bits = [
-            "竖屏9:16场景概念图",
+            "竖屏9:16场景概念设定图",
             f"场景：{look}",
             f"色调：{colors}" if colors else "",
-            "电影感光影，无人物",
+            "电影感光影，建筑与标志物清晰，主光方向固定",
+            "无人物、无剪影路人、无动物",
             "满幅构图，无黑边白边留白",
             no_text,
         ]
@@ -518,6 +552,51 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
         no_text,
     ]
     return "，".join(b for b in bits if b)
+
+
+def build_location_plate_prompt(char: dict[str, Any]) -> str:
+    """地点主底板：可直接作为分层 plate / Seedream 环境图1。"""
+    name = str(char.get("name") or char.get("id") or "场景").strip() or "场景"
+    look = enriched_look(char) or str(char.get("look") or "").strip() or "原创场景"
+    colors = str(char.get("colors") or "").strip()
+    no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
+    bits = [
+        "竖屏9:16空镜场景底板",
+        f"地点「{name}」",
+        f"环境：{look}",
+        f"色调：{colors}" if colors else "",
+        "无人物、无剪影、无动物、无车辆驾驶者",
+        "固定机位可复现构图，建筑轮廓与地面材质清晰",
+        "电影感主光方向稳定，满幅构图无黑边",
+        no_text,
+    ]
+    return "，".join(b for b in bits if b)
+
+
+def environment_anchor_prompt(char: dict[str, Any] | None) -> str:
+    """冻结地点/道具短锚，供跨镜提示词注入。"""
+    if not isinstance(char, dict):
+        return ""
+    frozen = str(char.get("anchor_prompt") or "").strip()
+    if frozen:
+        return frozen
+    name = str(char.get("name") or char.get("id") or "").strip()
+    look = enriched_look(char) or str(char.get("look") or "").strip()
+    colors = str(char.get("colors") or "").strip()
+    cat = normalize_category(char.get("category"))
+    if cat == "prop":
+        bits = [f"道具「{name}」" if name else "道具"]
+        if look:
+            bits.append(look)
+        bits.append("外形材质保持一致")
+        return "，".join(bits)
+    bits = [f"地点「{name}」" if name else "地点"]
+    if look:
+        bits.append(look)
+    if colors:
+        bits.append(colors)
+    bits.append("同一建筑轮廓同一主光同一地面材质")
+    return "，".join(bits)
 
 
 def build_face_ref_prompt(char: dict[str, Any]) -> str:
@@ -535,7 +614,7 @@ def build_face_ref_prompt(char: dict[str, Any]) -> str:
         "高质量面部细节，瞳色与五官可辨识",
         no_text,
     ]
-    return "，".join(b for b in bits if b)
+    return "，".join(bits)
 
 
 _LOOK_WEAK_MARKERS = (
@@ -844,6 +923,12 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         resolve_safe(ref_face)
     except ValueError:
         ref_face = face_canonical
+    plate_canonical = ref_plate_rel(slug, cid)
+    ref_plate = str(raw.get("ref_plate") or plate_canonical).replace("\\", "/").strip() or plate_canonical
+    try:
+        resolve_safe(ref_plate)
+    except ValueError:
+        ref_plate = plate_canonical
     return {
         "id": cid,
         "name": name,
@@ -863,6 +948,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "voice": voice,
         "ref": ref,
         "ref_face": ref_face,
+        "ref_plate": ref_plate,
         "ref_locked": bool(raw.get("ref_locked")),
         "chosen_ref": chosen_ref,
         "candidates": candidates,
@@ -984,7 +1070,11 @@ def set_ref_locked(slug: str, cid: str, locked: bool) -> dict[str, Any]:
         raise CharacterError(f"找不到角色：{cid}")
     rec["ref_locked"] = bool(locked)
     if locked and not str(rec.get("anchor_prompt") or "").strip():
-        rec["anchor_prompt"] = character_anchor_prompt(rec)
+        cat = normalize_category(rec.get("category"))
+        if cat in ("scene", "prop"):
+            rec["anchor_prompt"] = environment_anchor_prompt(rec)
+        else:
+            rec["anchor_prompt"] = character_anchor_prompt(rec)
     return upsert_character(slug, rec)
 
 

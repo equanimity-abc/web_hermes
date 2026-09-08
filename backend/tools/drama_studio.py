@@ -2239,6 +2239,9 @@ def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
     face_meta = _asset_meta(str(char.get("ref_face") or ""))
     pub["ref_face_exists"] = bool(face_meta["exists"])
     pub["ref_face_url"] = face_meta.get("url")
+    plate_meta = _asset_meta(str(char.get("ref_plate") or ""))
+    pub["ref_plate_exists"] = bool(plate_meta["exists"])
+    pub["ref_plate_url"] = plate_meta.get("url")
     chosen = str(char.get("chosen_ref") or "")
     pub["candidates"] = []
     for item in char.get("candidates") or []:
@@ -2283,7 +2286,18 @@ def _dirty_shots_for_character(slug: str, cid: str, layers: list[str]) -> None:
             continue
         changed = False
         for shot in doc.get("shots") or []:
-            if cid not in normalize_roles(shot.get("角色")):
+            roles = normalize_roles(shot.get("角色"))
+            prop_ids = [
+                str(x).strip()
+                for x in (shot.get("prop_ids") or [])
+                if str(x).strip()
+            ] if isinstance(shot.get("prop_ids"), (list, tuple)) else normalize_roles(shot.get("prop_ids"))
+            hit = (
+                cid in roles
+                or cid == str(shot.get("location_id") or "")
+                or cid in prop_ids
+            )
+            if not hit:
                 continue
             locked = set(shot.get("locked") or [])
             if "shot" in locked:
@@ -2387,16 +2401,28 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
     if not (str(rec.get("look") or "").strip()):
         raise DramaBadRequest("请先填写三视图再生成")
 
-    from tools.drama_video import generate_character_face_portrait, generate_character_portrait
+    from tools.drama_video import generate_character_face_portrait, generate_character_portrait, generate_location_plate
 
     rel = generate_character_portrait(slug, rec, seed=seed)
     if not rel:
         raise DramaBadRequest("参考图生成失败（后端无可用图像模型或网络异常），可改用手动上传")
     patch: dict[str, Any] = {"id": cid, "ref": rel}
     rec = {**rec, "ref": rel}
-    face_rel = generate_character_face_portrait(slug, rec, seed=seed)
-    if face_rel:
-        patch["ref_face"] = face_rel
+    from tools.drama_characters import normalize_category, environment_anchor_prompt
+
+    if normalize_category(rec.get("category")) == "character":
+        face_rel = generate_character_face_portrait(slug, rec, seed=seed)
+        if face_rel:
+            patch["ref_face"] = face_rel
+    elif normalize_category(rec.get("category")) == "scene":
+        plate_rel = generate_location_plate(slug, rec, seed=seed)
+        if plate_rel:
+            patch["ref_plate"] = plate_rel
+        if not str(rec.get("anchor_prompt") or "").strip():
+            patch["anchor_prompt"] = environment_anchor_prompt({**rec, **patch})
+    elif normalize_category(rec.get("category")) == "prop":
+        if not str(rec.get("anchor_prompt") or "").strip():
+            patch["anchor_prompt"] = environment_anchor_prompt({**rec, **patch})
     upsert_character(slug, patch)
     try:
         from tools.drama_series import invalidate_character_embedding
@@ -2410,8 +2436,8 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
         except Exception:
             pass
     out = find_character(load_characters(slug), cid) or rec
-    # 特写缺失时仍返回全身定妆，但提示工作台可重试
-    if not ref_face_exists(slug, out):
+    # 特写缺失时仍返回全身定妆，但提示工作台可重试（仅角色）
+    if normalize_category(out.get("category")) == "character" and not ref_face_exists(slug, out):
         enriched = enrich_character(slug, out)
         enriched["face_ref_missing"] = True
         return enriched
