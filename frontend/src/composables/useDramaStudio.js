@@ -1220,6 +1220,40 @@ export function useDramaStudio() {
     }
   }
 
+  function clearScriptChat() {
+    const key = scriptChatKey()
+    if (!key) return
+    const next = { ...scriptChatHistory.value }
+    delete next[key]
+    scriptChatHistory.value = next
+    scriptChatProgress.value = { status: 'idle', message: '', pct: null }
+    scriptChatLoading.value = false
+  }
+
+  async function startNewDrama({ title = '', logline = '' } = {}) {
+    error.value = ''
+    notice.value = ''
+    let nextTitle = String(title || '').trim()
+    if (!nextTitle) {
+      const untitled = (projects.value || []).filter((p) =>
+        String(p.title || '').startsWith('未命名漫剧'),
+      )
+      nextTitle = untitled.length ? `未命名漫剧 ${untitled.length + 1}` : '未命名漫剧'
+    }
+    const data = await dramaApi.createProject({
+      title: nextTitle,
+      logline: String(logline || '').trim(),
+    })
+    const nextSlug = data.slug || data.project?.slug
+    if (!nextSlug) throw new Error('创建项目失败：未返回 slug')
+    await openProject(nextSlug)
+    clearScriptChat()
+    boardMode.value = 'script'
+    notice.value = '已开启新漫剧：用一句话描述故事，即可生成剧本并逐步制作'
+    await refreshProjects()
+    return data
+  }
+
   async function sendScriptChat(instruction) {
     const text = String(instruction || '').trim()
     if (!slug.value || !text || scriptChatLoading.value) return null
@@ -2855,6 +2889,8 @@ export function useDramaStudio() {
     scriptChatLoading,
     scriptChatMessages,
     ensureScriptChatSeed,
+    clearScriptChat,
+    startNewDrama,
     sendScriptChat,
     rerenderDirtyShots,
     produceEpisodeHq,

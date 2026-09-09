@@ -347,6 +347,59 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     return get_project(slug)
 
 
+def create_project(
+    *,
+    title: str = "",
+    logline: str = "",
+    slug: str = "",
+) -> dict[str, Any]:
+    """Workbench: create a blank drama project for step-by-step production."""
+    from tools.drama_common import utc_now
+    from tools.drama_produce import ensure_hq_preset, suggest_project_slug
+
+    given_title = str(title or "").strip().strip("《》\"'“”‘’") or "未命名漫剧"
+    logline_text = str(logline or "").strip()
+
+    if slug:
+        sid = parse_slug(slug)
+    else:
+        sid = parse_slug(suggest_project_slug(logline_text or given_title, given_title))
+
+    base = sid
+    n = 2
+    while load_drama_project_file(sid):
+        suffix = f"-{n}"
+        sid = parse_slug(f"{base[: max(1, 40 - len(suffix))]}{suffix}")
+        n += 1
+        if n > 99:
+            raise DramaBadRequest("无法生成唯一项目 slug，请指定不同标题")
+
+    now = utc_now()
+    project = {
+        "slug": sid,
+        "title": given_title,
+        "logline": logline_text,
+        "aspect": "9:16",
+        "created_at": now,
+        "updated_at": now,
+        "episodes": [],
+    }
+    save_project(sid, project)
+    ensure_hq_preset(sid)
+    resolve_safe(f"dramas/{sid}/episodes").mkdir(parents=True, exist_ok=True)
+    readme = resolve_safe(f"dramas/{sid}/README.md")
+    if not readme.is_file():
+        readme.write_text(
+            f"# {given_title}\n\n"
+            f"- slug: `{sid}`\n"
+            f"- 画幅: 9:16\n"
+            f"- 一句话: {logline_text or '（待写）'}\n\n"
+            f"目录：`bible.md` · `outline.md` · `episodes/` · `characters.json`\n",
+            encoding="utf-8",
+        )
+    return get_project(sid)
+
+
 def remove_project(slug: str, *, purge_same_title: bool = True) -> dict[str, Any]:
     """Delete a whole drama project directory and its queue records (fail closed).
 
@@ -1491,7 +1544,9 @@ def generate_episode_script(
             user_prompt
             + f"\n上次稿不合格（镜头数={shot_n}）。请重写：仅 EP{n:02d}，"
             f"{shot_lo}-{shot_hi} 镜，总时长 {ep_sec}s；"
-            "必须保留角色设定/场景设定/道具设定/配乐与分镜结构化字段。",
+            "必须保留角色设定/场景设定/道具设定/配乐与分镜结构化字段；"
+            "场景设定须可生成无人物主底板，道具设定须可画设定图；"
+            "分镜地点/道具与设定块逐字同名。",
             system=system,
         )
         if str(draft2 or "").strip():
@@ -2415,6 +2470,8 @@ def upload_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
         rec = save_character_ref(slug, cid, data)
     except CharacterError as e:
         raise DramaBadRequest(str(e)) from e
+    # Ref/plate/visual asset change → dirty bound scenes (location_id / prop_ids / 角色).
+    _dirty_shots_for_character(slug, cid, ["scene", "clip"])
     return enrich_character(slug, rec)
 
 
@@ -2479,6 +2536,8 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
             set_ref_locked(slug, cid, True)
         except Exception:
             pass
+    # Regenerated ref / plate must invalidate bound shot scenes.
+    _dirty_shots_for_character(slug, cid, ["scene", "clip"])
     out = find_character(load_characters(slug), cid) or rec
     # 特写缺失时仍返回全身定妆，但提示工作台可重试（仅角色）
     if normalize_category(out.get("category")) == "character" and not ref_face_exists(slug, out):

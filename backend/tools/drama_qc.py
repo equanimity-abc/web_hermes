@@ -618,10 +618,10 @@ def locked_env_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
 
 
 def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 3) -> list[str]:
-    """Seedream 参考打包：``[环境底板, 脸1, 脸2…]``，总数 ≤ max_refs。"""
+    """Seedream 参考打包：``[环境底板, 脸1, 脸2…]``，总数 ≤ max_refs；脸最多 2 张。"""
     limit = max(1, min(int(max_refs or 3), 3))
     env = locked_env_refs_for_shot(slug, shot)
-    faces = locked_face_refs_for_shot(slug, shot)
+    faces = locked_face_refs_for_shot(slug, shot)[:2]
     out: list[str] = []
     for rel in env[:1]:
         if rel not in out:

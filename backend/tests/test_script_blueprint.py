@@ -112,3 +112,19 @@ def test_build_episode_script_system_mentions_sections():
     assert "## 场景设定" in system
     assert "## 道具设定" in system
     assert "配乐:" in system
+    assert "无人物竖屏主底板" in system
+    assert "逐字一致" in system or "逐字" in system
+    assert "禁止每镜发明新背景" in system or "另起炉灶" in system
+
+
+def test_build_episode_user_prompt_stresses_shootable_env():
+    from tools.drama_script_blueprint import build_episode_user_prompt
+
+    prompt = build_episode_user_prompt(
+        "嫦娥与后羿重逢",
+        user_series="请编写单集剧本，目标时长 30 秒。",
+        bible="## 主要场景\n- 月宫冷殿",
+    )
+    assert "主底板" in prompt
+    assert "设定图" in prompt
+    assert "逐字同名" in prompt

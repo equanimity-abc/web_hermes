@@ -60,7 +60,7 @@ watch(
   },
 )
 
-defineExpose({ scrollToBottom })
+defineExpose({ scrollToBottom, focus: () => inputRef.value?.focus?.() })
 </script>
 
 <template>

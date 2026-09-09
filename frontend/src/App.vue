@@ -17,6 +17,7 @@ import { useSidebarResize } from '@/composables/useSidebarResize'
 import { useClipboardToast } from '@/composables/useClipboardToast'
 
 const chatViewRef = ref(null)
+const dramaStudioRef = ref(null)
 const view = ref('chat')
 const {
   projects: dramaProjects,
@@ -63,6 +64,7 @@ const {
   scriptChatLoading,
   scriptChatMessages,
   ensureScriptChatSeed,
+  startNewDrama,
   sendScriptChat,
   rerenderDirtyShots,
   produceEpisodeHq,
@@ -251,6 +253,21 @@ function newChat() {
   nextTick(() => chatViewRef.value?.focusComposer?.())
 }
 
+async function newDramaChat() {
+  view.value = 'drama'
+  stashCurrent(currentSessionId.value || '__draft__')
+  try {
+    await startNewDrama()
+    nextTick(() => {
+      dramaStudioRef.value?.goStage?.('script')
+      dramaStudioRef.value?.focusScriptChat?.()
+    })
+  } catch (e) {
+    console.error('开启新漫剧失败:', e)
+    showToast(e?.message || '开启新漫剧失败')
+  }
+}
+
 function scrollChatToBottom() {
   nextTick(() => {
     nextTick(() => {
@@ -433,6 +450,7 @@ async function onResumeDramaJob(index) {
       :projects="dramaProjects"
       :current-slug="dramaSlug"
       @new-chat="newChat"
+      @new-drama="newDramaChat"
       @select-session="switchSession"
       @delete-session="deleteSession"
       @resize-start="startResize"
@@ -462,6 +480,7 @@ async function onResumeDramaJob(index) {
 
     <DramaStudio
       v-show="view === 'drama'"
+      ref="dramaStudioRef"
       :project="dramaProject"
       :episode="dramaEpisode"
       :episode-n="dramaEpisodeN"
@@ -552,6 +571,7 @@ async function onResumeDramaJob(index) {
       @rerender-dirty="rerenderDirtyShots"
       @produce-episode="produceEpisodeHq"
       @director-generate-script="directorGenerateScript"
+      @start-new-drama="newDramaChat"
       @select-character="selectCharacter"
       @add-character="addCharacter"
       @save-character="saveCharacterCard"

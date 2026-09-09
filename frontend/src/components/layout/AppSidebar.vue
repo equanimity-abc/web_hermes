@@ -11,6 +11,7 @@ defineProps({
 
 const emit = defineEmits([
   'new-chat',
+  'new-drama',
   'select-session',
   'delete-session',
   'resize-start',
@@ -38,7 +39,23 @@ const emit = defineEmits([
           漫剧
         </button>
       </div>
-      <button v-if="view === 'chat'" type="button" class="btn-new-chat" @click="emit('new-chat')">
+      <button
+        v-if="view === 'chat'"
+        type="button"
+        class="btn-new-chat"
+        @click="emit('new-chat')"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+        <span>开启新对话</span>
+      </button>
+      <button
+        v-else
+        type="button"
+        class="btn-new-chat"
+        @click="emit('new-drama')"
+      >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>

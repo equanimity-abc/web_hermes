@@ -42,6 +42,13 @@ export function listProjects() {
   return request('/api/drama/projects')
 }
 
+export function createProject({ title = '', logline = '', slug = '' } = {}) {
+  return request('/api/drama/projects', {
+    method: 'POST',
+    body: JSON.stringify({ title, logline, slug }),
+  })
+}
+
 export function getProject(slug) {
   return request(`/api/drama/projects/${encodeURIComponent(slug)}`)
 }

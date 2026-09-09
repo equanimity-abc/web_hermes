@@ -125,6 +125,7 @@ const emit = defineEmits([
   'export-timeline',
   'produce-episode',
   'director-generate-script',
+  'start-new-drama',
   'save-mix',
   'upload-bgm',
   'apply-mix',
@@ -154,6 +155,7 @@ const bgmInput = ref(null)
 const voiceVideoRef = ref(null)
 const voiceAudioRef = ref(null)
 const selectedKeyId = ref(null)
+const scriptChatRef = ref(null)
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
@@ -434,6 +436,12 @@ function onDirectorGenerateScript() {
   emit('director-generate-script')
 }
 
+function focusScriptChat() {
+  scriptChatRef.value?.focus?.()
+}
+
+defineExpose({ goStage, focusScriptChat })
+
 const previewUrl = computed(() => {
   const shot = props.selected
   const url = shot?.files?.clip?.url || shot?.files?.scene?.url || shot?.preview_url || ''
@@ -463,17 +471,33 @@ const facePreviewUrl = computed(() => {
 
 const castRefSlide = ref(0)
 
+const platePreviewUrl = computed(() => {
+  const url = props.selectedCharacter?.ref_plate_url || ''
+  if (!url) return ''
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
+})
+
 const castRefSlides = computed(() => {
   const char = props.selectedCharacter
-  if (!char || (char.category || 'character') !== 'character') {
-    return [
+  const cat = char?.category || 'character'
+  if (!char || cat !== 'character') {
+    const slides = [
       {
         key: 'body',
-        label: '定妆图',
+        label: cat === 'scene' ? '场景设定图' : cat === 'prop' ? '道具设定图' : '定妆图',
         url: refPreviewUrl.value,
-        empty: '暂无定妆图',
+        empty: cat === 'scene' ? '暂无场景设定图' : cat === 'prop' ? '暂无道具设定图' : '暂无定妆图',
       },
     ]
+    if (cat === 'scene') {
+      slides.push({
+        key: 'plate',
+        label: '主底板（无人物）',
+        url: platePreviewUrl.value,
+        empty: '尚未生成主底板',
+      })
+    }
+    return slides
   }
   return [
     {
@@ -1690,6 +1714,7 @@ const statusBar = computed(() => {
 
             <div class="drama-script-chat-col">
               <DramaScriptChat
+                ref="scriptChatRef"
                 :messages="scriptChatMessages"
                 :loading="scriptChatLoading"
                 :disabled="!project || saving"
@@ -1748,7 +1773,11 @@ const statusBar = computed(() => {
                   @click="emit('select-character', item.id)"
                 >
                   <div class="drama-cast-thumb">
-                    <img v-if="item.ref_url" :src="castAssetUrl(item.ref_url)" :alt="item.name" />
+                    <img
+                      v-if="item.ref_plate_url || item.ref_url"
+                      :src="castAssetUrl(item.ref_plate_url || item.ref_url)"
+                      :alt="item.name"
+                    />
                     <span v-else class="drama-candidate-empty">无图</span>
                   </div>
                   <span class="drama-cast-name">{{ item.name || item.id }}</span>
@@ -2550,10 +2579,14 @@ const statusBar = computed(() => {
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
-        <li><strong>1. 立项</strong> 左侧选项目，或对话「帮我立项一个 xxx 漫剧」</li>
-        <li><strong>2. 生成剧本</strong> 顶部「生成剧本」或剧本台对话一句话出结构化蓝图</li>
-        <li><strong>3. 一键成片</strong> 顶部「一键成片」；有脏镜时用「导出错镜」深链 <code>#shot=N&amp;stage=scene</code></li>
+        <li><strong>1. 开启新对话</strong> 点下方按钮立项，或从左侧打开已有项目</li>
+        <li><strong>2. 生成剧本</strong> 用一句话描述故事，再按步进器逐步做角色 / 画面 / 视频 / 声音</li>
+        <li><strong>3. 导出成片</strong> 到「成片」阶段导出；也可顶部「一键成片」</li>
       </ol>
+      <button type="button" class="btn-primary drama-idle-cta" @click="emit('start-new-drama')">
+        开启新对话
+      </button>
+      <p class="drama-idle-hint">从零开始：剧本 → 角色 → 画面 → 视频 → 声音 → 成片</p>
     </div>
 
     <div v-if="project" class="drama-script-status">

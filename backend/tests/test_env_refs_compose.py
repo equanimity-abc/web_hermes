@@ -34,3 +34,60 @@ def test_compose_shot_image_refs_orders_plate_then_face(monkeypatch, tmp_path):
     assert refs[0].endswith("loc_plate.png") or "loc_plate" in refs[0]
     assert any("face" in r for r in refs)
     assert len(refs) <= 3
+
+
+def test_compose_shot_image_refs_faces_capped_at_two(monkeypatch, tmp_path):
+    """Plan: env 1 + face ≤2; without plate, still at most 2 faces."""
+    from tools import drama_qc as qc
+
+    faces = []
+    for i in range(4):
+        p = tmp_path / f"face{i}.png"
+        p.write_bytes(b"x" * 64)
+        faces.append(str(p).replace("\\", "/"))
+
+    monkeypatch.setattr(qc, "locked_env_refs_for_shot", lambda slug, shot: [])
+    monkeypatch.setattr(qc, "locked_face_refs_for_shot", lambda slug, shot: faces)
+    refs = qc.compose_shot_image_refs("demo", {"n": 1}, max_refs=3)
+    assert len(refs) == 2
+    assert all("face" in r for r in refs)
+
+
+def test_scene_prompt_includes_location_anchor(monkeypatch):
+    from tools.drama_video import _scene_prompt
+
+    monkeypatch.setattr(
+        "tools.drama_characters.load_characters",
+        lambda slug: [
+            {
+                "id": "palace",
+                "name": "广寒宫前殿",
+                "category": "scene",
+                "look": "白玉台阶桂树",
+                "anchor_prompt": "飞檐轮廓稳定",
+                "colors": "冷蓝",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "tools.drama_characters.find_character",
+        lambda cards, cid: next((c for c in cards if c["id"] == cid), None),
+    )
+    monkeypatch.setattr("tools.drama_styles.style_prompt_clause", lambda *a, **k: "")
+    monkeypatch.setattr("tools.drama_spatial.spatial_prompt_clause", lambda plan: "")
+    text = _scene_prompt(
+        "测试集",
+        {
+            "画面": "嫦娥立于殿前",
+            "location_id": "palace",
+            "prop_ids": [],
+            "角色": ["嫦娥"],
+            "kind": "establishing",
+        },
+        [
+            {"id": "c1", "name": "嫦娥", "category": "character", "look": "白衣"},
+        ],
+        slug="demo",
+    )
+    assert "广寒宫前殿" in text
+    assert "白玉台阶" in text or "飞檐" in text or "冷蓝" in text

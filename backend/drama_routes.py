@@ -12,6 +12,7 @@ from tools.drama_studio import (
     DramaBadRequest,
     DramaNotFound,
     cancel_render_job,
+    create_project,
     enqueue_job,
     export_episode,
     get_characters,
@@ -100,6 +101,12 @@ def _http(exc: Exception) -> HTTPException:
 class ProjectPatch(BaseModel):
     title: str | None = None
     logline: str | None = None
+
+
+class ProjectCreate(BaseModel):
+    title: str | None = None
+    logline: str | None = None
+    slug: str | None = None
 
 
 class EpisodePatch(BaseModel):
@@ -278,6 +285,18 @@ class NodeBody(BaseModel):
 @router.get("/projects")
 def drama_list_projects():
     return list_projects()
+
+
+@router.post("/projects")
+def drama_create_project(body: ProjectCreate):
+    try:
+        return create_project(
+            title=body.title or "",
+            logline=body.logline or "",
+            slug=body.slug or "",
+        )
+    except (DramaNotFound, DramaBadRequest) as e:
+        raise _http(e) from e
 
 
 @router.get("/projects/{slug}")

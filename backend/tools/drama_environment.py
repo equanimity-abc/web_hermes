@@ -300,6 +300,16 @@ def ensure_locations_and_props_from_shots(slug: str, doc: dict[str, Any]) -> dic
                 cards.append(rec)
                 created_props.append(str(rec.get("id") or prop_name))
                 hit = rec
+            else:
+                aliases = list(hit.get("aliases") or [])
+                if prop_name not in aliases and prop_name != str(hit.get("name") or ""):
+                    aliases.append(prop_name)
+                    hit = upsert_character(slug, {**hit, "aliases": aliases})
+                    # refresh in local cards list
+                    for i, c in enumerate(cards):
+                        if str(c.get("id") or "") == str(hit.get("id") or ""):
+                            cards[i] = hit
+                            break
             cid = str(hit.get("id") or "")
             if cid and cid not in prop_ids:
                 prop_ids.append(cid)
@@ -371,16 +381,25 @@ def ensure_environment_looks_expanded(slug: str) -> list[str]:
         name = str(rec.get("name") or cid)
         if cat == "scene":
             system = (
-                "你是场景美术指导。只输出一段简体中文场景外形描述："
-                "建筑轮廓、标志物、主光方向、地面材质、主色调。不要标题不要列表。"
+                "你是场景美术指导。只输出一段简体中文场景外形描述（80–180字）："
+                "空间结构与进深、建筑轮廓、地面材质、主光方向、主色与辅色、"
+                "1–3个固定标志物。必须可直接用于生成无人物竖屏主底板。"
+                "禁止气氛空话与故事情节。不要标题不要列表。"
             )
-            prompt = f"地点名：{name}\n现有描述：{look}\n请扩写成可稳定复现的场景设定。"
+            prompt = (
+                f"地点名：{name}\n现有描述：{look}\n"
+                "请扩写成可稳定复现的场景设定（供主底板与跨镜背景锁定）。"
+            )
         else:
             system = (
-                "你是道具美术指导。只输出一段简体中文道具外形描述："
-                "形状、材质、颜色、标志细节。不要标题不要列表。"
+                "你是道具美术指导。只输出一段简体中文道具外形描述（60–140字）："
+                "形状轮廓、材质、颜色与光泽、尺寸感、纹样或磨损等标志细节。"
+                "必须可直接用于生成道具设定图。禁止情节描写。不要标题不要列表。"
             )
-            prompt = f"道具名：{name}\n现有描述：{look}\n请扩写成可稳定复现的道具设定。"
+            prompt = (
+                f"道具名：{name}\n现有描述：{look}\n"
+                "请扩写成可稳定复现的道具设定（供设定图锁定）。"
+            )
         try:
             expanded = str(draft_text_sync(slug, prompt, system=system) or "").strip()
         except Exception:

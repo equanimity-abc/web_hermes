@@ -227,6 +227,10 @@
   color: var(--color-text-secondary);
 }
 
+.drama-idle-cta {
+  margin: 4px 0 12px;
+}
+
 .drama-idle-hint {
   font-size: 13px;
   color: var(--color-text-muted);

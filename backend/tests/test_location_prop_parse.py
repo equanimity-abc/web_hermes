@@ -137,3 +137,81 @@ def test_ensure_locations_and_props_from_shots_creates_cards(monkeypatch):
     cats = {c["category"] for c in store}
     assert "scene" in cats
     assert "prop" in cats
+
+
+def test_ensure_merges_prop_aliases(monkeypatch):
+    store = [
+        {
+            "id": "pill",
+            "name": "不死药",
+            "category": "prop",
+            "look": "仙药",
+            "aliases": ["不死药"],
+        }
+    ]
+
+    def _load(_slug):
+        return list(store)
+
+    def _upsert(_slug, patch):
+        cid = str(patch.get("id") or "")
+        for i, rec in enumerate(store):
+            if rec.get("id") == cid or rec.get("name") == patch.get("name"):
+                store[i] = {**rec, **{k: v for k, v in patch.items() if v is not None}}
+                return store[i]
+        rec = {
+            "id": str(patch.get("id") or patch.get("name") or "x"),
+            "name": patch.get("name"),
+            "category": patch.get("category") or "character",
+            "look": patch.get("look") or "",
+            "aliases": list(patch.get("aliases") or []),
+        }
+        store.append(rec)
+        return rec
+
+    from tools import drama_environment as env
+
+    monkeypatch.setattr(env, "load_characters", _load)
+    monkeypatch.setattr(env, "upsert_character", _upsert)
+
+    def _match_token(token, characters, category=None):
+        for c in characters:
+            if category and c.get("category") != category:
+                continue
+            if c.get("name") == token or token in (c.get("aliases") or []):
+                return c
+        return None
+
+    monkeypatch.setattr(env, "match_character_token", lambda token, characters: None)
+    monkeypatch.setattr(env, "match_asset_token", _match_token)
+
+    doc = {
+        "shots": [
+            {
+                "n": 1,
+                "画面": "手握仙丹",
+                "地点": "",
+                "道具": "仙丹",
+                "角色": [],
+            }
+        ]
+    }
+    # First bind with alias name that should merge onto 不死药 if match finds it
+    # Simulate match by name alias via custom match that maps 仙丹 → pill when we add alias after first create
+    def _match_asset(token, characters, category=None):
+        for c in characters:
+            if category and str(c.get("category") or "") != category:
+                continue
+            if c.get("name") == token or token in (c.get("aliases") or []):
+                return c
+            # treat 仙丹 as synonym of 不死药 for this test once card exists
+            if token == "仙丹" and c.get("name") == "不死药":
+                return c
+        return None
+
+    monkeypatch.setattr(env, "match_asset_token", _match_asset)
+    summary = ensure_locations_and_props_from_shots("demo", doc)
+    assert doc["shots"][0]["prop_ids"] == ["pill"]
+    pill = next(c for c in store if c["id"] == "pill")
+    assert "仙丹" in (pill.get("aliases") or [])
+    assert not summary["props_created"]  # reused existing card
