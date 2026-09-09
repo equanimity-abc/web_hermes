@@ -41,6 +41,50 @@ def identity_kpi(doc: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def identity_kpi_min_scored() -> int:
+    """Minimum scored shots before KPI becomes a hard gate (avoid cold start)."""
+    return 3
+
+
+def identity_kpi_blocker(doc: dict[str, Any] | None) -> str:
+    """Human-readable blocker when episode identity KPI fails studio bar; else empty."""
+    kpi = identity_kpi(doc)
+    scored = int(kpi.get("scored") or 0)
+    if scored < identity_kpi_min_scored():
+        return ""
+    if kpi.get("ok"):
+        return ""
+    rate = kpi.get("pass_rate")
+    rate_s = f"{float(rate):.0%}" if rate is not None else "n/a"
+    fails = kpi.get("failed") or []
+    fail_s = ",".join(str(x) for x in fails[:8]) or "—"
+    return (
+        f"身份 KPI 未达标（通过率 {rate_s}，最长连过 {kpi.get('consecutive_pass') or 0}，"
+        f"需≥80% 且连过≥{min(5, scored)}；失败镜 {fail_s}）。请重渲失败镜 scene 后再发布。"
+    )
+
+
+def dirty_identity_kpi_fails(doc: dict[str, Any] | None) -> list[int]:
+    """Mark identity-failed shots dirty for scene/motion/clip requeue; return shot numbers."""
+    kpi = identity_kpi(doc)
+    fails = [int(x) for x in (kpi.get("failed") or []) if int(x) > 0]
+    if not fails or not isinstance(doc, dict):
+        return []
+    by_n = {int(s.get("n") or 0): s for s in (doc.get("shots") or []) if isinstance(s, dict)}
+    touched: list[int] = []
+    for n in fails:
+        shot = by_n.get(n)
+        if not shot:
+            continue
+        dirty = list(shot.get("dirty") or [])
+        for layer in ("scene", "motion", "clip", "lip"):
+            if layer not in dirty and layer not in (shot.get("locked") or []):
+                dirty.append(layer)
+        shot["dirty"] = dirty
+        touched.append(n)
+    return touched
+
+
 def produce_blockers(
     slug: str,
     episode: int,
@@ -98,6 +142,11 @@ def produce_blockers(
         ]
         if cards and not any(c.get("ref_locked") for c in cards):
             blockers.append("系列连续性：尚无锁定定妆，EP>1 前请先锁角色参考图")
+
+    # Resume / re-export: when enough identity scores exist, KPI must pass.
+    kpi_msg = identity_kpi_blocker(doc)
+    if kpi_msg:
+        blockers.append(kpi_msg)
 
     return blockers
 

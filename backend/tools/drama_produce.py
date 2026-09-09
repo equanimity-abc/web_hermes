@@ -1207,6 +1207,23 @@ def _produce_episode_hq_body(
         cancel_check()
 
     doc = load_doc(slug, n) or doc
+    from tools.drama_produce_gates import dirty_identity_kpi_fails, identity_kpi, identity_kpi_blocker
+    from tools.drama_shots import save_doc as _save_doc_kpi
+
+    kpi = identity_kpi(doc)
+    stages["identity_kpi"] = kpi
+    kpi_msg = identity_kpi_blocker(doc)
+    if kpi_msg and not allow_qc_fail_export:
+        touched = dirty_identity_kpi_fails(doc)
+        if touched:
+            try:
+                _save_doc_kpi(doc)
+            except Exception:
+                pass
+        raise ValueError(
+            kpi_msg + (f" 已标脏镜号：{','.join(str(x) for x in touched)}" if touched else "")
+        )
+
     snap = take_snapshot(slug, n, doc, tag="stage_pre_export")
     if snap:
         stages["snapshots"].append(snap)

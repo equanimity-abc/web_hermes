@@ -110,8 +110,9 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
 
 def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
     """Block export unless every shot passes identity/lip/flicker (unless force)."""
+    from tools.drama_produce_gates import dirty_identity_kpi_fails, identity_kpi, identity_kpi_blocker
     from tools.drama_qc import qc_shot_bundle, shot_can_pass
-    from tools.drama_shots import ordered_shots_from_doc
+    from tools.drama_shots import ordered_shots_from_doc, save_doc
 
     if force:
         return {"ok": True, "forced": True, "block_reason": ""}
@@ -135,14 +136,28 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
         reason = str(bundle.get("block_reason") or "QC 未通过")
         blockers.append(f"Shot {sn}: {reason}")
 
+    kpi_msg = identity_kpi_blocker(doc)
+    if kpi_msg:
+        touched = dirty_identity_kpi_fails(doc)
+        if touched:
+            try:
+                save_doc(doc)
+            except Exception:
+                pass
+        blockers.append(kpi_msg)
+
     if blockers:
         raise ValueError(
             "导出被 QC 硬闸拦截（工作台可强制导出，Agent 不可）："
             + "；".join(blockers[:8])
             + ("…" if len(blockers) > 8 else "")
         )
-    return {"ok": True, "forced": False, "block_reason": ""}
-
+    return {
+        "ok": True,
+        "forced": False,
+        "block_reason": "",
+        "identity_kpi": identity_kpi(doc),
+    }
 
 def assert_studio_lip_shot(slug: str, shot: dict[str, Any]) -> None:
     """Fail loud when eligible lip shots still use fallback/mock under studio profile."""
