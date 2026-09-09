@@ -100,7 +100,7 @@ def test_assert_hq_lip_multi_speaker(monkeypatch, tmp_path: Path):
         lambda wanted=None, slug="": ["pixverse"],
     )
     monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: motion)
-    with pytest.raises(ValueError, match="多说话人"):
+    with pytest.raises(ValueError, match="auto_split"):
         assert_hq_lip_ready(
             "demo",
             {

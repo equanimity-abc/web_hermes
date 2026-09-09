@@ -989,15 +989,27 @@ def _produce_episode_hq_body(
 
     classify_shots(slug, n, force=False)
     doc = load_doc(slug, n) or doc
+    from tools.drama_dialogue import normalize_hq_auto_split_doc
     from tools.drama_series import apply_dual_speaker_notes_doc, ensure_cast_embeddings
     from tools.drama_shots import save_doc
     from tools.drama_snapshots import take_snapshot
     from tools.drama_spatial import ensure_spatial_plans_doc
 
     dual_count = apply_dual_speaker_notes_doc(doc)
+    split_info = normalize_hq_auto_split_doc(slug, n, doc)
+    doc = split_info["doc"]
     spatial_count = ensure_spatial_plans_doc(slug, doc)
-    if dual_count > 0 or spatial_count > 0:
+    if dual_count > 0 or spatial_count > 0 or split_info.get("changed"):
         save_doc(doc)
+    if split_info.get("changed"):
+        _progress(
+            on_progress,
+            stage="sync",
+            message=(
+                f"对手戏 auto_split：{split_info['split_parents']} 镜 → "
+                f"{split_info['child_shots']} 个单人段"
+            ),
+        )
     clock.end("sync")
 
     clock.start("cast")
@@ -1070,6 +1082,8 @@ def _produce_episode_hq_body(
         "refs_generated": ref_chars,
         "embeddings": emb_cids,
         "dual_speaker_shots": dual_count,
+        "auto_split_parents": split_info.get("split_parents") or 0,
+        "auto_split_children": split_info.get("child_shots") or 0,
         "snapshots": [],
         "shots_rendered": [],
         "i2v_shots": [],

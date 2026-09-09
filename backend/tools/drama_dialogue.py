@@ -752,3 +752,226 @@ def active_speaker_at(track: dict[str, Any], t: float) -> str:
         if float(turn.get("start") or 0) <= t:
             prev = str(turn.get("speaker") or "")
     return prev or str(turns[0].get("speaker") or "")
+
+
+def track_distinct_speakers(track: dict[str, Any] | None) -> list[str]:
+    """Ordered unique speaker keys from dialogue turns."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for turn in list((track or {}).get("turns") or []):
+        if not isinstance(turn, dict):
+            continue
+        key = str(turn.get("character_id") or "").strip() or speaker_key(
+            str(turn.get("character_name") or turn.get("speaker") or "")
+        )
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def group_turns_by_speaker_runs(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Collapse consecutive turns with the same speaker into runs (一人一段)."""
+    runs: list[list[dict[str, Any]]] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        key = str(turn.get("character_id") or "").strip() or speaker_key(
+            str(turn.get("character_name") or turn.get("speaker") or "")
+        )
+        if runs:
+            prev = runs[-1][-1]
+            prev_key = str(prev.get("character_id") or "").strip() or speaker_key(
+                str(prev.get("character_name") or prev.get("speaker") or "")
+            )
+            if prev_key == key:
+                runs[-1].append(turn)
+                continue
+        runs.append([turn])
+    return runs
+
+
+def _join_turn_texts(turns: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for turn in turns:
+        t = str(turn.get("text") or "").strip()
+        if t:
+            parts.append(t)
+    if not parts:
+        return ""
+    out = parts[0]
+    for p in parts[1:]:
+        if out[-1] not in "。！？!?…":
+            out += "。"
+        out += p
+    return out
+
+
+def split_shot_auto(
+    parent: dict[str, Any],
+    *,
+    track: dict[str, Any] | None = None,
+    cast: list[dict[str, Any]] | None = None,
+    slug: str = "",
+) -> list[dict[str, Any]]:
+    """Split one multi-speaker shot into single-speaker children (HQ policy A)."""
+    import copy
+
+    cards = list(cast or [])
+    parent_track = track if isinstance(track, dict) else None
+    if parent_track is None:
+        parent_track = parent.get("dialogue_track") if isinstance(parent.get("dialogue_track"), dict) else None
+    if parent_track is None or not (parent_track.get("turns") or []):
+        parent_track = build_dialogue_track(parent, cards, slug=slug or None)
+    turns = [t for t in (parent_track.get("turns") or []) if isinstance(t, dict) and str(t.get("text") or "").strip()]
+    runs = group_turns_by_speaker_runs(turns)
+    if len(track_distinct_speakers({"turns": turns})) < 2 or len(runs) < 2:
+        return [parent]
+
+    parent_n = int(parent.get("n") or 0)
+    parent_dur = float(parent.get("duration") or 0) or 3.0
+    weights = [max(1, len(_join_turn_texts(r))) for r in runs]
+    weight_sum = float(sum(weights)) or float(len(runs))
+
+    children: list[dict[str, Any]] = []
+    for i, run in enumerate(runs):
+        child = copy.deepcopy(parent)
+        name = str(run[0].get("character_name") or run[0].get("speaker") or "").strip()
+        text = _join_turn_texts(run)
+        child["字幕"] = f"{name}：「{text}」" if name else text
+        child["对白"] = child["字幕"]
+        child["speaker"] = name
+        if name:
+            child["角色"] = [name]
+        # Fresh media layers — scene/i2v/lip regenerated per beat under HQ.
+        child["assets"] = {}
+        child["candidates"] = []
+        child["chosen"] = ""
+        child["identity"] = None
+        child["qc"] = None
+        child["lip_source"] = ""
+        child["lip_score"] = None
+        child["lip_base_used"] = False
+        child["lip_warnings"] = []
+        child["lip_degraded"] = False
+        child["i2v_source"] = ""
+        child["voice_turns"] = []
+        child["dirty"] = []
+        child["locked"] = []
+        child["status"] = "pending"
+        child["scene_source"] = ""
+        child.pop("dual_speaker", None)
+        child["duration"] = max(1.2, round(parent_dur * (weights[i] / weight_sum), 2))
+        child["hq_split_from"] = parent_n
+        child["hq_split_index"] = i
+        child["hq_split_total"] = len(runs)
+        child["hq_dialogue_policy"] = "auto_split"
+
+        bind = resolve_speaker_binding(name, cards, slug=slug or None) if name else {
+            "character_name": name,
+            "character_id": "",
+            "speaker": name,
+            "voice": "",
+            "voice_label": "",
+            "face_ref": "",
+            "face_ready": False,
+            "script_speaker": name,
+        }
+        # Prefer voice/face already on the turn rows
+        if run[0].get("voice"):
+            bind["voice"] = run[0].get("voice")
+            bind["voice_label"] = run[0].get("voice_label") or bind.get("voice_label")
+        if run[0].get("face_ref"):
+            bind["face_ref"] = run[0].get("face_ref")
+            bind["face_ready"] = bool(run[0].get("face_ready"))
+        if run[0].get("character_id"):
+            bind["character_id"] = run[0].get("character_id")
+            bind["character_name"] = run[0].get("character_name") or name
+
+        new_turns = [_turn_row(j, bind, str(t.get("text") or "").strip()) for j, t in enumerate(run)]
+        child_track = empty_dialogue_track()
+        child_track["mode"] = "single"
+        child_track["lip_strategy"] = "master"
+        child_track["turns"] = new_turns
+        child_track["primary_speaker"] = name
+        child_track["bindings"] = [_binding_row(bind)]
+        child_track["cast_matched"] = 1 if bind.get("character_id") or name else 0
+        child["dialogue_track"] = child_track
+        child["voice"] = str(bind.get("voice") or child.get("voice") or "")
+        children.append(child)
+    return children
+
+
+def normalize_hq_auto_split_doc(
+    slug: str,
+    episode: int,
+    doc: dict[str, Any],
+    *,
+    cast: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Expand multi-speaker shots into single-speaker beats; renumber timeline.
+
+    Returns ``{doc, split_parents, child_shots, changed}``.
+    """
+    from tools.drama_characters import load_characters
+    from tools.drama_shots import normalize_timeline, ordered_shots_from_doc
+
+    cards = list(cast if cast is not None else load_characters(slug))
+    ordered = ordered_shots_from_doc(doc)
+    new_shots: list[dict[str, Any]] = []
+    split_parents = 0
+    child_shots = 0
+    for shot in ordered:
+        if not isinstance(shot, dict):
+            continue
+        # Already a split child — do not re-split.
+        if str(shot.get("hq_dialogue_policy") or "") == "auto_split" and shot.get("hq_split_from") is not None:
+            track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else None
+            if track is None:
+                track = build_dialogue_track(shot, cards, slug=slug)
+                shot["dialogue_track"] = track
+            new_shots.append(shot)
+            continue
+
+        track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else None
+        if track is None or not (track.get("turns") or []):
+            track = build_dialogue_track(shot, cards, slug=slug)
+            shot["dialogue_track"] = track
+
+        if len(track_distinct_speakers(track)) < 2:
+            new_shots.append(shot)
+            continue
+
+        children = split_shot_auto(shot, track=track, cast=cards, slug=slug)
+        if len(children) <= 1:
+            new_shots.append(shot)
+            continue
+        split_parents += 1
+        child_shots += len(children)
+        new_shots.extend(children)
+
+    for i, shot in enumerate(new_shots, start=1):
+        shot["n"] = i
+        # Re-index turn indices after renumber
+        tr = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else None
+        if tr and isinstance(tr.get("turns"), list):
+            for j, turn in enumerate(tr["turns"]):
+                if isinstance(turn, dict):
+                    turn["index"] = j
+
+    doc = dict(doc)
+    doc["shots"] = new_shots
+    doc["count"] = len(new_shots)
+    doc["timeline"] = normalize_timeline(doc.get("timeline"), new_shots)
+    doc["slug"] = slug
+    doc["episode"] = int(episode)
+    return {
+        "doc": doc,
+        "split_parents": split_parents,
+        "child_shots": child_shots,
+        "changed": split_parents > 0,
+    }

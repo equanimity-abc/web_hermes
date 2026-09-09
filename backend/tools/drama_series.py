@@ -10,7 +10,8 @@ from tools.workspace import resolve_safe
 
 DEFAULT_DUAL_SPEAKER = {
     "strategy": "lock_lr",
-    "note": "双人 CU 先锁 L/R 再口型",
+    "hq_policy": "auto_split",
+    "note": "专业档默认 auto_split 拆成单人段；lock_lr 供 per_turn 进阶策略",
 }
 
 DEFAULT_SERIES_META: dict[str, Any] = {
@@ -78,6 +79,7 @@ def load_series_meta(slug: str) -> dict[str, Any]:
     if isinstance(dual, dict) and dual:
         out["dual_speaker"] = {
             "strategy": str(dual.get("strategy") or DEFAULT_DUAL_SPEAKER["strategy"]),
+            "hq_policy": str(dual.get("hq_policy") or DEFAULT_DUAL_SPEAKER.get("hq_policy") or "auto_split"),
             "note": str(dual.get("note") or DEFAULT_DUAL_SPEAKER["note"]),
         }
     return out
@@ -95,6 +97,7 @@ def save_series_meta(slug: str, data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(dual, dict) and dual:
         payload["dual_speaker"] = {
             "strategy": str(dual.get("strategy") or DEFAULT_DUAL_SPEAKER["strategy"]),
+            "hq_policy": str(dual.get("hq_policy") or DEFAULT_DUAL_SPEAKER.get("hq_policy") or "auto_split"),
             "note": str(dual.get("note") or DEFAULT_DUAL_SPEAKER["note"]),
         }
     path = resolve_safe(series_meta_rel(slug))

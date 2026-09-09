@@ -225,7 +225,7 @@ def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
     if not gate.get("ok"):
         return {"ok": True, "skipped": gate.get("reason") or "not_eligible"}
 
-    # Multi-speaker: HQ v1 requires split shots (no color-heuristic wrong-lock).
+    # Multi-speaker: HQ default is auto_split before produce. Same-frame multi lip is forbidden.
     track = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else {}
     turns = list(track.get("turns") or [])
     speakers = {
@@ -234,10 +234,13 @@ def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
         if isinstance(t, dict)
     }
     speakers.discard("")
-    if len(speakers) >= 2:
+    # Also count character_id diversity
+    from tools.drama_dialogue import track_distinct_speakers
+
+    if len(track_distinct_speakers(track)) >= 2 or len(speakers) >= 2:
         raise ValueError(
-            "专业档口型暂不支持多说话人同镜（避免锁错脸）。"
-            "请拆成单人对话镜后再产片。"
+            "专业档多说话人同镜须先 auto_split 为单人段（产片会自动拆镜）。"
+            "请重新产片，或手动拆成单说话人镜后再口型。"
         )
 
     lip_cfg = models.get("lip") if isinstance(models.get("lip"), dict) else {}
