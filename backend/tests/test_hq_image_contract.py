@@ -44,6 +44,47 @@ def test_image_provider_chain_studio_no_cascade(monkeypatch):
     assert chain == ["seedream"]
 
 
+def test_image_provider_chain_studio_character_ref_commercial_cascade(monkeypatch):
+    """定妆在 studio 下仍可跨商用后端级联，但不落入 pollinations。"""
+    monkeypatch.setattr(
+        "tools.drama_hq_contract.is_hq_no_fallback",
+        lambda slug, models=None: True,
+    )
+    monkeypatch.setattr(
+        "tools.providers.registry.has",
+        lambda cap, pid: cap == "image"
+        and pid in ("seedream", "kling-image", "wanx", "pollinations"),
+    )
+    monkeypatch.setattr(
+        "tools.drama_styles.default_character_ref_image_route",
+        lambda: {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628"},
+    )
+    chain = _image_provider_chain(
+        "seedream",
+        {"kind": "character_ref"},
+        refs=(),
+        slug="demo",
+    )
+    assert chain[0] == "seedream"
+    assert "kling-image" in chain
+    assert "wanx" in chain
+    assert "pollinations" not in chain
+
+
+def test_seedream_gen_size_clamps_portrait_1980():
+    from tools.providers.ark_providers import _seedream_gen_size
+
+    # 1980×3520 exceeds Pro pixel ceiling — must shrink while staying ~9:16
+    size = _seedream_gen_size(1980, 3520)
+    assert "x" in size
+    w, h = (int(x) for x in size.split("x", 1))
+    assert w * h <= 4_624_220
+    assert abs(w / h - 1980 / 3520) < 0.05
+    # square character canvas maps to a named/safe square
+    assert _seedream_gen_size(1980, 1980) == "2048x2048"
+    assert _seedream_gen_size(1024, 1024) == "1024x1024"
+
+
 def test_assert_hq_image_ready_missing_lock(monkeypatch):
     monkeypatch.setattr(
         "tools.drama_models.load_models",

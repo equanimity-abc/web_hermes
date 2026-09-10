@@ -10,6 +10,16 @@ from tools.drama_hq_contract import assert_hq_i2v_ready
 from tools.drama_i2v import try_generate_i2v
 
 
+def test_hq_shot_layers_run_lip_after_i2v():
+    """口型依赖真运动片，不能与 scene/voice 同批抢跑。"""
+    from tools.drama_produce import HQ_POST_I2V_LAYERS, HQ_SHOT_LAYERS
+
+    assert "lip" not in HQ_SHOT_LAYERS
+    assert "voice" in HQ_SHOT_LAYERS
+    assert HQ_POST_I2V_LAYERS[0] == "lip"
+    assert "clip" in HQ_POST_I2V_LAYERS
+
+
 def test_try_generate_i2v_strict_l0_no_kenburns(monkeypatch, tmp_path: Path):
     scene = tmp_path / "scene.png"
     scene.write_bytes(b"x" * 100)

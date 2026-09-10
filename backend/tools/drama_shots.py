@@ -99,6 +99,39 @@ LAYER_LABELS = {
 # 字幕 = 台词（配音 + 底部字幕）；旁白 = 画外说明（左上角竖排）
 _CONTENT_KEYS = ("画面", "地点", "道具", "字幕", "旁白", "角色", "duration", "timing")
 
+# LLM 常把「可空」写成占位词；旁白空时应保持空字符串，勿展示「无」
+_SCRIPT_EMPTY_PLACEHOLDERS = frozenset(
+    {
+        "无",
+        "没有",
+        "无。",
+        "无旁白",
+        "暂无",
+        "空",
+        "none",
+        "n/a",
+        "na",
+        "-",
+        "—",
+        "–",
+        "/",
+        "（无）",
+        "(无)",
+    }
+)
+
+
+def sanitize_script_placeholder(value: Any) -> str:
+    """Normalize empty script fields — strip LLM placeholders like「无」."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text in _SCRIPT_EMPTY_PLACEHOLDERS:
+        return ""
+    if text.lower() in _SCRIPT_EMPTY_PLACEHOLDERS:
+        return ""
+    return text
+
 
 def migrate_shot_script_fields(raw: dict[str, Any]) -> dict[str, Any]:
     """Legacy 对白/字幕 → 字幕/旁白. Idempotent for already-migrated shots."""
@@ -114,6 +147,7 @@ def migrate_shot_script_fields(raw: dict[str, Any]) -> dict[str, Any]:
     else:
         data.setdefault("字幕", data.get("字幕", ""))
         data.setdefault("旁白", data.get("旁白", ""))
+    data["旁白"] = sanitize_script_placeholder(data.get("旁白"))
     return data
 
 
@@ -462,7 +496,7 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         if isinstance(raw.get("prop_ids"), (list, tuple))
         else normalize_roles(raw.get("prop_ids")),
         "字幕": str(raw.get("字幕") or ""),
-        "旁白": str(raw.get("旁白") or ""),
+        "旁白": sanitize_script_placeholder(raw.get("旁白")),
         "角色": normalize_roles(raw.get("角色")),
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
@@ -555,7 +589,7 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw.get("prop_ids"), (list, tuple))
         else normalize_roles(raw.get("prop_ids")),
         "字幕": str(raw.get("字幕") or ""),
-        "旁白": str(raw.get("旁白") or ""),
+        "旁白": sanitize_script_placeholder(raw.get("旁白")),
         "角色": normalize_roles(raw.get("角色")),
         "kind": raw.get("kind") or "",
         "size": raw.get("size") or "",
@@ -907,7 +941,12 @@ def apply_patch(shot: dict[str, Any], patch: dict[str, Any]) -> list[str]:
     }
     for key in ("画面", "地点", "字幕", "旁白", "timing", "camera"):
         if key in patch and patch[key] is not None:
-            shot[key] = str(patch[key]).strip() if key == "地点" else str(patch[key])
+            if key == "地点":
+                shot[key] = str(patch[key]).strip()
+            elif key == "旁白":
+                shot[key] = sanitize_script_placeholder(patch[key])
+            else:
+                shot[key] = str(patch[key])
     if "对白" in patch and patch["对白"] is not None and "字幕" not in patch:
         shot["字幕"] = str(patch["对白"])
     if "角色" in patch and patch["角色"] is not None:

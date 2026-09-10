@@ -123,6 +123,31 @@ def test_normalize_ref_image_route():
     assert shot["ref_image_provider"] == "kling-image"
 
 
+def test_ref_canvas_size_by_category():
+    from tools.drama_characters import normalize_ref_size, ref_canvas_size
+
+    assert normalize_ref_size(1980, "character") == 1024
+    assert normalize_ref_size(640, "scene") == 1440
+    assert normalize_ref_size(1024, "scene") == 1440  # 旧角色边长在场景档无效
+    assert normalize_ref_size(1536, "character") == 1536
+    assert ref_canvas_size({"category": "character", "ref_size": 1024}) == (1024, 1024)
+    assert ref_canvas_size({"category": "character", "ref_size": 2048}) == (2048, 2048)
+    assert ref_canvas_size({"category": "prop", "ref_size": 1024}) == (1024, 1024)
+    assert ref_canvas_size({"category": "prop", "ref_size": 1080}) == (1080, 1920)
+    assert ref_canvas_size({"category": "scene", "ref_size": 1440}) == (1440, 2560)
+    assert ref_canvas_size({"category": "scene", "ref_size": 1600}) == (1600, 2848)
+    assert ref_canvas_size({"category": "scene", "ref_size": 1980}) == (1440, 2560)
+
+
+def test_prop_ref_prompt_square_vs_portrait():
+    from tools.drama_characters import build_asset_ref_prompt
+
+    square = build_asset_ref_prompt({"category": "prop", "look": "玉瓶", "ref_size": 1024})
+    assert "正方形" in square
+    tall = build_asset_ref_prompt({"category": "prop", "look": "玉瓶", "ref_size": 1080})
+    assert "9:16" in tall
+
+
 def test_trim_letterbox_reads_pixels_with_pillow():
     from PIL import Image
 

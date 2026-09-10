@@ -205,8 +205,38 @@ def default_tts_voices() -> list[dict[str, str]]:
     return [{"id": vid, "label": label} for vid, label in DEFAULT_VOICES]
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
 CHAR_CANDIDATE_MAX = 4
-REF_SIZE_OPTIONS = (640, 1024, 1980)
-DEFAULT_REF_SIZE = 1980
+
+# 定妆画布：按资产类型分档（ref_size 存预设键，不是「边长万能码」）
+# 角色 1:1；道具默认方图、可选竖屏；场景 9:16 对齐成片 / 出图画布。
+FACE_REF_SIZE = 1024
+REF_SIZE_PRESETS: dict[str, dict[int, tuple[int, int]]] = {
+    "character": {
+        1024: (1024, 1024),
+        1536: (1536, 1536),
+        2048: (2048, 2048),
+    },
+    "prop": {
+        1024: (1024, 1024),
+        1080: (1080, 1920),
+    },
+    "scene": {
+        1440: (1440, 2560),
+        1080: (1080, 1920),
+        1600: (1600, 2848),
+    },
+}
+DEFAULT_REF_SIZE_BY_CATEGORY: dict[str, int] = {
+    "character": 1024,
+    "prop": 1024,
+    "scene": 1440,
+}
+# 兼容旧字段：曾用边长 640/1024/1980；1024 在角色/道具仍合法，场景 1024 会落到默认。
+_LEGACY_REF_SIZES = frozenset({640, 1980})
+
+# 兼容旧常量名（部分调用方 / 测试）
+REF_SIZE_OPTIONS = (1024, 1536, 2048, 1080, 1440, 1600)
+DEFAULT_REF_SIZE = DEFAULT_REF_SIZE_BY_CATEGORY["character"]
+
 REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = (
     {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "label": "方舟 · Seedream 5.0 Pro"},
     {"provider": "kling-image", "model": "kling/kling-v3-omni-image-generation", "label": "可灵 · Kling V3 Omni"},
@@ -241,20 +271,50 @@ def character_ref_shot(char: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_ref_size(raw: Any) -> int:
+def default_ref_size_for(category: Any) -> int:
+    cat = normalize_category(category)
+    return int(DEFAULT_REF_SIZE_BY_CATEGORY.get(cat) or DEFAULT_REF_SIZE)
+
+
+def ref_size_options_for(category: Any) -> tuple[int, ...]:
+    cat = normalize_category(category)
+    presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
+    return tuple(presets.keys())
+
+
+def normalize_ref_size(raw: Any, category: Any = "character") -> int:
+    """Map stored ref_size to a valid preset key for this asset category."""
+    cat = normalize_category(category)
+    presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
+    default = default_ref_size_for(cat)
     try:
-        n = int(raw or DEFAULT_REF_SIZE)
+        n = int(raw)
     except (TypeError, ValueError):
-        n = DEFAULT_REF_SIZE
-    return n if n in REF_SIZE_OPTIONS else DEFAULT_REF_SIZE
+        return default
+    if n in presets:
+        return n
+    # 旧拍脑袋边长 → 落到该类型默认
+    if n in _LEGACY_REF_SIZES:
+        return default
+    return default
 
 
 def ref_canvas_size(char: dict[str, Any]) -> tuple[int, int]:
-    """角色三视图：整图为 S×S 正方形；物品/场景为 9:16。"""
-    s = normalize_ref_size(char.get("ref_size"))
-    if normalize_category(char.get("category")) == "character":
-        return s, s
-    return s, int(round(s * 16 / 9))
+    """角色/默认道具：方图；竖屏道具与场景：9:16。"""
+    cat = normalize_category(char.get("category"))
+    key = normalize_ref_size(char.get("ref_size"), cat)
+    presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
+    return presets.get(key) or presets[default_ref_size_for(cat)]
+
+
+def ref_size_label(category: Any, size_key: int) -> str:
+    cat = normalize_category(category)
+    presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
+    wh = presets.get(int(size_key))
+    if not wh:
+        return str(size_key)
+    w, h = wh
+    return f"{w}×{h}"
 
 
 class CharacterError(ValueError):
@@ -530,14 +590,16 @@ def character_ref_negative_prompt() -> str:
 
 
 def build_asset_ref_prompt(char: dict[str, Any]) -> str:
-    """角色定妆：单张正面全身立绘；物品/场景仍走各自设定图 prompt。"""
+    """角色定妆：单张正面全身立绘；道具设定图。场景请用 ``build_location_plate_prompt``。"""
     look = enriched_look(char) or str(char.get("look") or "").strip() or "原创设计"
     colors = str(char.get("colors") or "").strip()
     category = normalize_category(char.get("category"))
     no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
     if category == "prop":
+        w, h = ref_canvas_size(char)
+        frame = "正方形物品设定图" if w == h else "竖屏9:16物品设定图"
         bits = [
-            "竖屏9:16物品设定图",
+            frame,
             f"外形：{look}",
             f"配色：{colors}" if colors else "",
             "纯白满幅背景占满画面，无黑边白边留白",
@@ -547,16 +609,8 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
         ]
         return "，".join(b for b in bits if b)
     if category == "scene":
-        bits = [
-            "竖屏9:16场景概念设定图",
-            f"场景：{look}",
-            f"色调：{colors}" if colors else "",
-            "电影感光影，建筑与标志物清晰，主光方向固定",
-            "无人物、无剪影路人、无动物",
-            "满幅构图，无黑边白边留白",
-            no_text,
-        ]
-        return "，".join(b for b in bits if b)
+        # Scenes no longer use a separate 设定图 — plate prompt is the authority.
+        return build_location_plate_prompt(char)
     bits = [
         "一张正方形插画，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
         "正面全身站立，居中构图，人物占画面主体",
@@ -943,10 +997,11 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         resolve_safe(ref_plate)
     except ValueError:
         ref_plate = plate_canonical
+    category = normalize_category(raw.get("category"))
     return {
         "id": cid,
         "name": name,
-        "category": normalize_category(raw.get("category")),
+        "category": category,
         "aliases": _as_str_list(raw.get("aliases")),
         "look": str(raw.get("look") or "").strip(),
         "hair": str(raw.get("hair") or "").strip(),
@@ -954,7 +1009,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "outfit": str(raw.get("outfit") or "").strip(),
         "marks": str(raw.get("marks") or "").strip(),
         "colors": str(raw.get("colors") or "").strip(),
-        "ref_size": normalize_ref_size(raw.get("ref_size")),
+        "ref_size": normalize_ref_size(raw.get("ref_size"), category),
         "ref_image_provider": ref_image_provider,
         "ref_image_model": ref_image_model,
         "catchphrase": str(raw.get("catchphrase") or "").strip(),
@@ -1107,15 +1162,26 @@ def save_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     rec = find_character(cards, cid)
     if rec is None:
         raise CharacterError(f"找不到角色：{cid}，请先保存角色卡")
-    if rec.get("ref_locked") and ref_exists(slug, rec):
+    cat = normalize_category(rec.get("category"))
+    if cat == "scene":
+        if rec.get("ref_locked") and ref_plate_exists(slug, rec):
+            raise CharacterError("参考图已锁定，解锁后才能替换")
+    elif rec.get("ref_locked") and ref_exists(slug, rec):
         raise CharacterError("参考图已锁定，解锁后才能替换")
     if not data:
         raise CharacterError("参考图不能为空")
-    rel = ref_rel(slug, cid)
-    dest = resolve_safe(rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _write_ref_png(data, dest, char=rec)
-    rec["ref"] = rel
+    if cat == "scene":
+        rel = ref_plate_rel(slug, cid)
+        dest = resolve_safe(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _write_ref_png(data, dest, char=rec)
+        rec["ref_plate"] = rel
+    else:
+        rel = ref_rel(slug, cid)
+        dest = resolve_safe(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _write_ref_png(data, dest, char=rec)
+        rec["ref"] = rel
     save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
     return rec
 

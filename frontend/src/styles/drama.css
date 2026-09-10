@@ -1106,18 +1106,62 @@
 
 .drama-script-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
   min-height: 0;
   flex: 1;
 }
 
-.drama-script-editor-col,
-.drama-script-chat-col {
+.drama-script-editor-col {
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.drama-script-gen-col {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.drama-script-gen-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.drama-script-gen-input {
+  flex: 0 0 80%;
+  width: 80%;
+  max-width: 80%;
+  min-width: 0;
+  min-height: calc(4 * 1.45em + 16px);
+  resize: none;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.drama-script-gen-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: 40px;
+  padding: 0 16px;
 }
 
 .drama-script-editor-col .drama-script-panel--edit {
@@ -1142,6 +1186,305 @@
   gap: 8px;
 }
 
+.drama-script-panel-head-actions .btn-ghost.active {
+  background: var(--color-bg-muted, #f3f4f6);
+  color: var(--color-text);
+}
+
+.drama-script-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.drama-script-file-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-soft, var(--color-border));
+}
+
+.drama-script-file-tab {
+  border: 1px solid var(--color-border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drama-script-file-tab.active {
+  background: var(--color-bg-muted, #f3f4f6);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.drama-script-file-tab.dirty {
+  border-color: #f59e0b;
+}
+
+.drama-script-view-sheet {
+  display: inline-flex;
+  margin: 10px 14px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.drama-script-view-sheet-btn {
+  border: none;
+  background: #fff;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drama-script-view-sheet-btn + .drama-script-view-sheet-btn {
+  border-left: 1px solid var(--color-border);
+}
+
+.drama-script-view-sheet-btn.active {
+  background: var(--color-bg-muted, #f3f4f6);
+  color: var(--color-text);
+}
+
+.drama-script-summary-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0 12px;
+}
+
+.drama-script-summary,
+.drama-script-summary-block {
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drama-script-summary-line {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.drama-script-summary-dl {
+  margin-bottom: 8px;
+}
+
+.drama-script-summary-toc {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.drama-script-summary-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fafafa;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-secondary, var(--color-text-muted));
+}
+
+.drama-script-file-path {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 11px;
+  color: var(--color-text-faint, var(--color-text-muted));
+  word-break: break-all;
+}
+
+.drama-script-file-missing {
+  color: #b45309;
+}
+
+.drama-script-workspace-editor {
+  flex: 1;
+  min-height: 280px;
+  margin: 10px 14px 14px;
+  width: calc(100% - 28px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.drama-script-structured {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.drama-script-outline-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-soft, var(--color-border));
+}
+
+.drama-script-outline-nav-btn {
+  border: 1px solid var(--color-border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.drama-script-outline-nav-btn em {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.drama-script-outline-nav-btn:hover {
+  background: #fafafa;
+}
+
+.drama-script-outline {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.drama-script-structured-empty {
+  padding: 24px 14px;
+}
+
+.drama-script-outline-hero {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border-soft, var(--color-border));
+}
+
+.drama-script-outline-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.drama-script-outline-meta {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.drama-script-outline-meta-row,
+.drama-script-asset-field {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.drama-script-outline-meta-row dt,
+.drama-script-asset-field dt {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.drama-script-outline-meta-row dd,
+.drama-script-asset-field dd {
+  margin: 0;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.drama-script-outline-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scroll-margin-top: 8px;
+}
+
+.drama-script-outline-h {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drama-script-outline-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-bg-muted, #f3f4f6);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.drama-script-outline-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-faint, var(--color-text-muted));
+}
+
+.drama-script-asset-card,
+.drama-script-shot-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.drama-script-asset-name,
+.drama-script-shot-head {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.drama-script-shot-timing {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.drama-script-asset-fields {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
 .drama-script-panel-head .drama-model-select {
   max-width: 220px;
 }
@@ -1152,98 +1495,6 @@
   margin: 0 14px 14px;
   width: calc(100% - 28px);
   resize: none;
-}
-
-.drama-script-chat {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: #fff;
-  overflow: hidden;
-}
-
-.drama-script-chat-messages {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.drama-script-chat-hint {
-  margin: 0;
-  font-size: 12px;
-  color: #9ca3af;
-}
-
-.drama-script-chat-msg {
-  display: flex;
-}
-
-.drama-script-chat-msg.user {
-  justify-content: flex-end;
-}
-
-.drama-script-chat-msg.assistant {
-  justify-content: flex-start;
-}
-
-.drama-script-chat-bubble {
-  max-width: 92%;
-  padding: 8px 10px;
-  border-radius: 10px;
-  font-size: 13px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.drama-script-chat-msg.user .drama-script-chat-bubble {
-  background: #eef2ff;
-  color: #312e81;
-}
-
-.drama-script-chat-msg.assistant .drama-script-chat-bubble {
-  background: #f3f4f6;
-  color: #111827;
-}
-
-.drama-script-chat-bubble--pending {
-  opacity: 0.75;
-  font-style: italic;
-}
-
-.drama-script-chat-input {
-  flex-shrink: 0;
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--color-border);
-  background: #fafafa;
-}
-
-.drama-script-chat-textarea {
-  flex: 1;
-  min-width: 0;
-  resize: none;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.45;
-  background: #fff;
-  box-sizing: border-box;
-}
-
-.drama-script-chat-send {
-  flex-shrink: 0;
 }
 
 .drama-script-status {
@@ -1907,23 +2158,6 @@
   background: #fff;
   resize: vertical;
 }
-.drama-flow-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  padding: 12px 20px;
-  border-top: 1px solid var(--color-border);
-  background: #fff;
-  position: sticky;
-  bottom: 0;
-}
-
-.drama-flow-footer-banner {
-  margin: 0;
-  flex: 1;
-  width: 100%;
-}
 
 /* —— 定妆资产页 —— */
 .drama-cast-layout {
@@ -2357,9 +2591,10 @@
 
 .drama-av-frame {
   position: relative;
-  width: 100%;
+  /* Height-first 9:16: avoid width:100% + max-height collapsing into a landscape box */
+  height: min(100%, calc(100% - 4px));
+  width: auto;
   max-width: 100%;
-  /* Leave room below for the always-on status bar */
   max-height: calc(100% - 4px);
   aspect-ratio: 9 / 16;
   margin: 0 auto;
@@ -2449,7 +2684,7 @@
 
 .drama-voice-frame {
   position: relative;
-  display: inline-block;
+  display: block;
   max-width: 100%;
   max-height: min(520px, 62vh);
   aspect-ratio: 9 / 16;
@@ -2458,14 +2693,28 @@
   background: #000;
 }
 
+/* Inside shared AV preview: inherit .drama-av-frame sizing; don't flip to landscape */
+.drama-av-preview-area .drama-voice-frame {
+  display: block;
+  height: min(100%, calc(100% - 4px));
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100% - 4px);
+  aspect-ratio: 9 / 16;
+}
+
 .drama-voice-frame .drama-media {
   display: block;
   width: 100%;
   height: 100%;
   max-width: none;
   max-height: none;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 0;
+}
+
+.drama-av-preview-area .drama-voice-frame .drama-media {
+  object-fit: contain;
 }
 
 .drama-voice-frame .drama-stage-empty {

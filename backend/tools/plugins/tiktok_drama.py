@@ -31,7 +31,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 - 人设少而尖：2–4 个角色，各有一句口头禅或视觉锚点。
 
 ## 工作流
-0. **create_from_premise（一句话全自动，默认推荐）** premise=故事梗概 → 自动解析「几集 / 每集几秒」→ 立项 + bible + outline + **按集拆分剧本** + **逐集 HQ 成片导出**（返回 play_url + episodes[]）；定妆每人 1 张并锁定；分镜只出 1 张画面（候选墙留给工作台微调）
+0. **create_from_premise（一句话全自动，默认推荐）** premise=故事梗概 → 自动解析「几集 / 每集几秒」→ 立项 + bible + outline + **按集拆分剧本** + **逐集 HQ 成片导出**（返回 play_url + episodes[]）；定妆每人 1 张并锁定；分镜只出 1 张画面；**全程禁止候选项墙与自动重抽**
 0b. **get / guide** 带 slug+episode 时返回 **episode_status** 状态卡（脏镜/失败镜/BGM/导演下一步）；行动前先读卡，避免盲推进
 1. tiktok_drama action=init 建项目（slug + title + logline）
 2. save_bible 写入人设 bible.md
@@ -48,7 +48,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 13. save_character 写角色卡（外形 look + 音色 voice）；produce_episode 会按分镜 `- 角色:` 自动补卡
 14. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 15. 锁参考图后无法覆盖已锁定的定妆 png
-16. 微调时才用 generate_candidates 出 2–4 张候选，choose_candidate 点选锁定画面（不重配音）；全自动禁止刷候选墙
+16. **禁止** generate_candidates / choose_candidate；所有步骤禁止使用候选项结果与重抽步骤（单次出图，失败 Fail Loud）
 17. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
 18. poll_job 查询后台任务（produce_episode / render_episode / rerender_dirty）
 19. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
@@ -788,43 +788,19 @@ def _action_poll_job(args: dict) -> str:
 
 
 def _action_generate_candidates(args: dict) -> str:
-    from tools.drama_studio import generate_candidates
-
-    slug, n, err = _episode_number(args)
-    if err:
-        return _err(err, slug=slug)
-    if not _load_project(slug):
-        return _err("项目不存在，请先 init", slug=slug)
-    try:
-        shot_n = int(args.get("shot"))
-    except (TypeError, ValueError):
-        return _err("需要 shot（镜头号）")
-    count = args.get("count")
-    try:
-        count_n = int(count) if count is not None else 4
-    except (TypeError, ValueError):
-        count_n = 4
-    result = generate_candidates(slug, n, shot_n, count_n)
-    return _ok(action="generate_candidates", **result)
+    return _err(
+        "已禁用：所有步骤禁止候选项墙与重抽。"
+        "请用 rerender_shot layers=scene（或 produce_episode）单次出图，禁止 generate_candidates",
+        slug=_slug(str(args.get("slug") or "")),
+    )
 
 
 def _action_choose_candidate(args: dict) -> str:
-    from tools.drama_studio import choose_candidate
-
-    slug, n, err = _episode_number(args)
-    if err:
-        return _err(err, slug=slug)
-    if not _load_project(slug):
-        return _err("项目不存在，请先 init", slug=slug)
-    try:
-        shot_n = int(args.get("shot"))
-    except (TypeError, ValueError):
-        return _err("需要 shot（镜头号）")
-    cid = str(args.get("candidate_id") or args.get("id") or "").strip()
-    if not cid:
-        return _err("需要 candidate_id")
-    result = choose_candidate(slug, n, shot_n, cid)
-    return _ok(action="choose_candidate", **result)
+    return _err(
+        "已禁用：所有步骤禁止使用候选项结果。"
+        "请直接 lock_shot / rerender_shot，禁止 choose_candidate",
+        slug=_slug(str(args.get("slug") or "")),
+    )
 
 
 def _action_classify_shots(args: dict) -> str:
@@ -1357,7 +1333,7 @@ def register_tiktok_drama() -> None:
             "render_episode（按镜出 clip，不含 I2V/口型/导出）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
 "rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
-            "generate_candidates（每镜 2–4 张候选图）、choose_candidate（点选锁定画面，不重配音）、"
+            "generate_candidates/choose_candidate（已禁用：禁止候选项与重抽）、"
             "export_timeline（导出整集：脏镜先重渲再拼接混音）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
@@ -1534,7 +1510,7 @@ def register_tiktok_drama() -> None:
                 },
                 "count": {
                     "type": "integer",
-                    "description": "generate_candidates 出图数量 2–4；generate_keys 姿态数 3–5",
+                    "description": "generate_keys 姿态数 3–5（generate_candidates 已禁用）",
                 },
                 "job_id": {
                     "type": "string",
@@ -1574,8 +1550,8 @@ def register_tiktok_drama() -> None:
         "立即调用 tiktok_drama action=create_from_premise，premise=该梗概。"
         "集数规则：用户明确说了「共N集/做成N集」才按 N 集；**没说集数就不要传 episode_count，系统默认单集 60 秒**，禁止自行脑补多集，回复里也不要强调「第1集/共1集」。"
         "时长：用户说了每集多少秒则按其解析；可选用 seconds 覆盖。多集时按集拆分并返回 episodes[]；单集只返回一支成片预览；"
-        "定妆图每人只生成 1 张并默认锁定；分镜画面全自动时也只出 1 张（不刷 4 张候选墙）。"
-        "候选墙（每镜 2–4 张）仅在用户进入工作台微调时用 generate_candidates，禁止在全自动流程里调用。"
+        "定妆图每人只生成 1 张并默认锁定；分镜画面只出 1 张。"
+        "**所有步骤禁止使用候选项结果与重抽步骤**：禁止 generate_candidates / choose_candidate；禁止自动换种子重抽；失败 Fail Loud。"
         "禁止拆成 init/save_bible/save_episode/parse_shots/produce_episode 多步让用户确认，"
         "除非用户明确只要剧本不要成片，或已有项目只要重渲。"
         "已有剧本项目要出片用 produce_episode（同样单图+锁定妆+自动导出）。"

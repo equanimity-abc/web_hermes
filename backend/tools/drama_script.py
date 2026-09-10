@@ -35,7 +35,7 @@ _REFINE_SYSTEM = (
     "3. 禁止用 ``` 代码围栏包裹；\n"
     "4. 保留并维护结构化字段：标题、时长/钩子/悬念/配乐、"
     "## 角色设定 / ## 场景设定 / ## 道具设定、### Shot N (…s)、"
-    "画面/地点/道具/字幕/旁白/角色；\n"
+    "画面/地点/道具/字幕/旁白/角色；旁白可空时省略该行或留空，禁止写「无」「没有」；\n"
     "5. 角色/场景/道具名称必须全局一致，修改设定时同步更新分镜引用；\n"
     "6. 场景设定必须可拍：空间结构、主光方向、地面材质、1–3 个标志物；"
     "禁止空泛氛围词；单集主场景宜 1–3 个且跨镜同名；\n"
@@ -187,6 +187,10 @@ def format_episode_markdown(parsed: dict[str, Any]) -> str:
                     text = "、".join(str(x).strip() for x in val if str(x).strip())
                 else:
                     text = str(val or "").strip()
+            elif key == "旁白":
+                from tools.drama_shots import sanitize_script_placeholder
+
+                text = sanitize_script_placeholder(val)
             else:
                 text = str(val or "").strip()
             if text:

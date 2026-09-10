@@ -30,10 +30,30 @@ def test_compose_shot_image_refs_orders_plate_then_face(monkeypatch, tmp_path):
         "locked_face_refs_for_shot",
         lambda slug, shot: [str(face).replace("\\", "/")],
     )
-    refs = qc.compose_shot_image_refs("demo", {"location_id": "loc"}, max_refs=3)
+    # 定场：环境优先
+    refs = qc.compose_shot_image_refs(
+        "demo", {"location_id": "loc", "kind": "establishing", "size": "WS"}, max_refs=3
+    )
     assert refs[0].endswith("loc_plate.png") or "loc_plate" in refs[0]
     assert any("face" in r for r in refs)
     assert len(refs) <= 3
+    # 对话近景：脸优先（身份锁）
+    refs_d = qc.compose_shot_image_refs(
+        "demo", {"location_id": "loc", "kind": "dialogue", "size": "MCU"}, max_refs=3
+    )
+    assert refs_d[0].endswith("face.png") or "face" in refs_d[0]
+
+
+def test_hq_skips_layered_compositing_by_default():
+    """专业档默认关闭 bbox 贴层（DRAMA_LAYERED_SCENE=0）。"""
+    from config import config
+
+    assert str(getattr(config, "DRAMA_LAYERED_SCENE", "0") or "0").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def test_compose_shot_image_refs_faces_capped_at_two(monkeypatch, tmp_path):

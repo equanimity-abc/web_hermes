@@ -138,6 +138,19 @@ export function saveScript(slug, episode, content, title) {
   })
 }
 
+export function getScriptWorkspace(slug, episode) {
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script-workspace`)
+}
+
+export function saveScriptWorkspace(slug, episode, files, keys = null) {
+  const body = { files }
+  if (keys) body.keys = keys
+  return request(`/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script-workspace`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
 export function generateScript(slug, episode, premise) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/script/generate`,

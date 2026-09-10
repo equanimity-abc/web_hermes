@@ -1,9 +1,9 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import DramaThumbImg from '@/components/drama/DramaThumbImg.vue'
-import DramaScriptChat from '@/components/drama/DramaScriptChat.vue'
 import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
-import DramaDirectorBar from '@/components/drama/DramaDirectorBar.vue'
+import DramaScriptFileSummary from '@/components/drama/DramaScriptFileSummary.vue'
+import { castRefSizeOptions, normalizeRefSize, refCanvasSize } from '@/utils/dramaRefSizes'
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -26,7 +26,12 @@ const props = defineProps({
   bust: { type: Number, default: 0 },
   scriptDraft: { type: String, default: '' },
   scriptImpact: { type: Object, default: null },
-  scriptChatMessages: { type: Array, default: () => [] },
+  scriptWorkspace: { type: Object, default: null },
+  scriptWorkspaceDrafts: { type: Object, default: () => ({}) },
+  scriptWorkspaceDirty: { type: Object, default: () => ({}) },
+  scriptWorkspaceKey: { type: String, default: 'script' },
+  scriptWorkspaceLoading: { type: Boolean, default: false },
+  scriptWorkspaceLabels: { type: Object, default: () => ({}) },
   scriptChatLoading: { type: Boolean, default: false },
   scriptChatProgress: { type: Object, default: null },
   boardMode: { type: String, default: 'shots' },
@@ -80,9 +85,13 @@ const emit = defineEmits([
   'update:boardMode',
   'preview-script',
   'save-script',
+  'save-script-workspace-current',
+  'save-script-workspace-all',
+  'select-script-workspace-key',
+  'update-script-workspace-content',
+  'reload-script-workspace',
   'script-chat-send',
   'enter-script-stage',
-  'rerender-dirty',
   'select-character',
   'add-character',
   'save-character',
@@ -123,8 +132,6 @@ const emit = defineEmits([
   'move-timeline-shot',
   'reorder-timeline',
   'export-timeline',
-  'produce-episode',
-  'director-generate-script',
   'start-new-drama',
   'save-mix',
   'upload-bgm',
@@ -155,29 +162,70 @@ const bgmInput = ref(null)
 const voiceVideoRef = ref(null)
 const voiceAudioRef = ref(null)
 const selectedKeyId = ref(null)
-const scriptChatRef = ref(null)
+const scriptPremiseInput = ref('')
+const scriptPremiseRef = ref(null)
+/** raw = 原文直接展示；summary = 关键信息 */
+const scriptFileViewMode = ref('summary')
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
 const stageList = computed(() => [
   { id: 'script', label: '剧本', title: '步骤一：结构化剧本（角色/场景/道具/配乐/分镜）', done: Boolean(props.episode?.script) },
-  { id: 'cast', label: '角色', title: '步骤二：文生图生成定妆图，定角色、物品、场景', done: (props.characters || []).some((c) => c.ref_exists) },
+  { id: 'cast', label: '角色', title: '步骤二：定妆 / 道具设定图 / 场景主底板', done: (props.characters || []).some((c) => c.ref_exists) },
   { id: 'scene', label: '画面', title: '步骤三：分镜文生图与候选墙锁图', done: hasLayer('scene') },
   { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动），时长取自剧本', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
   { id: 'voice', label: '声音', title: '步骤五：配音与口型', done: hasLayer('voice') },
   { id: 'assemble', label: '成片', title: '步骤六：拼接、BGM 与导出', done: Boolean(props.episode?.play_url) },
 ])
 
+const scriptWorkspaceTabs = computed(() => {
+  const keys = props.scriptWorkspace?.keys || ['project', 'bible', 'outline', 'script', 'shots', 'characters', 'mix']
+  const labels = props.scriptWorkspaceLabels || {}
+  const epLabel = `ep${String(props.episodeN || 1).padStart(2, '0')}.md`
+  return keys.map((key) => {
+    const file = props.scriptWorkspace?.files?.[key]
+    let label = labels[key] || file?.label || key
+    if (key === 'script') {
+      const base = String(file?.path || '').split('/').pop()
+      label = base && base.endsWith('.md') ? base : epLabel
+    }
+    return {
+      key,
+      label,
+      path: file?.path || '',
+      dirty: Boolean(props.scriptWorkspaceDirty?.[key]),
+    }
+  })
+})
+
+const activeWorkspaceFile = computed(() => props.scriptWorkspace?.files?.[props.scriptWorkspaceKey] || null)
+
+const activeWorkspaceContent = computed({
+  get() {
+    return props.scriptWorkspaceDrafts?.[props.scriptWorkspaceKey] ?? ''
+  },
+  set(v) {
+    emit('update-script-workspace-content', { key: props.scriptWorkspaceKey, content: v })
+  },
+})
+
+const workspaceDirtyCount = computed(
+  () => Object.values(props.scriptWorkspaceDirty || {}).filter(Boolean).length,
+)
+
+watch(
+  () => props.scriptWorkspaceKey,
+  () => {
+    // 换文件时默认回到关键信息，便于扫读
+    scriptFileViewMode.value = 'summary'
+  },
+)
+
 const castCategory = ref('character')
 const CAST_TABS = [
   { id: 'character', label: '角色' },
   { id: 'prop', label: '物品' },
   { id: 'scene', label: '场景' },
-]
-const CAST_REF_SIZES = [
-  { value: 640, hint: '640×640' },
-  { value: 1024, hint: '1024×1024' },
-  { value: 1980, hint: '1980×1980' },
 ]
 const CAST_REF_MODELS = [
   { provider: 'seedream', model: 'doubao-seedream-5-0-pro-260628', label: '方舟 · Seedream 5.0 Pro' },
@@ -256,7 +304,9 @@ const scriptStatusPct = computed(() => {
   return 0
 })
 
-function onScriptChatSend(text) {
+function onGenerateScript() {
+  const text = String(scriptPremiseInput.value || '').trim()
+  if (!text || props.scriptChatLoading || props.saving) return
   emit('script-chat-send', text)
 }
 
@@ -325,14 +375,30 @@ const castRefInfo = computed(() => {
   if (!c.ref_exists) return null
   const w = Number(c.ref_width || 0)
   const h = Number(c.ref_height || 0)
-  const canvas = Number(c.ref_size || props.charDraft.ref_size || 0)
+  const cat = props.charDraft.category || c.category || 'character'
+  const [cw, ch] = refCanvasSize(cat, c.ref_size ?? props.charDraft.ref_size)
   return {
-    pixelSize: w > 0 && h > 0 ? `${w} × ${h} px` : canvas ? `${canvas} × ${canvas} px（设定）` : '—',
+    pixelSize: w > 0 && h > 0 ? `${w} × ${h} px` : cw && ch ? `${cw} × ${ch} px（设定）` : '—',
     fileSize: formatFileSize(c.ref_bytes),
     model: castRefModelLabel.value,
     locked: Boolean(c.ref_locked),
   }
 })
+
+const castRefSizeSelectOptions = computed(() =>
+  castRefSizeOptions(props.charDraft?.category || props.selectedCharacter?.category || 'character'),
+)
+
+watch(
+  () => props.charDraft?.category,
+  (cat) => {
+    if (!props.charDraft) return
+    const next = normalizeRefSize(props.charDraft.ref_size, cat)
+    if (Number(props.charDraft.ref_size) !== next) {
+      props.charDraft.ref_size = next
+    }
+  },
+)
 
 function onAddCastAsset() {
   const names = { character: '新角色', prop: '新物品', scene: '新场景' }
@@ -396,16 +462,6 @@ function goNext() {
   if (nextStage.value) goStage(nextStage.value.id)
 }
 
-const dirtyCount = computed(() => {
-  const shots = props.shots || []
-  let n = 0
-  for (const s of shots) {
-    if ((s.dirty || []).length) n += 1
-    else if (s.qc && s.qc.produce_ok === false) n += 1
-  }
-  return n
-})
-
 const STAGE_IDS = new Set(['script', 'cast', 'scene', 'video', 'voice', 'assemble'])
 
 function applyDeepLink(hash = window.location.hash || '') {
@@ -431,16 +487,11 @@ onUnmounted(() => {
   window.removeEventListener('hashchange', onHashChange)
 })
 
-function onDirectorGenerateScript() {
-  goStage('script')
-  emit('director-generate-script')
+function focusScriptPremise() {
+  scriptPremiseRef.value?.focus?.()
 }
 
-function focusScriptChat() {
-  scriptChatRef.value?.focus?.()
-}
-
-defineExpose({ goStage, focusScriptChat })
+defineExpose({ goStage, focusScriptChat: focusScriptPremise, focusScriptPremise })
 
 const previewUrl = computed(() => {
   const shot = props.selected
@@ -480,24 +531,25 @@ const platePreviewUrl = computed(() => {
 const castRefSlides = computed(() => {
   const char = props.selectedCharacter
   const cat = char?.category || 'character'
-  if (!char || cat !== 'character') {
-    const slides = [
+  if (cat === 'scene') {
+    return [
       {
-        key: 'body',
-        label: cat === 'scene' ? '场景设定图' : cat === 'prop' ? '道具设定图' : '定妆图',
-        url: refPreviewUrl.value,
-        empty: cat === 'scene' ? '暂无场景设定图' : cat === 'prop' ? '暂无道具设定图' : '暂无定妆图',
-      },
-    ]
-    if (cat === 'scene') {
-      slides.push({
         key: 'plate',
         label: '主底板（无人物）',
-        url: platePreviewUrl.value,
+        url: platePreviewUrl.value || refPreviewUrl.value,
         empty: '尚未生成主底板',
-      })
-    }
-    return slides
+      },
+    ]
+  }
+  if (cat === 'prop') {
+    return [
+      {
+        key: 'body',
+        label: '道具设定图',
+        url: refPreviewUrl.value,
+        empty: '暂无道具设定图',
+      },
+    ]
   }
   return [
     {
@@ -700,10 +752,8 @@ const canGenerateI2v = computed(() => {
   if (!shot) return false
   const mode = props.draft?.i2v || shot.i2v || 'auto'
   if (mode === 'off') return false
-  if (!shot.files?.scene?.exists) return false
-  if (mode === 'on') return true
-  // auto：锁定画面后可生成（L0 走静图运镜，其它走 I2V）
-  return (shot.locked || []).includes('scene') || shotFrozen.value
+  // 有关键帧即可生成；auto 下后端会自动锁 scene
+  return Boolean(shot.files?.scene?.exists)
 })
 const canGenerateLip = computed(() => Boolean(props.selected?.lip?.ok || props.selected?.lip?.will_run))
 const canGenerateKeys = computed(() => Boolean(props.selected?.keys_gate?.ok || props.selected?.keys_gate?.will_run))
@@ -760,13 +810,13 @@ function shotVideoPreviewUrl(shot) {
 }
 
 function shotVoicePreviewUrl(shot) {
-  // 单一时钟：优先 clip（装配后的音画）；其次同源 lip；最后才 motion+外挂音
+  // 声音页优先口型母带：clip 在 lip_source 丢失时可能退化成未对嘴的 motion 垫长片
   if (!shot) return ''
-  if (shot.files?.clip?.exists && shot.files?.clip?.url) {
-    return withBust(shot.files.clip.url)
-  }
   if (shotHasLip(shot) && !shot.lip_base_used && shot.files?.lip?.url) {
     return withBust(shot.files.lip.url)
+  }
+  if (shot.files?.clip?.exists && shot.files?.clip?.url) {
+    return withBust(shot.files.clip.url)
   }
   const url = shot.files?.motion?.url || shot.files?.scene?.url || shot.files?.lip?.url || ''
   return url ? withBust(url) : ''
@@ -774,9 +824,12 @@ function shotVoicePreviewUrl(shot) {
 
 function shotVoiceNeedsExternalAudio(shot) {
   if (!shot) return false
-  // clip / 同源 lip 自带音轨，不要再挂 voice.mp3（否则前半段双轨错位）
+  // 口型预览：优先外挂配音，避免 provider 内嵌音轨与口型轻微错位
+  if (shotHasLip(shot) && !shot.lip_base_used && shot.files?.lip?.exists) {
+    return Boolean(shotVoiceAudioUrl(shot))
+  }
+  // clip 自带音轨
   if (shot.files?.clip?.exists) return false
-  if (shotHasLip(shot) && !shot.lip_base_used) return false
   return Boolean(shotVoiceAudioUrl(shot))
 }
 
@@ -1016,6 +1069,7 @@ function shotHasLip(shot) {
     'latentsync',
     'musetalk',
     'wav2lip',
+    'recovered',
   ]
   return Boolean(shot?.files?.lip?.exists || real.includes(base))
 }
@@ -1094,9 +1148,11 @@ function shotVoiceAudioUrl(shot) {
 }
 
 function voiceNarrationText() {
-  // 旁白 = 画外说明（左上角竖排）；展示时去掉心声前缀
+  // 旁白 = 画外说明（左上角竖排）；展示时去掉心声前缀与「无」占位
   let text = String(props.draft?.旁白 || '').trim()
-  if (!text) return ''
+  if (!text || /^(无|没有|无。|无旁白|暂无|空|none|n\/a|-|—|–|\/|（无）|\(无\))$/i.test(text)) {
+    return ''
+  }
   text = text.replace(/^(?:【\s*)?(?:内心独白|心声|OS)(?:\s*】)?\s*[:：]?\s*/i, '').trim()
   return text
 }
@@ -1117,13 +1173,27 @@ function voiceDialogueCaption() {
   return text
 }
 
+function onVoiceVideoPlay() {
+  const video = voiceVideoRef.value
+  const audio = voiceAudioRef.value
+  if (!audio) return
+  if (video) video.muted = true
+  // 同一时间轴：外挂配音与口型画面都从当前画面时刻起算（开播时对齐到同一 PTS）
+  syncVoiceVolumeFromVideo()
+  syncVoiceAudioToVideo()
+  audio.play().catch(() => {})
+}
+
 function syncVoiceAudioToVideo() {
   const video = voiceVideoRef.value
   const audio = voiceAudioRef.value
   if (!video || !audio) return
-  if (Math.abs((audio.currentTime || 0) - (video.currentTime || 0)) > 0.12) {
+  const vt = Number(video.currentTime) || 0
+  const at = Number(audio.currentTime) || 0
+  // 更紧的对齐阈值：口型与声音共用同一时钟，偏差超过一帧就拉齐
+  if (Math.abs(at - vt) > 0.04) {
     try {
-      audio.currentTime = video.currentTime || 0
+      audio.currentTime = vt
     } catch {
       /* ignore seek errors while loading */
     }
@@ -1158,16 +1228,6 @@ function restartVoicePreviewIfNeeded() {
     }
   }
   return true
-}
-
-function onVoiceVideoPlay() {
-  const video = voiceVideoRef.value
-  const audio = voiceAudioRef.value
-  if (!audio) return
-  if (video) video.muted = true
-  syncVoiceVolumeFromVideo()
-  syncVoiceAudioToVideo()
-  audio.play().catch(() => {})
 }
 
 function onVoiceVideoPause() {
@@ -1501,59 +1561,81 @@ const assembleStatusState = computed(() => {
   return 'idle'
 })
 
-// 全局底部状态栏：按当前步骤返回对应的进度 / 状态 / 标题 / 消息。
+// 全局底部状态栏：错误优先，再按当前步骤返回进度 / 状态 / 标题 / 消息。
 const statusBar = computed(() => {
+  const err = String(props.error || '').trim()
+  if (err) {
+    return {
+      pct: 0,
+      status: 'error',
+      title: '失败',
+      message: err,
+    }
+  }
+  const notice = String(props.notice || '').trim()
+  let base
   switch (stage.value) {
     case 'script':
-      return {
+      base = {
         pct: scriptStatusPct.value,
         status: props.scriptChatProgress?.status || 'idle',
         title: scriptStatusTitle.value,
         message: props.scriptChatProgress?.message || '就绪',
       }
+      break
     case 'cast': {
       const list = props.characters || []
       const withRef = list.filter((c) => c.ref_exists).length
-      return {
+      base = {
         pct: list.length ? Math.round((withRef / list.length) * 100) : 0,
         status: list.length && withRef === list.length ? 'done' : 'idle',
         title: '角色',
         message: list.length ? `定妆图 ${withRef}/${list.length}` : '暂无角色',
       }
+      break
     }
     case 'scene': {
       const gen = props.generatingCandidateNs || []
-      return {
+      base = {
         pct: gen.length ? 40 : 0,
         status: gen.length ? 'running' : 'idle',
         title: '画面',
         message: gen.length ? `正在生成 ${gen.length} 个候选图…` : '候选项待生成',
       }
+      break
     }
     case 'video':
-      return {
+      base = {
         pct: videoProgressPct.value,
         status: props.videoGenProgress?.status || 'idle',
         title: videoStatusTitle.value,
         message: videoStatusLabel.value,
       }
+      break
     case 'voice':
-      return {
+      base = {
         pct: voiceStatusPct.value,
         status: voiceStatusState.value,
         title: voiceStatusTitle.value,
         message: voiceStatusLabel.value,
       }
+      break
     case 'assemble':
-      return {
+      base = {
         pct: assembleStatusPct.value,
         status: assembleStatusState.value,
         title: assembleStatusTitle.value,
         message: assembleStatusLabel.value,
       }
+      break
     default:
-      return { pct: 0, status: 'idle', title: '状态', message: '就绪' }
+      base = { pct: 0, status: 'idle', title: '状态', message: '就绪' }
   }
+  // 无进行中任务时，用 notice 覆盖默认文案（如「已保存」）
+  if (notice && base.status !== 'running' && base.status !== 'pending') {
+    return { ...base, message: notice }
+  }
+  return base
 })
 </script>
 
@@ -1579,16 +1661,6 @@ const statusBar = computed(() => {
           </label>
         </div>
       </div>
-      <DramaDirectorBar
-        v-if="project"
-        :has-script="Boolean(episode?.script || scriptDraft)"
-        :has-shots="shots.length > 0"
-        :dirty-count="dirtyCount"
-        :busy="saving || rendering"
-        @generate-script="onDirectorGenerateScript"
-        @produce-episode="emit('produce-episode')"
-        @rerender-dirty="emit('rerender-dirty')"
-      />
     </header>
 
     <!-- 6 阶段线性步进器 + 下一步 -->
@@ -1674,7 +1746,7 @@ const statusBar = computed(() => {
             <div class="drama-script-editor-col">
               <div class="drama-script-panel drama-script-panel--edit">
                 <div class="drama-script-panel-head">
-                  <span class="drama-script-panel-title">剧本</span>
+                  <span class="drama-script-panel-title">剧本产物</span>
                   <div class="drama-script-panel-head-actions">
                     <label class="drama-model-bar-label">剧本模型</label>
                     <select
@@ -1694,35 +1766,114 @@ const statusBar = computed(() => {
                     <button
                       type="button"
                       class="btn-ghost btn-sm"
-                      :disabled="saving || rendering || !scriptDraft.trim()"
-                      @click="emit('save-script')"
+                      :disabled="saving || scriptWorkspaceLoading || !episodeN"
+                      @click="emit('reload-script-workspace')"
                     >
-                      {{ saving ? '保存中…' : '保存剧本' }}
+                      {{ scriptWorkspaceLoading ? '加载中…' : '刷新' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-ghost btn-sm"
+                      :disabled="saving || !episodeN"
+                      @click="emit('save-script-workspace-current')"
+                    >
+                      {{ saving ? '保存中…' : '保存当前' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-primary btn-sm"
+                      :disabled="saving || !episodeN || workspaceDirtyCount < 1"
+                      @click="emit('save-script-workspace-all')"
+                    >
+                      {{ saving ? '保存中…' : workspaceDirtyCount ? `保存全部(${workspaceDirtyCount})` : '保存全部' }}
                     </button>
                   </div>
                 </div>
-                <textarea
-                  class="drama-script-editor"
-                  :value="scriptDraft"
-                  spellcheck="false"
-                  rows="22"
-                  placeholder="右侧对话可一句话生成完整结构化剧本（角色/场景/道具/配乐/分镜）；也可在此直接编辑后保存。"
-                  @input="emit('update:scriptDraft', $event.target.value)"
-                />
+
+                <div class="drama-script-workspace">
+                  <nav class="drama-script-file-tabs" aria-label="剧本产物文件">
+                    <button
+                      v-for="tab in scriptWorkspaceTabs"
+                      :key="tab.key"
+                      type="button"
+                      class="drama-script-file-tab"
+                      :class="{ active: tab.key === scriptWorkspaceKey, dirty: tab.dirty }"
+                      :title="tab.path || tab.label"
+                      @click="emit('select-script-workspace-key', tab.key)"
+                    >
+                      {{ tab.label }}<span v-if="tab.dirty"> *</span>
+                    </button>
+                  </nav>
+                  <div class="drama-script-view-sheet" role="tablist" aria-label="展示方式">
+                    <button
+                      type="button"
+                      role="tab"
+                      class="drama-script-view-sheet-btn"
+                      :class="{ active: scriptFileViewMode === 'summary' }"
+                      :aria-selected="scriptFileViewMode === 'summary'"
+                      @click="scriptFileViewMode = 'summary'"
+                    >
+                      关键信息
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      class="drama-script-view-sheet-btn"
+                      :class="{ active: scriptFileViewMode === 'raw' }"
+                      :aria-selected="scriptFileViewMode === 'raw'"
+                      @click="scriptFileViewMode = 'raw'"
+                    >
+                      原文
+                    </button>
+                  </div>
+                  <p v-if="activeWorkspaceFile?.path" class="drama-script-file-path">
+                    {{ activeWorkspaceFile.path }}
+                    <span v-if="!activeWorkspaceFile.exists" class="drama-script-file-missing">（尚未落盘）</span>
+                  </p>
+                  <p v-if="!episodeN" class="drama-script-outline-empty drama-script-structured-empty">
+                    请先生成剧本或打开已有分集，以加载剧本产物文件。
+                  </p>
+                  <div v-else-if="scriptFileViewMode === 'summary'" class="drama-script-summary-pane">
+                    <DramaScriptFileSummary
+                      :file-key="scriptWorkspaceKey"
+                      :content="activeWorkspaceContent"
+                      :path="activeWorkspaceFile?.path || ''"
+                    />
+                  </div>
+                  <textarea
+                    v-else
+                    class="drama-script-editor drama-script-workspace-editor"
+                    :value="activeWorkspaceContent"
+                    spellcheck="false"
+                    rows="22"
+                    :disabled="saving || scriptWorkspaceLoading"
+                    :placeholder="`编辑 ${activeWorkspaceFile?.label || scriptWorkspaceKey} 内容后点保存落盘`"
+                    @input="activeWorkspaceContent = $event.target.value"
+                  />
+                </div>
               </div>
             </div>
 
-            <div class="drama-script-chat-col">
-              <DramaScriptChat
-                ref="scriptChatRef"
-                :messages="scriptChatMessages"
-                :loading="scriptChatLoading"
-                :disabled="!project || saving"
-                hint="用一句话描述故事即可生成结构化剧本（角色设定、场景、道具、配乐、台词旁白与分镜）；已有剧本时可继续对话修改。"
-                placeholder="例如：豪门养女重生复仇，共1集60秒…"
-                pending-label="正在生成 / 修改剧本…"
-                @send="onScriptChatSend"
-              />
+            <div class="drama-script-gen-col">
+              <div class="drama-script-gen-bar">
+                <textarea
+                  ref="scriptPremiseRef"
+                  v-model="scriptPremiseInput"
+                  class="drama-script-gen-input"
+                  rows="4"
+                  :disabled="!project || saving || scriptChatLoading"
+                  placeholder="一句话生成剧本，比如：废柴少年觉醒神瞳逆袭宗门，共3集，每集20秒，集末留悬念"
+                  @keydown.enter.exact.prevent="onGenerateScript"
+                />
+                <button
+                  type="button"
+                  class="btn-primary drama-script-gen-btn"
+                  :disabled="!project || saving || scriptChatLoading || !String(scriptPremiseInput || '').trim()"
+                  @click="onGenerateScript"
+                >
+                  {{ scriptChatLoading ? '生成中…' : '生成剧本' }}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1794,7 +1945,7 @@ const statusBar = computed(() => {
               <div class="drama-scene-detail-actions">
                 <button type="button" class="btn-primary btn-sm" :disabled="selectedCharacterBusy" @click="emit('save-character')">保存</button>
                 <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || selectedCharacter.ref_locked" @click="emit('generate-character-ref', selectedCharacter.id)">
-                  {{ selectedCharacterBusy ? '生成中…' : '生成定妆图' }}
+                  {{ selectedCharacterBusy ? '生成中…' : (castCategory === 'scene' ? '生成主底板' : castCategory === 'prop' ? '生成设定图' : '生成定妆图') }}
                 </button>
                 <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || !selectedCharacter.ref_exists" @click="emit('lock-ref', selectedCharacter.id)">
                   {{ selectedCharacter.ref_locked ? '解锁' : '锁定' }}
@@ -1835,12 +1986,18 @@ const statusBar = computed(() => {
                     </label>
                   </div>
                   <label class="drama-field">
-                    三视图
+                    {{ castCategory === 'scene' ? '空间描述' : castCategory === 'prop' ? '外形描述' : '三视图' }}
                     <textarea
                       v-model="charDraft.look"
                       class="drama-scene-script-text"
                       rows="4"
-                      placeholder="正面、侧面、背面的发型、服装、配饰与气质等细节描述"
+                      :placeholder="
+                        castCategory === 'scene'
+                          ? '空间结构、主光方向、地面材质、1–3 个标志物（用于生成无人物主底板）'
+                          : castCategory === 'prop'
+                            ? '外形、材质、尺寸感、纹样等可画细节'
+                            : '正面、侧面、背面的发型、服装、配饰与气质等细节描述'
+                      "
                     />
                   </label>
                   <div v-if="castCategory === 'character'" class="drama-cast-traits">
@@ -1869,7 +2026,7 @@ const statusBar = computed(() => {
                     <label class="drama-field">
                       尺寸
                       <select v-model.number="charDraft.ref_size">
-                        <option v-for="opt in CAST_REF_SIZES" :key="opt.value" :value="opt.value">
+                        <option v-for="opt in castRefSizeSelectOptions" :key="opt.value" :value="opt.value">
                           {{ opt.hint }}
                         </option>
                       </select>
@@ -2406,6 +2563,7 @@ const statusBar = computed(() => {
                       ref="voiceVideoRef"
                       class="drama-media"
                       :src="shotVoicePreviewUrl(selected)"
+                      :muted="shotVoiceNeedsExternalAudio(selected)"
                       controls
                       playsinline
                       @play="onVoiceVideoPlaySafe"
@@ -2570,21 +2728,17 @@ const statusBar = computed(() => {
           </div>
         </div>
       </section>
-
-      <footer v-if="error" class="drama-flow-footer">
-        <p class="drama-banner drama-banner--err drama-flow-footer-banner">{{ error }}</p>
-      </footer>
     </div>
 
     <div v-else class="drama-idle">
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
-        <li><strong>1. 开启新对话</strong> 点下方按钮立项，或从左侧打开已有项目</li>
-        <li><strong>2. 生成剧本</strong> 用一句话描述故事，再按步进器逐步做角色 / 画面 / 视频 / 声音</li>
-        <li><strong>3. 导出成片</strong> 到「成片」阶段导出；也可顶部「一键成片」</li>
+        <li><strong>1. 新建空项目</strong> 点下方按钮创建空白漫剧，或从左侧打开已有项目</li>
+        <li><strong>2. 逐步制作</strong> 按步进器完成剧本 → 角色 → 画面 → 视频 → 声音 → 成片</li>
+        <li><strong>3. 导出成片</strong> 到「成片」阶段拼接并导出</li>
       </ol>
       <button type="button" class="btn-primary drama-idle-cta" @click="emit('start-new-drama')">
-        开启新对话
+        新建空漫剧
       </button>
       <p class="drama-idle-hint">从零开始：剧本 → 角色 → 画面 → 视频 → 声音 → 成片</p>
     </div>

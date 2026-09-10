@@ -618,22 +618,40 @@ def locked_env_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
 
 
 def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 3) -> list[str]:
-    """Seedream 参考打包：``[环境底板, 脸1, 脸2…]``，总数 ≤ max_refs；脸最多 2 张。"""
+    """Seedream 参考打包。
+
+    对话/近景：优先脸（身份锁），再环境底板；远景/空镜：环境优先。
+    总数 ≤ max_refs；脸最多 2 张。
+    """
+    from tools.drama_models import infer_kind, infer_size
+
     limit = max(1, min(int(max_refs or 3), 3))
     env = locked_env_refs_for_shot(slug, shot)
     faces = locked_face_refs_for_shot(slug, shot)[:2]
+    kind = infer_kind(shot)
+    size = infer_size(shot)
+    face_first = kind in ("dialogue", "reaction", "cu", "ms") or size in (
+        "CU",
+        "MCU",
+        "ECU",
+        "MS",
+    )
+    primary = faces if face_first else env
+    secondary = env if face_first else faces
     out: list[str] = []
-    for rel in env[:1]:
+    for rel in primary:
+        if len(out) >= limit:
+            break
         if rel not in out:
             out.append(rel)
-    for rel in faces:
+    for rel in secondary:
         if len(out) >= limit:
             break
         if rel not in out:
             out.append(rel)
     # 若尚有空位且有第二环境（道具），补进
     if len(out) < limit:
-        for rel in env[1:]:
+        for rel in env:
             if len(out) >= limit:
                 break
             if rel not in out:

@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import * as dramaApi from '@/api/drama'
 import { useDramaJobs } from '@/composables/useDramaJobs'
+import { defaultRefSizeFor, normalizeRefSize } from '@/utils/dramaRefSizes'
 
 export function useDramaStudio() {
   const projects = ref([])
@@ -22,6 +23,11 @@ export function useDramaStudio() {
   const bust = ref(Date.now())
   const scriptDraft = ref('')
   const scriptImpact = ref(null)
+  const scriptWorkspace = ref(null)
+  const scriptWorkspaceDrafts = ref({})
+  const scriptWorkspaceDirty = ref({})
+  const scriptWorkspaceKey = ref('script')
+  const scriptWorkspaceLoading = ref(false)
   const boardMode = ref('shots')
   const selectedCharacterId = ref(null)
   const charDraft = ref(emptyCharDraft())
@@ -179,11 +185,8 @@ export function useDramaStudio() {
     if (!s) return false
     if ((s.locked || []).includes('shot')) return false
     if ((s.i2v || 'auto') === 'off') return false
-    if (!s.files?.scene?.exists) return false
-    const mode = s.i2v || 'auto'
-    if (mode === 'on') return true
-    // auto：需锁定画面；L0 也会走静图运镜
-    return (s.locked || []).includes('scene')
+    // 有关键帧即可；点生成时后端会在 auto 下自动锁 scene
+    return Boolean(s.files?.scene?.exists)
   }
 
   async function runI2vForShot(shotN, { track = true } = {}) {
@@ -327,7 +330,7 @@ export function useDramaStudio() {
       voice: '',
       aliases: '',
       colors: '',
-      ref_size: 1980,
+      ref_size: defaultRefSizeFor('character'),
       ref_image_provider: 'seedream',
       ref_image_model: 'doubao-seedream-5-0-pro-260628',
       category: 'character',
@@ -400,6 +403,13 @@ export function useDramaStudio() {
     return String(shot?.voice || '')
   }
 
+  function sanitizeDraftNarration(value) {
+    const text = String(value || '').trim()
+    if (!text) return ''
+    if (/^(无|没有|无。|无旁白|暂无|空|none|n\/a|-|—|–|\/|（无）|\(无\))$/i.test(text)) return ''
+    return text
+  }
+
   function fillDraft(shot) {
     const speaker = shot?.speaker || ''
     draft.value = {
@@ -410,7 +420,7 @@ export function useDramaStudio() {
       prop_ids: Array.isArray(shot?.prop_ids) ? [...shot.prop_ids] : [],
       // Keep raw script text so save/chat never strip speaker prefixes.
       字幕: String(shot?.字幕 || shot?.对白 || ''),
-      旁白: String(shot?.旁白 || ''),
+      旁白: sanitizeDraftNarration(shot?.旁白),
       角色: Array.isArray(shot?.角色) ? [...shot.角色] : [],
       camera: shot?.camera || 'punch_in',
       duration: Number(Number(shot?.duration || 3).toFixed(1)),
@@ -463,7 +473,7 @@ export function useDramaStudio() {
       voice: char?.voice || '',
       aliases: (char?.aliases || []).join('、'),
       colors: char?.colors || '',
-      ref_size: [640, 1024, 1980].includes(Number(char?.ref_size)) ? Number(char.ref_size) : 1980,
+      ref_size: normalizeRefSize(char?.ref_size, char?.category || 'character'),
       ref_image_provider: refProvider,
       ref_image_model: refModel,
       category: char?.category || 'character',
@@ -752,6 +762,110 @@ export function useDramaStudio() {
     const next = keep ? selectedN.value : data.shots?.[0]?.n || null
     // 同镜刷新时保留未保存草稿，避免并行改另一镜时被刷掉
     selectShot(next, { force: !keep || !dirty.value })
+    void loadScriptWorkspace()
+  }
+
+  const SCRIPT_WORKSPACE_LABELS = {
+    project: 'project.json',
+    bible: 'bible.md',
+    outline: 'outline.md',
+    script: 'epNN.md',
+    shots: 'shots.json',
+    characters: 'characters.json',
+    mix: 'mix.json',
+  }
+
+  function applyScriptWorkspace(data) {
+    scriptWorkspace.value = data
+    const drafts = {}
+    const dirty = {}
+    for (const key of data.keys || []) {
+      const file = data.files?.[key]
+      drafts[key] = file?.content ?? ''
+      dirty[key] = false
+    }
+    scriptWorkspaceDrafts.value = drafts
+    scriptWorkspaceDirty.value = dirty
+    if (drafts.script != null) scriptDraft.value = drafts.script
+    if (!data.keys?.includes(scriptWorkspaceKey.value)) {
+      scriptWorkspaceKey.value = data.keys?.[0] || 'script'
+    }
+  }
+
+  async function loadScriptWorkspace() {
+    if (!slug.value || !episodeN.value) return null
+    scriptWorkspaceLoading.value = true
+    try {
+      const data = await dramaApi.getScriptWorkspace(slug.value, episodeN.value)
+      applyScriptWorkspace(data)
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+      return null
+    } finally {
+      scriptWorkspaceLoading.value = false
+    }
+  }
+
+  function setScriptWorkspaceContent(key, content) {
+    const k = String(key || '')
+    if (!k) return
+    scriptWorkspaceDrafts.value = { ...scriptWorkspaceDrafts.value, [k]: content }
+    scriptWorkspaceDirty.value = { ...scriptWorkspaceDirty.value, [k]: true }
+    if (k === 'script') scriptDraft.value = content
+  }
+
+  function selectScriptWorkspaceKey(key) {
+    const k = String(key || '').trim()
+    if (!k) return
+    scriptWorkspaceKey.value = k
+  }
+
+  async function saveScriptWorkspaceKeys(keys) {
+    if (!slug.value || !episodeN.value) return null
+    const list = (keys || []).filter(Boolean)
+    if (!list.length) {
+      notice.value = '没有需要保存的文件'
+      return null
+    }
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const files = {}
+      for (const key of list) {
+        files[key] = scriptWorkspaceDrafts.value[key] ?? ''
+      }
+      const data = await dramaApi.saveScriptWorkspace(slug.value, episodeN.value, files, list)
+      try {
+        project.value = await dramaApi.getProject(slug.value)
+      } catch {
+        /* keep */
+      }
+      await openEpisode(episodeN.value)
+      notice.value = data.hint || `已保存 ${list.length} 个文件`
+      return data
+    } catch (e) {
+      error.value = e.message || String(e)
+      return null
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function saveScriptWorkspaceCurrent() {
+    return saveScriptWorkspaceKeys([scriptWorkspaceKey.value])
+  }
+
+  async function saveScriptWorkspaceAllDirty() {
+    const dirtyKeys = Object.entries(scriptWorkspaceDirty.value || {})
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+    if (!dirtyKeys.length) {
+      // nothing dirty — still save current tab
+      return saveScriptWorkspaceCurrent()
+    }
+    return saveScriptWorkspaceKeys(dirtyKeys)
   }
 
   function selectShot(n, { force = true } = {}) {
@@ -1172,6 +1286,7 @@ export function useDramaStudio() {
           : shotCount
             ? `已生成剧本，共 ${shotCount} 镜`
             : '剧本已生成'
+      await loadScriptWorkspace()
       scriptChatProgress.value = {
         status: 'done',
         message: notice.value,
@@ -1230,6 +1345,17 @@ export function useDramaStudio() {
     scriptChatLoading.value = false
   }
 
+  /** 空剧本时清掉误灌入的主聊天种子消息，避免回到剧本页仍看到旧对话。 */
+  function pruneOrphanScriptChatSeed() {
+    const key = scriptChatKey()
+    if (!key) return
+    const prev = scriptChatHistory.value[key] || []
+    if (!prev.length) return
+    const onlySeed = prev.every((m) => m.seed || m.role === 'user') && prev.length === 1 && prev[0]?.seed
+    const hasScript = Boolean(String(scriptDraft.value || episode.value?.script || '').trim())
+    if (onlySeed && !hasScript) clearScriptChat()
+  }
+
   async function startNewDrama({ title = '', logline = '' } = {}) {
     error.value = ''
     notice.value = ''
@@ -1249,7 +1375,7 @@ export function useDramaStudio() {
     await openProject(nextSlug)
     clearScriptChat()
     boardMode.value = 'script'
-    notice.value = '已开启新漫剧：用一句话描述故事，即可生成剧本并逐步制作'
+    notice.value = '已创建空白漫剧，可从剧本步开始逐步制作'
     await refreshProjects()
     return data
   }
@@ -1479,6 +1605,7 @@ export function useDramaStudio() {
       const rec = await dramaApi.createCharacter(slug.value, {
         name: payload.name || names[category] || '新资产',
         category,
+        ref_size: defaultRefSizeFor(category),
       })
       await refreshCast()
       selectCharacter(rec.id)
@@ -1510,7 +1637,7 @@ export function useDramaStudio() {
         gender: charDraft.value.gender || '',
         voice: charDraft.value.voice,
         aliases: String(charDraft.value.aliases || '').trim(),
-        ref_size: charDraft.value.ref_size || 1980,
+        ref_size: normalizeRefSize(charDraft.value.ref_size, charDraft.value.category || 'character'),
         ref_image_provider: charDraft.value.ref_image_provider,
         ref_image_model: charDraft.value.ref_image_model,
         category: charDraft.value.category || 'character',
@@ -1793,7 +1920,9 @@ export function useDramaStudio() {
     if (!shotEligibleForI2v(shot)) {
       error.value = !shot?.files?.scene?.exists
         ? '请先在「画面」步骤生成画面'
-        : '请先在「画面」步骤锁定关键帧后再生成视频'
+        : (shot?.i2v || 'auto') === 'off'
+          ? '本镜 I2V 为 off，请改为 auto 或 on 后再生成'
+          : '当前镜头无法生成视频'
       return
     }
     if (dirty.value) {
@@ -2329,7 +2458,7 @@ export function useDramaStudio() {
         gender: src.gender || '',
         voice: src.voice,
         aliases: String(src.aliases || '').trim(),
-        ref_size: src.ref_size || 1980,
+        ref_size: normalizeRefSize(src.ref_size, src.category || 'character'),
         ref_image_provider: src.ref_image_provider,
         ref_image_model: src.ref_image_model,
         category: src.category || 'character',
@@ -2624,7 +2753,7 @@ export function useDramaStudio() {
     const targets = shots.value.filter((s) => shotEligibleForI2v(s) && s.i2v_source !== 'ai' && s.i2v_source !== 'keys')
     if (!targets.length) {
       error.value = ''
-      notice.value = '没有可生成视频的镜头（需已锁定画面，且非 L0 / 未生成过 I2V）'
+      notice.value = '没有可生成视频的镜头（需已有画面，且 I2V 非 off / 未生成过真 I2V）'
       return
     }
     rendering.value = true
@@ -2687,7 +2816,7 @@ export function useDramaStudio() {
           failed,
         })
       } else {
-        error.value = '批量生成视频失败，请检查画面是否已锁定'
+        error.value = '批量生成视频失败，请检查是否已有关键帧画面'
         setBatchProgress({
           status: 'error',
           message: error.value,
@@ -2883,12 +3012,24 @@ export function useDramaStudio() {
     saveEpisodeMeta,
     previewScriptChanges,
     saveScriptChanges,
+    loadScriptWorkspace,
+    setScriptWorkspaceContent,
+    selectScriptWorkspaceKey,
+    saveScriptWorkspaceCurrent,
+    saveScriptWorkspaceAllDirty,
+    scriptWorkspace,
+    scriptWorkspaceDrafts,
+    scriptWorkspaceDirty,
+    scriptWorkspaceKey,
+    scriptWorkspaceLoading,
+    SCRIPT_WORKSPACE_LABELS,
     generateScriptFromPremise,
     scriptChatHistory,
     scriptChatProgress,
     scriptChatLoading,
     scriptChatMessages,
     ensureScriptChatSeed,
+    pruneOrphanScriptChatSeed,
     clearScriptChat,
     startNewDrama,
     sendScriptChat,

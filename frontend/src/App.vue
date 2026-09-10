@@ -43,6 +43,17 @@ const {
   bust: dramaBust,
   scriptDraft: dramaScriptDraft,
   scriptImpact: dramaScriptImpact,
+  scriptWorkspace,
+  scriptWorkspaceDrafts,
+  scriptWorkspaceDirty,
+  scriptWorkspaceKey,
+  scriptWorkspaceLoading,
+  SCRIPT_WORKSPACE_LABELS,
+  loadScriptWorkspace,
+  setScriptWorkspaceContent,
+  selectScriptWorkspaceKey,
+  saveScriptWorkspaceCurrent,
+  saveScriptWorkspaceAllDirty,
   boardMode: dramaBoardMode,
   characters: dramaCharacters,
   voices: dramaVoices,
@@ -62,13 +73,8 @@ const {
   saveScriptChanges,
   scriptChatProgress,
   scriptChatLoading,
-  scriptChatMessages,
-  ensureScriptChatSeed,
   startNewDrama,
   sendScriptChat,
-  rerenderDirtyShots,
-  produceEpisodeHq,
-  directorGenerateScript,
   selectCharacter,
   toggleShotRole,
   addCharacter,
@@ -204,12 +210,6 @@ const {
   },
   scrollToBottom: () => chatViewRef.value?.scrollToBottom?.(),
   onTurnComplete: () => refreshSessionList(),
-})
-
-const dramaScriptChatMessages = computed(() => scriptChatMessages())
-const firstUserContent = computed(() => {
-  const msg = (messages.value || []).find((m) => m.role === 'user')
-  return String(msg?.content || '').trim()
 })
 
 const dramaBatchPct = computed(() => {
@@ -359,7 +359,6 @@ async function openDramaProject(slug) {
   view.value = 'drama'
   try {
     await openProject(slug)
-    ensureScriptChatSeed(firstUserContent.value)
   } catch (e) {
     console.error('打开漫剧项目失败:', e)
     showToast(e.message || '打开项目失败')
@@ -373,7 +372,6 @@ async function openDramaFromChat({ slug, episode } = {}) {
   try {
     await openProject(slug)
     if (episode != null) await openEpisode(Number(episode))
-    ensureScriptChatSeed(firstUserContent.value)
   } catch (e) {
     console.error('打开漫剧项目失败:', e)
     showToast(e.message || '打开项目失败')
@@ -400,7 +398,6 @@ async function deleteDramaProject(slug) {
 
 watch(view, async (next) => {
   if (next !== 'drama') return
-  ensureScriptChatSeed(firstUserContent.value)
   try {
     await refreshProjects()
   } catch (e) {
@@ -410,7 +407,7 @@ watch(view, async (next) => {
 })
 
 function onEnterScriptStage() {
-  ensureScriptChatSeed(firstUserContent.value)
+  if (dramaEpisodeN.value) void loadScriptWorkspace()
 }
 
 onMounted(async () => {
@@ -501,7 +498,12 @@ async function onResumeDramaJob(index) {
       :bust="dramaBust"
       v-model:script-draft="dramaScriptDraft"
       :script-impact="dramaScriptImpact"
-      :script-chat-messages="dramaScriptChatMessages"
+      :script-workspace="scriptWorkspace"
+      :script-workspace-drafts="scriptWorkspaceDrafts"
+      :script-workspace-dirty="scriptWorkspaceDirty"
+      :script-workspace-key="scriptWorkspaceKey"
+      :script-workspace-loading="scriptWorkspaceLoading"
+      :script-workspace-labels="SCRIPT_WORKSPACE_LABELS"
       :script-chat-loading="scriptChatLoading"
       :script-chat-progress="scriptChatProgress"
       v-model:board-mode="dramaBoardMode"
@@ -566,11 +568,13 @@ async function onResumeDramaJob(index) {
       @toggle-lock="toggleLock"
       @preview-script="previewScriptChanges"
       @save-script="saveScriptChanges"
+      @save-script-workspace-current="saveScriptWorkspaceCurrent"
+      @save-script-workspace-all="saveScriptWorkspaceAllDirty"
+      @select-script-workspace-key="selectScriptWorkspaceKey"
+      @update-script-workspace-content="({ key, content }) => setScriptWorkspaceContent(key, content)"
+      @reload-script-workspace="loadScriptWorkspace"
       @script-chat-send="sendScriptChat"
       @enter-script-stage="onEnterScriptStage"
-      @rerender-dirty="rerenderDirtyShots"
-      @produce-episode="produceEpisodeHq"
-      @director-generate-script="directorGenerateScript"
       @start-new-drama="newDramaChat"
       @select-character="selectCharacter"
       @add-character="addCharacter"

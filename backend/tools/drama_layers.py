@@ -1,4 +1,9 @@
-"""分层生成：场景底板 + 逐角色定妆层 + 按 spatial_plan 槽位融合。"""
+"""分层生成（遗留/草稿预览）：场景底板 + 逐角色层 + spatial_plan bbox 融合。
+
+专业档默认不用此路径——应走 Seedream/Kling「全幅参考生图」
+（环境底板 + 定妆脸作为 image refs，一次生成完整分镜）。
+仅当环境变量 DRAMA_LAYERED_SCENE=1 且非 studio 时由候选出图可选启用。
+"""
 
 from __future__ import annotations
 

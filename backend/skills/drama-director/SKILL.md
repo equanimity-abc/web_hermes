@@ -1,4 +1,4 @@
-<!-- prompt: 导演语法用 tiktok_drama action=suggest_coverage。只生成覆盖建议（前3秒钩子、景别节奏、对白切反应镜），禁止改 kind/size，禁止 lock。一集最多 2 条 reaction。人在工作台采纳、忽略或锁定类型。 -->
+<!-- prompt: 导演语法用 tiktok_drama action=suggest_coverage。只生成覆盖建议（前3秒钩子、景别节奏、对白切反应镜），禁止改 kind/size，禁止 lock。一集最多 2 条 reaction。人在工作台采纳、忽略或锁定类型。所有步骤禁止候选项结果与重抽（禁止 generate_candidates / choose_candidate）。 -->
 # drama-director
 
 人是导演，Agent 是摄制组。覆盖建议写进 `shots.json` 的 `coverage`，**不要直接改镜头，不要加锁**。
@@ -18,6 +18,7 @@
 3. **对白后切反应镜**。连续对白可建议下一镜改为 `reaction` CU；**一集最多建议 2 条 reaction**。
 4. 已锁 `kind` 或整镜 `shot` 的镜头不要再建议覆盖。
 5. 禁止调用 lock_shot / patch 来「帮用户锁上」。锁是人的权力。
+6. **禁止候选项与重抽**：不得 `generate_candidates` / `choose_candidate`；不得建议刷候选墙或换种子重抽。
 
 ## 不要做
 

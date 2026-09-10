@@ -92,6 +92,8 @@ class Config:
 
     IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")
+    # 0=专业全幅参考生图；1=旧版「底板+bbox贴角色」（易穿帮，仅草稿预览）
+    DRAMA_LAYERED_SCENE: str = os.getenv("DRAMA_LAYERED_SCENE", "0")
 
     CONSISTENT_IMAGE_URL: str = os.getenv("CONSISTENT_IMAGE_URL", "")
     CONSISTENT_IMAGE_KEY: str = os.getenv("CONSISTENT_IMAGE_KEY", "")

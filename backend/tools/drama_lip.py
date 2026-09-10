@@ -363,6 +363,108 @@ def ensure_lip_video_base(
     return None
 
 
+def _fit_video_for_lip(src: Path, dest: Path, duration: float) -> Path | None:
+    """Copy+fit motion to VO length for lip input — never mutate video-page motion."""
+    from tools.drama_i2v import ensure_motion_seconds
+    from tools.drama_video import _probe_duration
+
+    if not src.is_file() or float(duration or 0) <= 0.2:
+        return None
+    cur = float(_probe_duration(src) or 0)
+    if abs(cur - float(duration)) <= 0.15:
+        return src
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if dest.resolve() != src.resolve():
+            dest.write_bytes(src.read_bytes())
+    except OSError:
+        return None
+    if ensure_motion_seconds(dest, float(duration)):
+        return dest
+    return src if abs(cur - float(duration)) <= 0.5 else None
+
+
+def _lock_lip_to_voice(lip: Path, voice: Path) -> bool:
+    """Force lip video onto the shared A/V clock: same t=0 and same active length as VO.
+
+    Trims oversize provider output / pads short takes, then remuxes with source VO.
+    Mouth *shapes* may still be imperfect; mouth *change duration* must match VO.
+    """
+    from tools.drama_video import FPS, _probe_media_seconds, _run_ffmpeg, av_timing_window
+
+    if not lip.is_file() or not voice.is_file():
+        return False
+    voice_sec = float(_probe_media_seconds(voice) or 0)
+    if voice_sec < 0.25:
+        return False
+    active, _play = av_timing_window(voice_seconds=voice_sec, play_seconds=voice_sec)
+    lip_dur = float(_probe_media_seconds(lip) or 0)
+    tmp = lip.with_suffix(".align.tmp.mp4")
+    steps = ["[0:v]setpts=PTS-STARTPTS"]
+    if lip_dur > active + 0.12:
+        steps.append(f"trim=duration={active:.3f},setpts=PTS-STARTPTS")
+    elif active - lip_dur > 0.12 and lip_dur > 0.05:
+        steps.append(f"tpad=stop_mode=clone:stop_duration={active - lip_dur:.3f}")
+    steps.append(f"fps={FPS},setpts=PTS-STARTPTS[v]")
+    vchain = ",".join(steps)
+    af = (
+        f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        f"asetpts=PTS-STARTPTS,apad=whole_dur={active:.3f},atrim=0:{active:.3f},"
+        f"asetpts=PTS-STARTPTS[a]"
+    )
+    frames = max(int(round(active * FPS)), 1)
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(lip),
+                "-i",
+                str(voice),
+                "-filter_complex",
+                f"{vchain};{af}",
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-frames:v",
+                str(frames),
+                "-t",
+                f"{active:.2f}",
+                "-r",
+                str(FPS),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ],
+            timeout=180,
+        )
+        if not tmp.is_file() or tmp.stat().st_size < 500:
+            return False
+        tmp.replace(lip)
+        return True
+    except RuntimeError:
+        return False
+    finally:
+        if tmp.is_file():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def _mock_lip(scene: Path, voice: Path, dest: Path, duration: float) -> bool:
     from tools.drama_video import FPS, HEIGHT, WIDTH, _run_ffmpeg
 
@@ -1935,14 +2037,18 @@ def generate_shot_lip(
     voice = resolve_safe(str(assets.get("voice") or ""))
     dest = resolve_safe(rel)
     duration = float(shot.get("duration") or 3)
-    # Pad duration to voice length when longer (lip models need full VO coverage)
+    voice_dur = 0.0
+    # Lip must track VO length. Long script beats with short dialogue desync if we
+    # feed 9s motion + 1.8s audio into PixVerse/LatentSync.
     if voice.is_file():
         try:
             from tools.drama_video import _probe_duration
 
-            vd = float(_probe_duration(voice) or 0)
-            if vd > duration:
-                duration = vd
+            voice_dur = float(_probe_duration(voice) or 0)
+            if voice_dur > 0.35:
+                duration = voice_dur
+            elif voice_dur > duration:
+                duration = voice_dur
         except Exception:
             pass
 
@@ -1959,6 +2065,14 @@ def generate_shot_lip(
         raise RuntimeError(
             f"第{int(shot.get('n') or 0)}镜专业档口型缺少真 I2V 底片，禁止静图 lip_base"
         )
+
+    lip_input = video_base
+    fit_tmp: Path | None = None
+    if video_base is not None and video_base.is_file() and voice_dur > 0.35:
+        fit_tmp = dest.with_name(f"{dest.stem}_srcfit.mp4")
+        fitted = _fit_video_for_lip(video_base, fit_tmp, duration)
+        if fitted is not None and fitted.is_file():
+            lip_input = fitted
 
     wanted = str(((models or {}).get("lip") or {}).get("provider") or _default_provider()).strip()
     provider = resolve_provider(models, wanted)
@@ -1985,21 +2099,34 @@ def generate_shot_lip(
         acquire_lane("lip")
     except Exception:
         pass
-    source = try_generate_lip(
-        scene,
-        voice,
-        dest,
-        shot,
-        duration=duration,
-        provider=provider,
-        video_base=video_base,
-        slug=slug,
-    )
+    try:
+        source = try_generate_lip(
+            scene,
+            voice,
+            dest,
+            shot,
+            duration=duration,
+            provider=provider,
+            video_base=lip_input,
+            slug=slug,
+        )
+    finally:
+        if fit_tmp is not None and fit_tmp.is_file():
+            try:
+                # Only delete fitted copy, never the video-page motion master
+                if video_base is None or fit_tmp.resolve() != video_base.resolve():
+                    fit_tmp.unlink()
+            except OSError:
+                pass
     shot["lip_source"] = source
     score = None
     if lip_source_is_real(source) and dest.is_file():
+        if voice.is_file():
+            _lock_lip_to_voice(dest, voice)
         score = score_lip(dest, voice if voice.is_file() else None)
         shot["lip_score"] = score
+        if voice_dur > 0.35:
+            shot["av_active"] = round(float(duration), 3)
         return {
             "tried": True,
             "lip_source": source,

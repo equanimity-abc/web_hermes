@@ -24,10 +24,53 @@ def test_lip_video_usable_with_per_turn_suffix(tmp_path: Path):
     assert lip_video_usable(shot, lip) is True
 
 
+def test_lip_video_usable_recovers_orphan_when_duration_matches_voice(tmp_path: Path, monkeypatch):
+    lip = tmp_path / "shot02_lip.mp4"
+    voice = tmp_path / "shot02.mp3"
+    lip.write_bytes(b"x" * 2048)
+    voice.write_bytes(b"y" * 256)
+    shot = {"lip_source": "", "assets": {"voice": str(voice)}}
+
+    def _probe(path):
+        # Same duration → orphan lip is usable for clip encode
+        return 1.85
+
+    monkeypatch.setattr("tools.drama_video._probe_media_seconds", _probe)
+    monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: Path(rel))
+    assert lip_video_usable(shot, lip) is True
+    assert shot.get("lip_source") == "recovered"
+
+
 def test_lip_video_usable_rejects_missing_file(tmp_path: Path):
     lip = tmp_path / "missing.mp4"
     shot = {"lip_source": "pixverse+per_turn"}
     assert lip_video_usable(shot, lip) is False
+
+
+def test_av_timing_window_voice_is_master_clock():
+    from tools.drama_video import av_timing_window, _motion_vchain_for_av_window
+
+    # Short VO inside long script beat: mouth-active == VO; play keeps script length
+    active, play = av_timing_window(voice_seconds=1.848, play_seconds=9.0)
+    assert abs(active - 1.848) < 1e-6
+    assert abs(play - 9.0) < 1e-6
+
+    # VO longer than script: play stretches to VO
+    active, play = av_timing_window(voice_seconds=4.2, play_seconds=3.0)
+    assert abs(active - 4.2) < 1e-6
+    assert abs(play - 4.2) < 1e-6
+
+    # No VO: active == play
+    active, play = av_timing_window(voice_seconds=0, play_seconds=5.0)
+    assert abs(active - 5.0) < 1e-6
+    assert abs(play - 5.0) < 1e-6
+
+    # Long motion must be trimmed to active before freeze-hold to play
+    chain = _motion_vchain_for_av_window(src_dur=9.0, active=1.848, play=9.0, look="null")
+    assert "trim=duration=1.848" in chain
+    assert "tpad=stop_mode=clone:stop_duration=7.152" in chain
+    assert chain.startswith("[0:v]setpts=PTS-STARTPTS")
+    assert chain.endswith("[v]")
 
 
 def test_infer_turn_timings_from_voice_splits_by_text_weight():

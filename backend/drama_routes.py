@@ -46,6 +46,8 @@ from tools.drama_studio import (
     resume_interrupted_jobs,
     save_character,
     save_script,
+    get_script_workspace,
+    save_script_workspace,
     upload_character_ref,
     upload_shot_scene,
     choose_candidate,
@@ -166,6 +168,11 @@ class CandidateCount(BaseModel):
 class ScriptBody(BaseModel):
     content: str
     title: str | None = None
+
+
+class ScriptWorkspaceSaveBody(BaseModel):
+    files: dict[str, str]
+    keys: list[str] | None = None
 
 
 class ScriptGenerateBody(BaseModel):
@@ -669,6 +676,22 @@ async def drama_save_script(slug: str, episode: int, body: ScriptBody):
     try:
         return save_script(slug, episode, body.content, title=body.title)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.get("/projects/{slug}/episodes/{episode}/script-workspace")
+async def drama_get_script_workspace(slug: str, episode: int):
+    try:
+        return get_script_workspace(slug, episode)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
+        raise _http(e) from e
+
+
+@router.put("/projects/{slug}/episodes/{episode}/script-workspace")
+async def drama_save_script_workspace(slug: str, episode: int, body: ScriptWorkspaceSaveBody):
+    try:
+        return save_script_workspace(slug, episode, body.files, keys=body.keys)
+    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
         raise _http(e) from e
 
 

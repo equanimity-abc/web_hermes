@@ -1,5 +1,13 @@
-from tools.drama_shots import migrate_shot_script_fields
+from tools.drama_shots import migrate_shot_script_fields, sanitize_script_placeholder
 from tools.drama_video import clean_subtitle, spoken_text, spoken_text_for_shot, subtitle_display_text
+
+
+def test_sanitize_script_placeholder_strips_empty_narration():
+    assert sanitize_script_placeholder("无") == ""
+    assert sanitize_script_placeholder("没有") == ""
+    assert sanitize_script_placeholder("  ") == ""
+    assert sanitize_script_placeholder("月升之时") == "月升之时"
+    assert migrate_shot_script_fields({"旁白": "无"})["旁白"] == ""
 
 
 def test_spoken_text_extracts_quotes_and_drops_stagecraft():

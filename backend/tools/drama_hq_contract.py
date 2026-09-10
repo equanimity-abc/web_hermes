@@ -275,6 +275,8 @@ def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "专业档口型必须以真 I2V 运动片为底（i2v_source=ai|keys），"
             "禁止静图 lip_base / Ken Burns 顶替"
+            f"（当前 i2v_source={src or '空'}，motion={'有' if motion_ok else '无'}；"
+            "请先完成 Seedance/Kling I2V 再口型）"
         )
 
     return {"ok": True, "provider": head, "cascade": cascade, "i2v_source": src}

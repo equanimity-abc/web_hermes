@@ -14,7 +14,9 @@ from typing import Any
 
 from tools.drama_models import DEFAULT_PRESET, load_models
 
-HQ_SHOT_LAYERS = ("scene", "overlay", "voice", "lip")
+HQ_SHOT_LAYERS = ("scene", "overlay", "voice")
+# 口型必须在真 I2V 运动片之后；勿把 lip 放进 HQ_SHOT_LAYERS（否则 assert_hq_lip 必炸）。
+HQ_POST_I2V_LAYERS = ("lip", "clip")
 DEFAULT_CATALOG_BGM = "rebirth_resolve"
 
 _DEFAULT_SECONDS = 60
@@ -364,10 +366,10 @@ def ensure_character_refs(
     lock: bool = True,
     on_progress: Callable[..., None] | None = None,
 ) -> list[str]:
-    """Generate portrait refs per character with up to 3 seed candidates.
+    """Generate one portrait ref per character (no seed candidates / no redraw).
 
-    每次候选：生成全身+正脸 → ArcFace 身份就绪校验 → 通过才锁定。
-    三次均失败则 Fail Loud，由工作台手工重生成/上传。
+    单次：生成全身+正脸 → ArcFace 身份就绪校验 → 通过才锁定。
+    失败则 Fail Loud，禁止自动换种子重抽。
     """
     from tools.drama_characters import (
         character_requires_face_identity,
@@ -473,30 +475,25 @@ def ensure_character_refs(
                 f"{check.get('hint') or check.get('reason')}；请在工作台手工重生成或上传"
             )
         _progress(on_progress, message=f"定妆 {name}")
-        last_err = ""
-        # 多候选：不同种子试 3 次，身份校验通过即锁定（避免单次赌脸）。
-        for attempt in range(3):
-            seed = (attempt + 1) * 9973 + (hash(cid) % 1000)
-            try:
-                generate_character_ref(slug, cid, lock=False, seed=seed)
-            except Exception as exc:
-                last_err = str(exc)
-                continue
-            invalidate_character_embedding(slug, cid)
-            rec = find_character(load_characters(slug), cid)
-            if rec is None:
-                last_err = "定妆生成后角色卡丢失"
-                continue
-            if not ref_face_exists(slug, rec):
-                rec = _ensure_face(rec, name)
-            check = validate_character_ref(_ref_path(rec))
-            if check["ok"]:
-                _lock_if_needed(rec)
-                return cid
-            last_err = str(check.get("hint") or check.get("reason") or "身份校验未通过")
+        # 禁止候选项/重抽：单次出图，失败即 Fail Loud。
+        seed = 9973 + (hash(cid) % 1000)
+        try:
+            generate_character_ref(slug, cid, lock=False, seed=seed)
+        except Exception as exc:
+            raise RuntimeError(f"角色「{name}」定妆生成失败（{exc}）；禁止自动重抽") from exc
+        invalidate_character_embedding(slug, cid)
+        rec = find_character(load_characters(slug), cid)
+        if rec is None:
+            raise RuntimeError(f"角色「{name}」定妆生成后角色卡丢失；禁止自动重抽")
+        if not ref_face_exists(slug, rec):
+            rec = _ensure_face(rec, name)
+        check = validate_character_ref(_ref_path(rec))
+        if check["ok"]:
+            _lock_if_needed(rec)
+            return cid
+        last_err = str(check.get("hint") or check.get("reason") or "身份校验未通过")
         raise RuntimeError(
-            f"角色「{name}」定妆 3 次候选均未通过身份就绪校验"
-            f"（{last_err}）；请在工作台手工重生成或上传"
+            f"角色「{name}」定妆未通过身份就绪校验（{last_err}）；禁止自动重抽，请改 look 后重跑或人工上传"
         )
 
     if pending:
@@ -621,8 +618,7 @@ def _hq_process_one_shot(
 ) -> dict[str, Any]:
     """Render one shot end-to-end for HQ produce (thread-safe via merge_save_shot).
 
-    单次出图 + 身份验收；若因构图/脸面积/锁脸失败，自动加强制露脸提示并换种子重抽画面 **至多 1 次**，
-    仍失败则 Fail Loud（不再无限重试）。
+    单次出图 + 身份验收；禁止候选项结果与自动重抽。身份/环境不过则 Fail Loud。
     """
     import copy
 
@@ -689,25 +685,14 @@ def _hq_process_one_shot(
 
         assert_hq_image_ready(slug, shot)
 
-        def _run_scene_and_qc(*, retry: int) -> tuple[dict[str, Any], dict[str, Any]]:
+        def _run_scene_and_qc() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
             if cancel_check:
                 cancel_check()
-            local_layers = list(layers)
-            if retry > 0:
-                # 身份失败只重抽画面相关层，避免重复烧 TTS
-                local_layers = ["scene", "overlay", "clip"]
-                shot["_identity_retry"] = retry
-                shot["_identity_framing_boost"] = True
-                dirty = list(shot.get("dirty") or [])
-                for layer in ("scene", "clip", "motion"):
-                    if layer not in dirty:
-                        dirty.append(layer)
-                shot["dirty"] = dirty
             info_local = render_shot_layers(
                 slug,
                 n,
                 shot,
-                local_layers,
+                list(layers),
                 title=ep_title,
                 candidate_count=1,
             )
@@ -725,44 +710,9 @@ def _hq_process_one_shot(
             merge_save_shot(slug, n, shot)
             return info_local, identity_local, env_local
 
-        info, identity_last, env_last = _run_scene_and_qc(retry=0)
+        info, identity_last, _env_last = _run_scene_and_qc()
         degrades = list(info.get("degrades") or [])
-
-        def _identity_needs_retry(identity: dict[str, Any]) -> bool:
-            status = str(identity.get("status") or "")
-            reason = str(identity.get("reason") or "")
-            if status == "ok" and not identity.get("pass"):
-                return True
-            if status == "skipped" and reason in (
-                "no_face",
-                "unmatched_face",
-                "no_embedding",
-                "face_too_small",
-            ):
-                return True
-            return False
-
-        def _env_needs_retry(env: dict[str, Any]) -> bool:
-            return str(env.get("status") or "") == "ok" and not env.get("pass")
-
-        if _identity_needs_retry(identity_last):
-            try:
-                info, identity_last, env_last = _run_scene_and_qc(retry=1)
-                degrades = list(info.get("degrades") or [])
-            finally:
-                shot.pop("_identity_framing_boost", None)
-                shot.pop("_identity_retry", None)
-
-        # 环境软闸独立于身份重试：身份重抽后仍可再因环境不过补抽一次。
-        if _env_needs_retry(env_last):
-            try:
-                shot["_env_retry"] = 1
-                info, identity_last, env_last = _run_scene_and_qc(retry=1)
-                degrades = list(info.get("degrades") or [])
-            finally:
-                shot.pop("_env_retry", None)
-                shot.pop("_identity_framing_boost", None)
-                shot.pop("_identity_retry", None)
+        # 环境分已写入 shot；禁止因环境不过自动重抽
 
         if str(identity_last.get("status") or "") == "skipped":
             identity_reason = str(identity_last.get("reason") or "").strip()
@@ -775,11 +725,11 @@ def _hq_process_one_shot(
             elif identity_reason == "proxy_identity":
                 detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
             elif identity_reason == "no_face":
-                detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；已自动重抽仍失败）"
+                detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；禁止自动重抽）"
             elif identity_reason == "unmatched_face":
-                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '已自动重抽仍失败'}）"
+                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '禁止自动重抽'}）"
             elif identity_reason == "no_embedding":
-                detail = f"角色「{role}」本镜画面未能提取人脸嵌入（已自动重抽仍失败）"
+                detail = f"角色「{role}」本镜画面未能提取人脸嵌入（禁止自动重抽）"
             elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
                 detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
             elif identity_reason in ("missing_left", "missing_right"):
@@ -798,7 +748,7 @@ def _hq_process_one_shot(
             raise RuntimeError(
                 f"第{sn}镜角色「{role}」身份相似度未达阈值"
                 f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
-                f"{('；' + hint) if hint else ''}），已自动重抽画面仍失败"
+                f"{('；' + hint) if hint else ''}），禁止自动重抽"
             )
 
         # P2：通过后写入跨镜轨迹
@@ -873,7 +823,12 @@ def _hq_process_one_shot(
 
     if cancel_check:
         cancel_check()
-    rerender_shot(slug, n, sn, layers=["clip"])
+    # 真运动片就绪后再口型 + 成片（专业档口型禁止静图 lip_base）
+    post_layers = list(HQ_POST_I2V_LAYERS)
+    if kind in ("establishing", "insert", "crowd", "title") and src not in ("ai", "keys"):
+        # 可选运动镜：无真 I2V 时跳过口型，只组装成片
+        post_layers = ["clip"]
+    rerender_shot(slug, n, sn, layers=post_layers)
 
     return {
         "shot": sn,
@@ -900,8 +855,7 @@ def produce_episode_hq(
 
     Phase A studio profile: Fail Loud — missing keys / identity fail / fake I2V /
     QC fail all raise. Agent must keep allow_qc_fail_export=False.
-    身份构图失败至多自动重抽画面 1 次；闪烁失败至多自动重做运动 1 次；定妆仍为单次；
-    候选墙供工作台手工微调。
+    所有步骤禁止候选项结果与自动重抽（定妆/分镜均为单次出图）；闪烁失败至多自动重做运动 1 次。
 
     Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
     """
@@ -1048,7 +1002,7 @@ def _produce_episode_hq_body(
             f"道具 {len(env_summary.get('props_created') or [])} · 清除影子卡 {len(purged_shadows)} · "
             f"look 扩写 {len(expanded_looks)}+{len(env_looks)} · 特征字段 {len(trait_cids)} · "
             f"特征锚 {len(anchored)} · 定妆 {len(ref_chars)} · "
-            f"场景设定 {len(env_refs.get('scenes') or [])} · 底板 {len(env_refs.get('plates') or [])} · "
+            f"场景底板 {len(env_refs.get('plates') or [])} · "
             f"道具图 {len(env_refs.get('props') or [])}"
         ),
     )
@@ -1259,7 +1213,7 @@ def _produce_episode_hq_body(
         "candidate_count": 1,
         "refs_locked": True,
         "exported": True,
-        "hint": "全自动 HQ 已导出整集；定妆已锁定；分镜仅单图（候选墙请在工作台微调时手动生成）",
+        "hint": "全自动 HQ 已导出整集；定妆已锁定；分镜仅单图（禁止候选项墙与自动重抽）",
     }
     try:
         from tools.drama_episode_status import write_episode_status

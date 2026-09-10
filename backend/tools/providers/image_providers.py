@@ -29,6 +29,12 @@ def _is_character_ref_shot(shot: Any) -> bool:
 def _save_provider_image(img, dest, *, shot: Any, target_w: int, target_h: int) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if _is_character_ref_shot(shot):
+        tw = int(target_w or 0)
+        th = int(target_h or 0)
+        if tw > 0 and th > 0 and img.size != (tw, th):
+            from PIL import Image as _PILImage
+
+            img = img.resize((tw, th), _PILImage.Resampling.LANCZOS)
         img.save(dest, "PNG")
         return
     from tools.drama_video import _prepare_frame
@@ -322,12 +328,16 @@ def _dashscope_gen_size(width: int, height: int, *, model: str = "") -> str:
         (640, 640),
         (1024, 1024),
         (1328, 1328),
+        (1536, 1536),
         (1664, 1664),
-        (1980, 1980),
+        (2048, 2048),
         (720, 1280),
         (768, 1344),
         (960, 1696),
         (1024, 1792),
+        (1080, 1920),
+        (1440, 2560),
+        (1600, 2848),
     )
     pw, ph = min(presets, key=lambda p: abs(p[0] / p[1] - ratio) + abs(p[0] - w) * 1e-4)
     return f"{pw}*{ph}"

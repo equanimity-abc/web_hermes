@@ -418,9 +418,10 @@ def ensure_environment_refs(
     lock: bool = True,
     on_progress: Any = None,
 ) -> dict[str, list[str]]:
-    """Generate + lock scene detail refs, location plates, and prop refs.
+    """Generate + lock location plates and prop setting refs.
 
-    Characters are handled by ``ensure_character_refs``; this only touches scene/prop.
+    Scenes no longer get a separate「设定图」— the empty master plate is the only
+    visual authority. Characters are handled by ``ensure_character_refs``.
     """
     from tools.drama_characters import (
         environment_anchor_prompt,
@@ -435,7 +436,6 @@ def ensure_environment_refs(
     from tools.drama_video import generate_character_portrait, generate_location_plate
 
     slug = parse_slug(slug)
-    detail_ok: list[str] = []
     plates_ok: list[str] = []
     props_ok: list[str] = []
 
@@ -455,27 +455,20 @@ def ensure_environment_refs(
         if not cid or not str(rec.get("look") or "").strip():
             continue
 
-        # Detail / prop setting image
-        need_detail = not ref_exists(slug, rec)
-        if need_detail and not (rec.get("ref_locked") and ref_exists(slug, rec)):
-            _progress(f"{'场景设定' if cat == 'scene' else '道具设定'} {name}")
-            rel = generate_character_portrait(slug, rec, seed=None)
-            if not rel:
-                raise RuntimeError(f"{'地点' if cat == 'scene' else '道具'}「{name}」设定图生成失败")
-            upsert_character(slug, {"id": cid, "ref": rel})
-            rec = find_character(load_characters(slug), cid) or {**rec, "ref": rel}
         if cat == "prop":
+            need_detail = not ref_exists(slug, rec)
+            if need_detail and not (rec.get("ref_locked") and ref_exists(slug, rec)):
+                _progress(f"道具设定 {name}")
+                rel = generate_character_portrait(slug, rec, seed=None)
+                if not rel:
+                    raise RuntimeError(f"道具「{name}」设定图生成失败")
+                upsert_character(slug, {"id": cid, "ref": rel})
+                rec = find_character(load_characters(slug), cid) or {**rec, "ref": rel}
             props_ok.append(cid)
         else:
-            detail_ok.append(cid)
-
-        # Location master plate
-        if cat == "scene":
+            # Scene: plate only (no separate 设定图)
             rec = find_character(load_characters(slug), cid) or rec
             if not ref_plate_exists(slug, rec):
-                if rec.get("ref_locked") and ref_exists(slug, rec):
-                    # Locked but plate missing: still generate plate (does not overwrite detail ref)
-                    pass
                 _progress(f"地点底板 {name}")
                 plate_rel = generate_location_plate(slug, rec, seed=None)
                 if not plate_rel:
@@ -492,14 +485,15 @@ def ensure_environment_refs(
             patch["anchor_prompt"] = environment_anchor_prompt(rec)
             upsert_character(slug, patch)
         if lock and not rec.get("ref_locked"):
-            # Require detail; for scene also require plate
-            ready = ref_exists(slug, find_character(load_characters(slug), cid) or rec)
             if cat == "scene":
-                ready = ready and ref_plate_exists(slug, find_character(load_characters(slug), cid) or rec)
+                ready = ref_plate_exists(slug, find_character(load_characters(slug), cid) or rec)
+            else:
+                ready = ref_exists(slug, find_character(load_characters(slug), cid) or rec)
             if ready:
                 try:
                     set_ref_locked(slug, cid, True)
                 except Exception:
                     pass
 
-    return {"scenes": detail_ok, "plates": plates_ok, "props": props_ok}
+    # ``scenes`` mirrors plates for older callers that still read that key
+    return {"scenes": list(plates_ok), "plates": plates_ok, "props": props_ok}

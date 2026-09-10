@@ -1,8 +1,9 @@
-"""P1: environment refs — scene detail, master plate, prop setting."""
+"""P1: environment refs — scene master plate + prop setting (no scene 设定图)."""
 
 from __future__ import annotations
 
 from tools.drama_characters import (
+    build_asset_ref_prompt,
     build_location_plate_prompt,
     environment_anchor_prompt,
     ref_plate_rel,
@@ -18,6 +19,14 @@ def test_build_location_plate_prompt_no_people():
     assert "底板" in prompt
 
 
+def test_scene_asset_prompt_uses_plate_not_concept_sheet():
+    prompt = build_asset_ref_prompt(
+        {"name": "广寒宫", "category": "scene", "look": "白玉宫殿", "colors": "冷蓝"}
+    )
+    assert "底板" in prompt
+    assert "概念设定图" not in prompt
+
+
 def test_environment_anchor_prompt_scene_and_prop():
     scene = environment_anchor_prompt(
         {"name": "广寒宫", "category": "scene", "look": "白玉宫殿", "colors": "冷蓝"}
@@ -31,7 +40,7 @@ def test_environment_anchor_prompt_scene_and_prop():
     assert ref_plate_rel("demo", "loc1").endswith("loc1_plate.png")
 
 
-def test_ensure_environment_refs_generates_detail_and_plate(monkeypatch):
+def test_ensure_environment_refs_plate_only_for_scene(monkeypatch):
     store = [
         {
             "id": "palace",
@@ -53,6 +62,7 @@ def test_ensure_environment_refs_generates_detail_and_plate(monkeypatch):
             "anchor_prompt": "",
         },
     ]
+    portrait_calls: list[str] = []
 
     def _load(_slug):
         return list(store)
@@ -72,6 +82,10 @@ def test_ensure_environment_refs_generates_detail_and_plate(monkeypatch):
                 return c
         return None
 
+    def _portrait(slug, rec, seed=None):
+        portrait_calls.append(str(rec.get("id") or ""))
+        return f"dramas/{slug}/characters/{rec['id']}.png"
+
     monkeypatch.setattr("tools.drama_environment.load_characters", _load)
     monkeypatch.setattr("tools.drama_characters.load_characters", _load)
     monkeypatch.setattr("tools.drama_characters.upsert_character", _upsert)
@@ -88,10 +102,7 @@ def test_ensure_environment_refs_generates_detail_and_plate(monkeypatch):
         "tools.drama_characters.ref_plate_exists",
         lambda slug, rec: bool(str((rec or {}).get("ref_plate") or "").endswith("_plate.png")),
     )
-    monkeypatch.setattr(
-        "tools.drama_video.generate_character_portrait",
-        lambda slug, rec, seed=None: f"dramas/{slug}/characters/{rec['id']}.png",
-    )
+    monkeypatch.setattr("tools.drama_video.generate_character_portrait", _portrait)
     monkeypatch.setattr(
         "tools.drama_video.generate_location_plate",
         lambda slug, rec, seed=None: f"dramas/{slug}/characters/{rec['id']}_plate.png",
@@ -104,8 +115,9 @@ def test_ensure_environment_refs_generates_detail_and_plate(monkeypatch):
     assert "palace" in summary["scenes"]
     assert "palace" in summary["plates"]
     assert "pill" in summary["props"]
+    assert portrait_calls == ["pill"]  # scene must not generate 设定图
     palace = next(c for c in store if c["id"] == "palace")
-    assert palace["ref"].endswith("palace.png")
+    assert not str(palace.get("ref") or "").endswith("palace.png")
     assert palace["ref_plate"].endswith("palace_plate.png")
     assert palace.get("ref_locked") is True
     pill = next(c for c in store if c["id"] == "pill")

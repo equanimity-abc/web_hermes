@@ -1,4 +1,4 @@
-<!-- prompt: 验收用 tiktok_drama action=qc_episode。跑身份/口型/闪烁/响度四项脚本。skipped 不得记为通过。响度不达标只重 mix，禁止重渲各镜 clip。通过/退回在工作台由人点。 -->
+<!-- prompt: 验收用 tiktok_drama action=qc_episode。跑身份/口型/闪烁/响度四项脚本。skipped 不得记为通过。响度不达标只重 mix，禁止重渲各镜 clip。通过/退回在工作台由人点。所有步骤禁止候选项结果与重抽（禁止 generate_candidates / choose_candidate / 自动换种子）。 -->
 # drama-qc
 
 人是导演，Agent 是质检员。分数写进 `shots.json` 的 `qc`，**不要把 skipped 当成通过，不要为了响度去重渲 clip**。
@@ -19,6 +19,7 @@
 4. **响度只重 mix。** 失败时提示 `mix_episode` / 工作台「重混音」，禁止 `rerender_shot` 各镜。
 5. 身份失败脏 `scene`/`motion`/`clip`，不重配音。闪烁失败脏 `motion`/`clip`。
 6. 禁止替用户点通过。锁和验收是人的权力。
+7. **禁止候选项与重抽：** 身份不过时提示人改分镜/定妆后 `rerender_shot` 单次出图；禁止候选墙、禁止换种子自动重抽。
 
 ## 不要做
 

@@ -1,4 +1,4 @@
-<!-- prompt: 渲染/导出前必须做检查点：出图前 classify_shots（定场 L0 / 对话 L1）；渲前看预算 budget 不超支；导出前先 qc_episode 且 skipped 不得当通过。身份抽检失败会自动标脏 scene/motion/clip，但入队重渲必须人在工作台确认，禁止你自动点通过或自动烧贵模型。目标是「建议 → 人锁 → 只渲脏」，绝不整集盲渲。 -->
+<!-- prompt: 渲染/导出前必须做检查点：出图前 classify_shots（定场 L0 / 对话 L1）；渲前看预算 budget 不超支；导出前先 qc_episode 且 skipped 不得当通过。身份抽检失败会自动标脏 scene/motion/clip，但入队重渲必须人在工作台确认，禁止你自动点通过或自动烧贵模型。所有步骤禁止候选项结果与重抽。目标是「建议 → 人锁 → 只渲脏」，绝不整集盲渲。 -->
 # drama-checkpoint
 
 渲染与导出前的强制检查点。**只提醒、只建议，不做破坏性动作。**
@@ -19,6 +19,7 @@
 
 - `qc_shot` 身份失败会**自动标脏** scene/motion/clip（不重配音）。
 - 但**入队重渲必须人在工作台点**；你不自动通过、不自动烧贵模型。
+- **禁止候选项墙与自动重抽**：不得 `generate_candidates` / `choose_candidate`；不得建议换种子重抽。
 
 ## 不要做
 

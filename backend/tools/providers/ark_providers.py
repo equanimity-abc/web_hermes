@@ -165,6 +165,38 @@ def _prompt_with_identity_refs(
     return f"{base}。{clause}"
 
 
+def _seedream_gen_size(width: int, height: int) -> str:
+    """Map canvas to Seedream 5.0 Pro-safe ``size`` (named tier or WxH).
+
+    Pro total-pixel range is roughly ``[921600, 4624220]`` with aspect in
+    ``[1/16, 16]``. Raw ``1980x3520`` (9:16 @1980) exceeds the ceiling and
+    the API rejects the request — clamp while preserving aspect.
+    """
+    w = max(64, int(width or 1024))
+    h = max(64, int(height or 1024))
+    max_px = 4_624_220
+    min_px = 921_600
+    pixels = w * h
+    if pixels > max_px:
+        scale = (max_px / float(pixels)) ** 0.5
+        w = max(64, int(w * scale))
+        h = max(64, int(h * scale))
+    elif pixels < min_px:
+        scale = (min_px / float(pixels)) ** 0.5
+        w = max(64, int(w * scale))
+        h = max(64, int(h * scale))
+    w = max(64, (w // 8) * 8)
+    h = max(64, (h // 8) * 8)
+    if abs(w - h) <= 16:
+        side = max(w, h)
+        if side <= 1280:
+            return "1024x1024"
+        if side <= 1600:
+            return "1536x1536"
+        return "2048x2048"
+    return f"{w}x{h}"
+
+
 def _ark_image(
     prompt: str,
     dest,
@@ -185,6 +217,8 @@ def _ark_image(
     """
     key = _ark_key()
     if not key:
+        if isinstance(shot, dict):
+            shot["_image_error"] = "缺少 ARK_API_KEY"
         return False
     try:
         from tools.drama_parallel import acquire_lane
@@ -196,10 +230,10 @@ def _ark_image(
     from PIL import Image
 
     model = str(getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-pro-260628").strip()
-    # Prefer portrait for drama; Ark size strings like 2K / 1024x1792
+    # Prefer portrait for drama; clamp into Seedream Pro pixel budget.
     w = int(width or 1080)
     h = int(height or 1920)
-    size = f"{w}x{h}" if w and h else "1080x1920"
+    size = _seedream_gen_size(w, h) if w and h else "2048x2048"
 
     image_payload = _seedream_image_payload(tuple(refs or ()))
     ref_count = (
@@ -291,6 +325,8 @@ def _ark_image(
             items = data.get("data") or []
             if not items:
                 log.warning("ark image empty response: %s", data)
+                if isinstance(shot, dict):
+                    shot["_image_error"] = "Seedream 返回空结果"
                 return False
             item = items[0]
             url = item.get("url") or ""
@@ -343,6 +379,8 @@ def _ark_image(
             return ok
     except Exception as e:
         log.warning("ark image failed: %s", e)
+        if isinstance(shot, dict):
+            shot["_image_error"] = str(e)[:240]
         if slug:
             try:
                 from tools.drama_observability import append_cost_log

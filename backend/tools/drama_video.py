@@ -205,6 +205,10 @@ def parse_episode_markdown(text: str) -> dict[str, Any]:
             key = m_field.group(1)
             val = m_field.group(2).strip()
             # keep legacy 对白 on the dict so migrate_shot_script_fields can remap
+            if key == "旁白":
+                from tools.drama_shots import sanitize_script_placeholder
+
+                val = sanitize_script_placeholder(val)
             current[key] = val
 
     if current:
@@ -245,7 +249,12 @@ def patch_shot_in_markdown(text: str, shot_n: int, patch: dict[str, Any]) -> str
         elif key == "地点":
             fields[key] = str(value).strip()
         else:
-            fields[key] = str(value)
+            field_text = str(value)
+            if key == "旁白":
+                from tools.drama_shots import sanitize_script_placeholder
+
+                field_text = sanitize_script_placeholder(field_text)
+            fields[key] = field_text
 
     timing_label = ""
     if patch.get("timing") is not None and str(patch.get("timing") or "").strip():
@@ -607,11 +616,35 @@ def _scene_prompt(
         scene = re.sub(r"镜头拉远", "镜头保持主体中近景、面部清晰可辨", scene)
         if style == "pull_out":
             style = "punch_in"
+        # 全幅参考生图默认强调可检脸（身份 QC / 口型前置），不依赖失败后再 boost
+        if speaker:
+            scene = (
+                f"{scene}，身份锁角色「{speaker}」正面或四分之三正面，"
+                "面部清晰可辨、占画面足够大，禁止遮脸背影与极端俯仰"
+            )
+        else:
+            scene = f"{scene}，主要角色面部清晰可辨、正面或四分之三正面"
     if shot.get("_identity_framing_boost") and needs_face:
-        scene = (
-            f"{scene}，强制中近景或近景，身份锁角色正面或四分之三正面，"
-            "面部占画面足够大，禁止侧脸背影、禁止把第二人物整脸拼进月亮/背景抢主体"
-        )
+        retry_n = int(shot.get("_identity_retry") or 0)
+        # 失败重抽：把「中景双人并排」压成说话人近景，避免 ArcFace 双人同大头双输
+        scene = re.sub(r"中景竖构图", "近景竖构图", scene)
+        scene = re.sub(r"中近景竖构图", "近景竖构图", scene)
+        scene = re.sub(r"(?<![近])中景", "近景", scene)
+        if speaker and retry_n >= 2:
+            scene = (
+                f"{scene}，强制「{speaker}」单人近景正面脸为主（脸占画面至少四分之一），"
+                "其他角色最多边缘肩膀或半张侧脸，禁止双人并排同大头抢戏"
+            )
+        elif speaker:
+            scene = (
+                f"{scene}，强制近景，「{speaker}」正面脸最大最清晰占画面主体，"
+                "配角缩小靠后或侧身，禁止第二人物整脸与主体同大"
+            )
+        else:
+            scene = (
+                f"{scene}，强制中近景或近景，主要角色正面或四分之三正面，"
+                "面部占画面足够大，禁止侧脸背影、禁止把第二人物整脸拼进背景抢主体"
+            )
     kinetic_map = {
         "punch_in": "动态姿态，隐含运动感，衣摆飘动",
         "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
@@ -892,13 +925,17 @@ def _image_provider_chain(
 ) -> list[str]:
     """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks.
 
-    Studio / HQ: single commercial provider only — no free cascade.
+    Studio / HQ scene shots: single commercial provider only — no free cascade.
+    Character ref (定妆) still cascades across commercial backends so a Seedream
+    size/network blip can fall through to Wanx/Kling without pollinations free tier.
     """
     from tools.drama_hq_contract import hq_image_provider_chain, is_hq_no_fallback
     from tools.providers import registry
 
     sid = str(slug or (shot or {}).get("_slug") or "").strip()
-    if sid and is_hq_no_fallback(sid):
+    kind = str((shot or {}).get("kind") or "").strip().lower()
+    hq = bool(sid and is_hq_no_fallback(sid))
+    if hq and kind != "character_ref":
         return hq_image_provider_chain(primary, shot)
 
     skip = frozenset({"", "none", "off", "mock"})
@@ -922,7 +959,7 @@ def _image_provider_chain(
         add("jimeng")
     else:
         add(primary)
-    if str((shot or {}).get("kind") or "") == "character_ref":
+    if kind == "character_ref":
         from tools.drama_styles import default_character_ref_image_route
 
         for key in ("provider",):
@@ -931,6 +968,12 @@ def _image_provider_chain(
         add("kling")
         add("wanx")
         add("dashscope")
+        # Studio 定妆仍禁止免费降级；非 studio 才兜底 pollinations。
+        if not hq:
+            fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+            add(fb)
+            if fb != "pollinations":
+                add("pollinations")
     elif not refs:
         fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
         add(fb)
@@ -966,13 +1009,23 @@ def _generate_scene_image(
         if route_provider:
             provider = route_provider
     if provider in ("", "none", "off"):
+        if isinstance(shot, dict):
+            shot["_image_error"] = "出图 provider 已关闭"
         return False
 
     from tools.providers import registry
 
     gen_w = int(width or ZOOM_W)
     gen_h = int(height or ZOOM_H)
-    for pid in _image_provider_chain(provider, shot, refs=refs, slug=slug):
+    chain = _image_provider_chain(provider, shot, refs=refs, slug=slug)
+    if not chain:
+        if isinstance(shot, dict):
+            shot["_image_error"] = "无可用图像模型适配器"
+        return False
+    errors: list[str] = []
+    for pid in chain:
+        if isinstance(shot, dict):
+            shot.pop("_image_error", None)
         ok = registry.dispatch(
             "image",
             pid,
@@ -986,7 +1039,15 @@ def _generate_scene_image(
             shot=shot,
         )
         if ok:
+            if isinstance(shot, dict):
+                shot.pop("_image_error", None)
             return True
+        detail = ""
+        if isinstance(shot, dict):
+            detail = str(shot.get("_image_error") or "").strip()
+        errors.append(f"{pid}" + (f"（{detail}）" if detail else ""))
+    if isinstance(shot, dict):
+        shot["_image_error"] = "；".join(errors) if errors else "全部出图后端失败"
     return False
 
 
@@ -1036,11 +1097,15 @@ def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: st
         except OSError:
             pass
     gen_w, gen_h = ref_canvas_size(char)
+    shot = character_ref_shot(char)
     ok = _generate_scene_image(
-        prompt, dest, seed=seed, slug=slug, shot=character_ref_shot(char), width=gen_w, height=gen_h
+        prompt, dest, seed=seed, slug=slug, shot=shot, width=gen_w, height=gen_h
     )
     if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
+        err = str(shot.get("_image_error") or "").strip()
+        generate_character_portrait.last_error = err  # type: ignore[attr-defined]
         return None
+    generate_character_portrait.last_error = ""  # type: ignore[attr-defined]
     return out_rel
 
 
@@ -1109,9 +1174,9 @@ def generate_character_face_portrait(
     import zlib
 
     from tools.drama_characters import (
+        FACE_REF_SIZE,
         build_face_ref_prompt,
         character_ref_shot,
-        ref_canvas_size,
         ref_exists,
         ref_face_rel,
         ref_rel,
@@ -1140,9 +1205,8 @@ def generate_character_face_portrait(
     body_rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     if ref_exists(slug, char):
         refs = (body_rel,)
-    gen_w, gen_h = ref_canvas_size(char)
-    # 特写略收一点边长仍保持方形，便于脸占比
-    face_w = max(1024, min(int(gen_w), 1980))
+    # 正脸特写固定 1024²：身份嵌入够用，不必跟全身边长绑定
+    face_w = int(FACE_REF_SIZE)
     face_h = face_w
     ok = _generate_scene_image(
         prompt,
@@ -1278,9 +1342,23 @@ def generate_shot_candidates(
 
         ai_ok = False
         source = "fallback"
-        # P1：有空间槽 + 定妆时优先分层生成（一层一角色再融合）。
+        # 专业做法：全幅参考生图（环境底板 + 定妆脸进 Seedream/Kling），一次成片。
+        # 旧「底板 + bbox 贴角色层」光影/比例易穿帮且易检不到脸，默认关闭；仅 DRAMA_LAYERED_SCENE=1 启用。
         plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
-        if refs and count <= 1 and plan and (plan.get("slots") or []):
+        allow_layered = str(getattr(config, "DRAMA_LAYERED_SCENE", "") or os.getenv("DRAMA_LAYERED_SCENE", "0")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if (
+            allow_layered
+            and not hq
+            and refs
+            and count <= 1
+            and plan
+            and (plan.get("slots") or [])
+        ):
             try:
                 from tools.drama_layers import generate_layered_scene
 
@@ -1801,6 +1879,12 @@ def _synthesize_shot_voice(
 
 
 def _probe_duration(path: Path) -> float:
+    """Probe media duration; floor at 0.5s for timeline math that assumes a beat."""
+    return _probe_media_seconds(path, minimum=0.5)
+
+
+def _probe_media_seconds(path: Path, *, minimum: float = 0.0) -> float:
+    """Raw media duration. Use minimum=0 for A/V lock (voice/lip must match exactly)."""
     creationflags = 0
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1822,9 +1906,58 @@ def _probe_duration(path: Path) -> float:
             timeout=20,
             creationflags=creationflags,
         )
-        return max(0.5, float((proc.stdout or "0").strip() or 0))
+        val = float((proc.stdout or "0").strip() or 0)
+        if val <= 0:
+            return 0.0
+        return max(float(minimum), val) if minimum > 0 else val
     except (ValueError, OSError, subprocess.SubprocessError):
         return 0.0
+
+
+def av_timing_window(*, voice_seconds: float, play_seconds: float) -> tuple[float, float]:
+    """Shared clock for voice onset + mouth-active window + clip play length.
+
+    Contract (hard):
+    1. Master clock = VO when VO exists (>0.25s); otherwise the script play length.
+    2. t=0 is the same instant for 「开始说话」 and 「开始动口型」.
+    3. active_seconds == VO length: mouth *changes* only during speech
+       (even if shapes are imperfect, change duration must match VO).
+    4. play_seconds = max(script beat, active): after active, freeze last frame + silence.
+
+    Returns (active_seconds, play_seconds).
+    """
+    play = max(float(play_seconds or 0), 0.5)
+    voice = float(voice_seconds or 0)
+    if voice > 0.25:
+        active = voice
+        play = max(play, active)
+    else:
+        active = play
+    return float(active), float(play)
+
+
+def _motion_vchain_for_av_window(
+    *,
+    src_dur: float,
+    active: float,
+    play: float,
+    look: str,
+) -> str:
+    """Fit motion/lip to the speak window, then freeze to play length; PTS reset to t=0."""
+    steps = ["[0:v]setpts=PTS-STARTPTS"]
+    # 1) Mouth-active window = active (trim oversize AI take / pad short lip)
+    if src_dur > active + 0.12:
+        steps.append(f"trim=duration={active:.3f},setpts=PTS-STARTPTS")
+    elif active - src_dur > 0.12 and src_dur > 0.05:
+        steps.append(f"tpad=stop_mode=clone:stop_duration={active - src_dur:.3f}")
+    # 2) Hold to full shot play length (no more mouth invention after VO ends)
+    if play - active > 0.12:
+        steps.append(f"tpad=stop_mode=clone:stop_duration={play - active:.3f}")
+    steps.append(
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
+    )
+    return ",".join(steps)
 
 
 def _encode_clip(
@@ -1882,14 +2015,18 @@ def _encode_clip_from_still(
     audio: Path | None,
     shot: dict[str, Any],
 ) -> None:
-    """Ken Burns on PNG still. Length follows script/voice target; audio is padded to match."""
-    target = max(float(duration or 0), 0.5)
+    """Ken Burns on PNG still. Voice and picture share t=0; VO pads to play length."""
+    voice_sec = _probe_media_seconds(audio) if audio is not None and audio.is_file() else 0.0
+    active, target = av_timing_window(voice_seconds=voice_sec, play_seconds=float(duration or 0))
+    if isinstance(shot, dict):
+        shot["av_active"] = round(active, 3)
+        shot["av_play"] = round(target, 3)
     frames = max(int(round(target * FPS)), FPS)
     motion = _motion_expr(shot, frames)
     look = _look_filters(shot)
     vf = (
         f"[0:v]scale={ZOOM_W}:{ZOOM_H}:force_original_aspect_ratio=increase,"
-        f"crop={ZOOM_W}:{ZOOM_H},{motion},{look},fps={FPS}[v];"
+        f"crop={ZOOM_W}:{ZOOM_H},{motion},{look},fps={FPS},setpts=PTS-STARTPTS[v];"
         f"{_vout_overlay_filter(shot)}"
     )
     # Input framerate is required or zoompan often emits a single still.
@@ -1912,7 +2049,8 @@ def _encode_clip_from_still(
         args += ["-i", str(audio)]
         af = (
             f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-            f"apad=whole_dur={target:.3f},atrim=0:{target:.3f},asetpts=PTS-STARTPTS[aout]"
+            f"asetpts=PTS-STARTPTS,apad=whole_dur={target:.3f},atrim=0:{target:.3f},"
+            f"asetpts=PTS-STARTPTS[aout]"
         )
     else:
         args += [
@@ -1967,29 +2105,22 @@ def _encode_clip_from_motion(
     *,
     remux_clean: bool = True,
 ) -> None:
-    """Composite pre-rendered motion/lip with subtitles and voice.
+    """Composite motion/lip + subtitles + voice under the shared A/V clock.
 
-    Clip length follows max(script, voice). Short video is extended by freezing
-    the last frame (not looping), so performance timing is not polluted.
+    See ``av_timing_window``: mouth-active window == VO length from the same t=0;
+    shot may be longer with freeze + silence after speech ends.
     """
     look = _look_filters(shot, remux_clean=remux_clean)
-    target = max(float(duration or 0), 0.5)
+    voice_sec = _probe_media_seconds(audio) if audio is not None and audio.is_file() else 0.0
+    active, target = av_timing_window(voice_seconds=voice_sec, play_seconds=float(duration or 0))
+    if isinstance(shot, dict):
+        shot["av_active"] = round(active, 3)
+        shot["av_play"] = round(target, 3)
     frames = max(int(round(target * FPS)), 1)
-    motion_dur = _probe_duration(motion) if motion.is_file() else 0.0
-    hold = max(0.0, target - motion_dur) if motion_dur > 0.05 else 0.0
-    # Reset PTS so video and voice share t=0 (avoids first-half mouth/audio drift).
-    if hold > 0.05:
-        vchain = (
-            f"[0:v]setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={hold:.3f},"
-            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
-        )
-    else:
-        vchain = (
-            f"[0:v]setpts=PTS-STARTPTS,"
-            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,{look},fps={FPS},setpts=PTS-STARTPTS[v]"
-        )
+    motion_dur = _probe_media_seconds(motion) if motion.is_file() else 0.0
+    vchain = _motion_vchain_for_av_window(
+        src_dur=motion_dur, active=active, play=target, look=look
+    )
     vf = f"{vchain};{_vout_overlay_filter(shot)}"
     args = ["-y", "-i", str(motion), "-framerate", str(FPS), "-loop", "1", "-i", str(overlay)]
     if audio is not None:
@@ -2361,11 +2492,15 @@ def render_shot_layers(
         shot["camera"] = shot.get("camera") or _camera_style(shot)
         audio = voice if voice.is_file() and voice.stat().st_size > 0 else None
         if audio is not None:
-            voice_dur = _probe_duration(audio)
-            # 配音更长时拉长本镜，保证成片听得完、总时长与修改后一致
+            voice_dur = _probe_media_seconds(audio)
+            # 配音更长时拉长本镜；口型活跃窗始终跟 VO（见 av_timing_window）
             if voice_dur > duration + 0.05:
                 duration = voice_dur
                 shot["duration"] = round(float(duration), 1)
+            active, play = av_timing_window(voice_seconds=voice_dur, play_seconds=duration)
+            shot["av_active"] = round(active, 3)
+            shot["av_play"] = round(play, 3)
+            duration = play
         _encode_clip(scene, overlay, clip, duration, audio, shot)
         rebuilt.append("clip")
         assets["clip"] = assets.get("clip") or str(clip)
