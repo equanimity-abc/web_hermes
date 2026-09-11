@@ -35,7 +35,7 @@ echo "   Agent Chat - 通用智能体框架"
 echo "============================================"
 echo ""
 
-[[ -f backend/.env ]] || { print_err "未找到 backend/.env"; exit 1; }
+[[ -f backend/config/.env || -f backend/.env ]] || { print_err "未找到 backend/config/.env（或 backend/.env）"; exit 1; }
 
 if [[ "$FORCE_INSTALL" == 1 ]]; then
     rm -f backend/.deps_ok
@@ -67,7 +67,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 print_info "在本终端启动后端与前端..."
-(cd backend && "$PYTHON" main.py) &
+(cd backend && "$PYTHON" script/run_server.py) &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > /tmp/agent_chat_backend.pid
 

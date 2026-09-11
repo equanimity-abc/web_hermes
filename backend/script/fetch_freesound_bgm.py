@@ -3,8 +3,8 @@
 Usage::
 
     set FREESOUND_API_KEY=your_key
-    python backend/scripts/fetch_freesound_bgm.py
-    python backend/scripts/fetch_freesound_bgm.py --force   # overwrite existing real files
+    python backend/script/fetch_freesound_bgm.py
+    python backend/script/fetch_freesound_bgm.py --force   # overwrite existing real files
 
 Get a key: https://freesound.org/apiv2/apply/
 """
@@ -18,8 +18,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SRC = ROOT / "src"
+for path in (SRC, ROOT):
+    entry = str(path)
+    if entry not in sys.path:
+        sys.path.insert(0, entry)
 
 import agent  # noqa: E402,F401
 
@@ -32,7 +35,9 @@ def main() -> int:
 
     if not os.getenv("FREESOUND_API_KEY", "").strip():
         # Load .env if present
-        env_path = ROOT / ".env"
+        env_path = ROOT / "config" / ".env"
+        if not env_path.is_file():
+            env_path = ROOT / ".env"
         if env_path.is_file():
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()

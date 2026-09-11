@@ -1,6 +1,6 @@
 """Local secrets overlay for API keys (UI-editable).
 
-Precedence at runtime: data/secrets.json overrides empty/.env values after apply.
+Precedence at runtime: src/data/secrets.json overrides empty/.env values after apply.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 from config import _BACKEND_DIR, config
 
 SECRETS_PATH = Path(
-    os.getenv("SECRETS_PATH", str(_BACKEND_DIR / "data" / "secrets.json"))
+    os.getenv("SECRETS_PATH", str(_BACKEND_DIR / "src" / "data" / "secrets.json"))
 )
 
 SECRET_FIELDS: tuple[str, ...] = (

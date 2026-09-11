@@ -29,9 +29,12 @@ def load_plugin_tools() -> list[str]:
     if not init.exists():
         init.write_text('"""User/plugin tools drop-in package."""\n', encoding="utf-8")
 
-    backend_root = str(plugins_dir.parent.parent)
-    if backend_root not in sys.path:
-        sys.path.insert(0, backend_root)
+    src_root = plugins_dir.parent.parent
+    backend_root = src_root.parent
+    for path in (src_root, backend_root):
+        entry = str(path)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
 
     loaded: list[str] = []
     package_name = "tools.plugins"

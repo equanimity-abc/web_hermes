@@ -5,9 +5,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
 
-_BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(_BACKEND_DIR / "config" / ".env")
+load_dotenv(_BACKEND_DIR / ".env")
 
 
 class Config:
@@ -67,13 +68,13 @@ class Config:
     ).split(",")
 
     SESSION_DATA_DIR: Path = Path(
-        os.getenv("SESSION_DATA_DIR", str(_BACKEND_DIR / "data" / "sessions"))
+        os.getenv("SESSION_DATA_DIR", str(_BACKEND_DIR / "src" / "data" / "sessions"))
     )
     WORKSPACE_DIR: Path = Path(
-        os.getenv("WORKSPACE_DIR", str(_BACKEND_DIR / "data" / "workspace"))
+        os.getenv("WORKSPACE_DIR", str(_BACKEND_DIR / "workspace"))
     )
     MEMORY_DIR: Path = Path(
-        os.getenv("MEMORY_DIR", str(_BACKEND_DIR / "data" / "memory"))
+        os.getenv("MEMORY_DIR", str(_BACKEND_DIR / "src" / "data" / "memory"))
     )
 
     AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "64"))

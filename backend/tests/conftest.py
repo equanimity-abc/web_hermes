@@ -9,7 +9,9 @@ import os
 import sys
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _BACKEND not in sys.path:
-    sys.path.insert(0, _BACKEND)
+_SRC = os.path.join(_BACKEND, "src")
+for path in (_SRC, _BACKEND):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 import agent  # noqa: E402,F401

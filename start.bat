@@ -12,10 +12,12 @@ echo    Agent Chat - 通用智能体框架
 echo ============================================
 echo.
 
-if not exist "%ROOT%backend\.env" (
-    echo [x] 未找到 backend\.env，请先配置 DEEPSEEK_API_KEY
-    pause
-    exit /b 1
+if not exist "%ROOT%backend\config\.env" (
+    if not exist "%ROOT%backend\.env" (
+        echo [x] 未找到 backend\config\.env（或 backend\.env），请先配置 DEEPSEEK_API_KEY
+        pause
+        exit /b 1
+    )
 )
 
 where python >nul 2>&1
@@ -60,16 +62,16 @@ echo [*] 在终端标签页中启动后端与前端...
 where wt >nul 2>&1
 if %errorlevel% equ 0 (
     if defined WT_SESSION (
-        wt -w 0 new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python main.py"
+        wt -w 0 new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python script/run_server.py"
         wt -w 0 new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
     ) else (
-        wt -M --title "Agent Chat" new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python main.py" ; new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
+        wt -M --title "Agent Chat" new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python script/run_server.py" ; new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
     )
     echo [✓] 已在 Windows Terminal 同一窗口的标签页中启动
 ) else (
     echo [i] 未检测到 Windows Terminal ^(wt^)，在本窗口后台启动...
     cd /d "%ROOT%backend"
-    start /b python main.py
+    start /b python script/run_server.py
     cd /d "%ROOT%frontend"
     start /b npm run dev
     echo [✓] 后端与前端已在当前窗口后台运行

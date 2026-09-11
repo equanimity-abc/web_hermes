@@ -1,7 +1,7 @@
 """Unified configuration center (R0).
 
 Three-layer coverage (low → high priority):
-    ① global presets   backend/data/presets/*.json   (cheap / balanced / pro)
+    ① global presets   backend/config/presets/*.json   (cheap / balanced / pro)
     ② project models   workspace/dramas/{slug}/models.json
     ③ episode/shot     (schema reserved: models.nodes + shot overrides)
 
@@ -25,6 +25,7 @@ from tools.drama_models import (
     provider_health,
     save_models,
 )
+from config import _BACKEND_DIR
 from tools.workspace import resolve_safe
 
 # Nodes that can be individually configured. image/motion are per-kind maps;
@@ -41,7 +42,7 @@ NODE_KEYS = (
     "qc",
 )
 
-_PRESET_DIR = Path(__file__).resolve().parent.parent / "data" / "presets"
+_PRESET_DIR = _BACKEND_DIR / "config" / "presets"
 
 # Workbench dropdown options per production stage / node.
 MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
