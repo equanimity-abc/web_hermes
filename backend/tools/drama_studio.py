@@ -132,7 +132,7 @@ def save_project(slug: str, data: dict[str, Any]) -> None:
     _write_text(_project_rel(slug), json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
-def _asset_meta(rel: str) -> dict[str, Any]:
+def _asset_meta(rel: str, *, probe_image: bool = False) -> dict[str, Any]:
     info = {"path": rel, "exists": False, "bytes": 0, "url": None, "width": 0, "height": 0}
     if not rel:
         return info
@@ -144,7 +144,8 @@ def _asset_meta(rel: str) -> dict[str, Any]:
         info["exists"] = True
         info["bytes"] = path.stat().st_size
         info["url"] = play_url(rel)
-        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        # 候选墙/列表默认不 probe：8MB 级 PNG 用 PIL 开尺寸会拖死接口，导致图不显示、删除超时
+        if probe_image and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
             try:
                 from PIL import Image
 
@@ -166,7 +167,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
     pub["chosen"] = shot.get("chosen") or ""
     pub["candidates"] = []
     for item in shot.get("candidates") or []:
-        meta = _asset_meta(str(item.get("path") or ""))
+        meta = _asset_meta(str(item.get("path") or ""), probe_image=False)
         pub["candidates"].append(
             {
                 "id": item.get("id"),
@@ -175,6 +176,7 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
                 "seed": item.get("seed") or 0,
                 "url": meta.get("url"),
                 "exists": meta["exists"],
+                "bytes": meta.get("bytes") or 0,
                 "chosen": item.get("id") == shot.get("chosen"),
             }
         )
@@ -921,6 +923,8 @@ def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None 
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     if "shot" in (shot.get("locked") or []):
         raise DramaBadRequest("整镜已锁定，不能重抽出图")
+    if "scene" in (shot.get("locked") or []):
+        raise DramaBadRequest("画面已锁定，不能重抽出图")
     _take_snapshot(slug, n, doc, tag="candidates")
     from tools.drama_video import generate_shot_candidates
 
@@ -1012,20 +1016,38 @@ def delete_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     if "shot" in (shot.get("locked") or []):
         raise DramaBadRequest("整镜已锁定，不能删除候选")
-    _take_snapshot(slug, n, doc, tag="candidate_delete")
-    candidates = [c for c in (shot.get("candidates") or []) if str(c.get("id") or "") != cid]
-    shot["candidates"] = candidates
+    if "scene" in (shot.get("locked") or []) and str(shot.get("chosen") or "") == cid:
+        raise DramaBadRequest("画面已锁定，不能删除当前选用图（请先解锁）")
+    before = list(shot.get("candidates") or [])
+    hit = next((c for c in before if str(c.get("id") or "") == cid), None)
+    if hit is None:
+        raise DramaNotFound(f"找不到候选 {cid}")
+    try:
+        _take_snapshot(slug, n, doc, tag="candidate_delete")
+    except Exception:
+        # 快照失败不挡删除（大图集磁盘满/占用时常见）
+        pass
+    shot["candidates"] = [c for c in before if str(c.get("id") or "") != cid]
     if str(shot.get("chosen") or "") == cid:
+        # 保留 scene.png 与 scene 锁；仅清 chosen，不自动解锁
         shot["chosen"] = ""
-    # 删除候选图片文件（保留已选中的 scene.png 不动）
+    # 优先删记录里的 path；再兜底规范路径（Windows 占用时忽略）
     from tools.drama_shots import candidate_rel
 
-    rel = candidate_rel(slug, n, shot_n, cid)
-    try:
-        path = resolve_safe(rel)
-    except ValueError:
-        path = None
-    if path is not None:
+    rels = []
+    rel_hit = str((hit or {}).get("path") or "").strip()
+    if rel_hit:
+        rels.append(rel_hit)
+    rels.append(candidate_rel(slug, n, shot_n, cid))
+    seen_rel: set[str] = set()
+    for rel in rels:
+        if not rel or rel in seen_rel:
+            continue
+        seen_rel.add(rel)
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -1418,6 +1440,22 @@ def save_script(slug: str, episode: int, content: str, *, title: str | None = No
         synced_md = patch_episode_meta_duration(text, total)
         if synced_md != text:
             _write_text(ep_rel, synced_md.rstrip() + "\n")
+            text = synced_md
+    # 界面手动改剧本 = 更新 step1 真相源的唯一合法写入口
+    try:
+        from tools.drama_shots import json_rel as _shots_json_rel
+        from tools.drama_step_contract import publish_script_step
+
+        publish_script_step(
+            slug,
+            n,
+            script_rel=ep_rel,
+            shots_rel=_shots_json_rel(slug, n),
+            doc=merged,
+            from_ui=True,
+        )
+    except Exception as exc:
+        raise DramaBadRequest(f"写入 step1_script 失败：{exc}") from exc
     impact = script_impact(
         existing,
         merged,
@@ -2586,8 +2624,14 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
 
     if cat == "character":
         face_rel = generate_character_face_portrait(slug, rec, seed=seed)
-        if face_rel:
-            patch["ref_face"] = face_rel
+        if not face_rel:
+            detail = str(getattr(generate_character_face_portrait, "last_error", "") or "").strip()
+            msg = "正脸特写生成失败或与全身定妆不是同一人"
+            if detail:
+                msg += f"：{detail}"
+            msg += "。全身定妆已生成，请重试「生成正脸」或重新生成定妆"
+            raise DramaBadRequest(msg)
+        patch["ref_face"] = face_rel
     elif cat == "prop":
         if not str(rec.get("anchor_prompt") or "").strip():
             patch["anchor_prompt"] = environment_anchor_prompt({**rec, **patch})
@@ -2680,8 +2724,13 @@ def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any
     patch: dict[str, Any] = {"id": cid, "ref": rel}
     rec = {**rec, "ref": rel}
     face_rel = generate_character_face_portrait(slug, rec)
-    if face_rel:
-        patch["ref_face"] = face_rel
+    if not face_rel:
+        detail = str(getattr(generate_character_face_portrait, "last_error", "") or "").strip()
+        msg = "正脸特写生成失败或与全身定妆不是同一人"
+        if detail:
+            msg += f"：{detail}"
+        raise DramaBadRequest(msg)
+    patch["ref_face"] = face_rel
     upsert_character(slug, patch)
     rec = find_character(load_characters(slug), cid) or rec
     try:
@@ -2869,23 +2918,46 @@ def get_script_workspace(slug: str, episode: int) -> dict[str, Any]:
     n = parse_episode(episode)
     project = load_project(slug)
 
-    script_path = _rel(slug, "episodes", f"ep{n:02d}.md")
-    shots_path = json_rel(slug, n)
+    from tools.drama_step_contract import (
+        load_step1_doc,
+        load_step1_script_text,
+        step1_bible_rel,
+        step1_outline_rel,
+        step1_script_rel,
+        step1_shots_rel,
+    )
+
+    # Prefer step1_script (unique truth); fall back to legacy paths for older projects.
+    script_path = step1_script_rel(slug, n)
+    shots_path = step1_shots_rel(slug, n)
+    legacy_script = _rel(slug, "episodes", f"ep{n:02d}.md")
+    legacy_shots = json_rel(slug, n)
     characters_path = _rel(slug, "characters.json")
     project_path = _project_rel(slug)
-    bible_path = _rel(slug, "bible.md")
-    outline_path = _rel(slug, "outline.md")
+    bible_path = step1_bible_rel(slug)
+    outline_path = step1_outline_rel(slug)
+    legacy_bible = _rel(slug, "bible.md")
+    legacy_outline = _rel(slug, "outline.md")
     mix_path = _rel(slug, "videos", f"ep{n:02d}", "mix.json")
 
     from tools.drama_audio import load_mix
     from tools.drama_characters import load_characters
 
-    doc = load_doc(slug, n)
+    doc = load_step1_doc(slug, n)
+    if doc is None:
+        doc = load_doc(slug, n)
+        shots_path = legacy_shots
     mix = load_mix(slug, n)
     chars = load_characters(slug)
-    script_text = _read_text(script_path) or ""
-    bible_text = _read_text(bible_path) or ""
-    outline_text = _read_text(outline_path) or ""
+    script_text = load_step1_script_text(slug, n) or _read_text(legacy_script) or ""
+    if not script_text.strip():
+        script_path = legacy_script
+    bible_text = _read_text(bible_path) or _read_text(legacy_bible) or ""
+    if not bible_text.strip():
+        bible_path = legacy_bible
+    outline_text = _read_text(outline_path) or _read_text(legacy_outline) or ""
+    if not outline_text.strip():
+        outline_path = legacy_outline
 
     files = {
         "script": {
@@ -3025,9 +3097,21 @@ def save_script_workspace(
             saved.append(key)
         elif key == "bible":
             _write_text(_rel(slug, "bible.md"), text.rstrip() + ("\n" if text.strip() else ""))
+            try:
+                from tools.drama_step_contract import step1_bible_rel
+
+                _write_text(step1_bible_rel(slug), text.rstrip() + ("\n" if text.strip() else ""))
+            except Exception:
+                pass
             saved.append(key)
         elif key == "outline":
             _write_text(_rel(slug, "outline.md"), text.rstrip() + ("\n" if text.strip() else ""))
+            try:
+                from tools.drama_step_contract import step1_outline_rel
+
+                _write_text(step1_outline_rel(slug), text.rstrip() + ("\n" if text.strip() else ""))
+            except Exception:
+                pass
             saved.append(key)
         elif key == "mix":
             from tools.drama_audio import save_mix

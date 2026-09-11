@@ -133,7 +133,6 @@ export function useDramaStudio() {
       return
     }
     batchProgress.value = { ...(batchProgress.value || {}), ...partial }
-    // 视频页内嵌进度条与底部条同步
     const kind = batchProgress.value.kind
     if (kind === 'video') {
       setVideoGenProgress({
@@ -145,6 +144,75 @@ export function useDramaStudio() {
         message: batchProgress.value.message,
       })
     }
+  }
+
+  function applyJobProgressToBatch(job, fallbackLabel = '') {
+    if (!job) return
+    const p = job.progress || {}
+    const total = Math.max(0, Number(p.total) || 0)
+    const finished = Math.max(0, Number(p.finished) || 0)
+    const failed = Math.max(0, Number(p.failed) || 0)
+    const ok = Math.max(0, Number(p.ok) || Number(p.current) || 0)
+    const doneN = Math.max(finished, ok + failed)
+    const status = String(job.status || '')
+    const running = status === 'pending' || status === 'running'
+    const pct =
+      status === 'done'
+        ? 100
+        : total > 0
+          ? Math.min(99, Math.round((doneN / total) * 100))
+          : running
+            ? 35
+            : 0
+    setBatchProgress({
+      jobId: job.job_id,
+      status: running ? 'running' : status === 'done' ? 'done' : 'error',
+      current: total > 0 ? doneN : running ? 0 : 1,
+      total: total > 0 ? total : 1,
+      failed,
+      pct,
+      message:
+        String(p.message || '').trim() ||
+        (running
+          ? `${fallbackLabel || '后台任务'}进行中…`
+          : status === 'done'
+            ? job.result?.impact?.summary || job.result?.assemble || '后台任务已完成'
+            : job.error || '后台任务失败'),
+    })
+  }
+
+  async function awaitStudioBackgroundJob(result, { label = '后台任务' } = {}) {
+    if (!result?.job_id) return result
+    setBatchProgress({
+      status: 'running',
+      message: `${label}进行中…`,
+      jobId: result.job_id,
+      current: 0,
+      total: 1,
+    })
+    const latest = await waitForJob(result, slug.value, {
+      onProgress: (job) => applyJobProgressToBatch(job, label),
+    })
+    applyJobProgressToBatch(latest, label)
+    bust.value = Date.now()
+    try {
+      await openEpisode(episodeN.value || latest?.episode)
+    } catch {
+      /* ignore */
+    }
+    if (latest?.status === 'error' || latest?.status === 'cancelled') {
+      error.value = latest.error || `${label}失败`
+      notice.value = ''
+    } else {
+      notice.value =
+        latest?.result?.impact?.summary ||
+        latest?.result?.assemble ||
+        latest?.result?.produce?.hint ||
+        `${label}已完成`
+      error.value = ''
+    }
+    clearBatchProgressSoon()
+    return latest
   }
 
   function clearBatchProgressSoon(ms = 3000) {
@@ -1454,14 +1522,7 @@ export function useDramaStudio() {
     try {
       const result = await dramaApi.rerenderDirty(slug.value, episodeN.value)
       if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = '脏镜渲染已加入后台队列'
-        setBatchProgress({
-          status: 'running',
-          message: '脏镜渲染进行中（后台）…',
-          jobId: result.job_id,
-        })
-        rendering.value = false
+        await awaitStudioBackgroundJob(result, { label: '脏镜渲染' })
         return
       }
       bust.value = Date.now()
@@ -1472,10 +1533,8 @@ export function useDramaStudio() {
       error.value = e.message || String(e)
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
-      if (!batchProgress.value?.jobId) {
-        rendering.value = false
-        clearBatchProgressSoon()
-      }
+      rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -1499,14 +1558,7 @@ export function useDramaStudio() {
     try {
       const result = await dramaApi.produceEpisode(slug.value, episodeN.value, true, false)
       if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = '一键成片已加入后台队列'
-        setBatchProgress({
-          status: 'running',
-          message: '一键成片进行中（后台）…',
-          jobId: result.job_id,
-        })
-        rendering.value = false
+        await awaitStudioBackgroundJob(result, { label: '一键成片' })
         return
       }
       bust.value = Date.now()
@@ -1517,10 +1569,8 @@ export function useDramaStudio() {
       error.value = e.message || String(e)
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
-      if (!batchProgress.value?.jobId) {
-        rendering.value = false
-        clearBatchProgressSoon()
-      }
+      rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -1776,16 +1826,36 @@ export function useDramaStudio() {
   async function deleteCandidate(cid) {
     const shotN = selectedN.value
     if (!slug.value || !episodeN.value || !shotN || !cid) return
-    if (isShotBusy(shotN)) return
+    if (isShotBusy(shotN)) {
+      error.value = `Shot ${shotN} 正在处理中，请稍后再删除候选图`
+      return
+    }
     markShotBusy(shotN)
     error.value = ''
     notice.value = ''
+    // 乐观更新：先从墙上去掉，避免大图删除接口慢时「点了没反应」
+    const ep = episode.value
+    const idx = ep?.shots?.findIndex((s) => s.n === shotN) ?? -1
+    let snapshot = null
+    if (idx >= 0) {
+      snapshot = JSON.parse(JSON.stringify(ep.shots[idx]))
+      const shot = ep.shots[idx]
+      const next = {
+        ...shot,
+        candidates: (shot.candidates || []).filter((c) => String(c.id) !== String(cid)),
+        chosen: String(shot.chosen || '') === String(cid) ? '' : shot.chosen,
+      }
+      ep.shots.splice(idx, 1, next)
+    }
     try {
       const result = await dramaApi.deleteCandidate(slug.value, episodeN.value, shotN, cid)
       if (result.shot) mergeEpisodeShot(result.shot)
       bust.value = Date.now()
       notice.value = `已删除候选 ${cid}`
     } catch (e) {
+      if (snapshot != null && idx >= 0) {
+        episode.value.shots.splice(idx, 1, snapshot)
+      }
       error.value = e.message || String(e)
     } finally {
       markShotIdle(shotN)
@@ -2284,14 +2354,7 @@ export function useDramaStudio() {
     try {
       const result = await dramaApi.exportEpisode(slug.value, episodeN.value, true, false)
       if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = '整集导出已加入后台队列'
-        setBatchProgress({
-          status: 'running',
-          message: '整集导出进行中（后台）…',
-          jobId: result.job_id,
-        })
-        rendering.value = false
+        await awaitStudioBackgroundJob(result, { label: '导出整集' })
         return
       }
       bust.value = Date.now()
@@ -2305,14 +2368,7 @@ export function useDramaStudio() {
         try {
           const forced = await dramaApi.exportEpisode(slug.value, episodeN.value, true, true)
           if (forced.job_id) {
-            await trackJob(forced, slug.value)
-            notice.value = '已强制导出（后台队列）'
-            setBatchProgress({
-              status: 'running',
-              message: '强制导出进行中…',
-              jobId: forced.job_id,
-            })
-            rendering.value = false
+            await awaitStudioBackgroundJob(forced, { label: '强制导出' })
             return
           }
           bust.value = Date.now()
@@ -2329,10 +2385,8 @@ export function useDramaStudio() {
       error.value = msg
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
-      if (!batchProgress.value?.jobId) {
-        rendering.value = false
-        clearBatchProgressSoon()
-      }
+      rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -2398,14 +2452,7 @@ export function useDramaStudio() {
     try {
       const result = await dramaApi.mixEpisode(slug.value, episodeN.value, false)
       if (result.job_id) {
-        await trackJob(result, slug.value)
-        notice.value = '混音已加入后台队列'
-        setBatchProgress({
-          status: 'running',
-          message: '混音进行中（后台）…',
-          jobId: result.job_id,
-        })
-        rendering.value = false
+        await awaitStudioBackgroundJob(result, { label: '应用混音' })
         return
       }
       bust.value = Date.now()
@@ -2417,10 +2464,8 @@ export function useDramaStudio() {
       error.value = e.message || String(e)
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
-      if (!batchProgress.value?.jobId) {
-        rendering.value = false
-        clearBatchProgressSoon()
-      }
+      rendering.value = false
+      clearBatchProgressSoon()
     }
   }
 
@@ -2465,6 +2510,7 @@ export function useDramaStudio() {
       })
       const rec = await dramaApi.generateCharacterRef(slug.value, cid)
       bust.value = Date.now()
+      // 并行多角色时只刷新列表，不清空其它角色的 busy 状态
       await refreshCast()
       return rec
     } catch (e) {
@@ -2605,6 +2651,7 @@ export function useDramaStudio() {
           }
         },
         {
+          concurrency: Math.max(BATCH_CONCURRENCY, 6),
           onProgress: (completed, total, item, result) => {
             if (result?.__error) failed += 1
             else done += 1

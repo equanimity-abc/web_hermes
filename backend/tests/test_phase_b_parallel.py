@@ -58,6 +58,31 @@ def test_parallel_map_fail_fast():
         assert "boom" in str(exc)
 
 
+def test_parallel_map_fail_fast_stops_new_submits():
+    """失败后不再开新任务；已在跑的跑完。"""
+    started: list[int] = []
+    lock = __import__("threading").Lock()
+
+    def work(n: int) -> int:
+        with lock:
+            started.append(n)
+        if n == 1:
+            time.sleep(0.05)
+            raise RuntimeError("boom")
+        time.sleep(0.08)
+        return n
+
+    try:
+        parallel_map([1, 2, 3, 4, 5], work, max_workers=2)
+        assert False, "expected boom"
+    except RuntimeError as exc:
+        assert "boom" in str(exc)
+
+    # max_workers=2：先开 1、2；1 失败后不应再开 3/4/5；2 可跑完
+    assert 1 in started and 2 in started
+    assert 3 not in started and 4 not in started and 5 not in started
+
+
 def test_progress_clock_waterfall():
     clock = ProgressClock()
     clock.start("cast")

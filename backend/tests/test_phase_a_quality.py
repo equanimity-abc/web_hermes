@@ -27,6 +27,15 @@ def test_lip_cascade_pixverse_first(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "DASHSCOPE_MAAS_BASE_URL", "https://example.maas")
     monkeypatch.setattr(config, "REPLICATE_API_TOKEN", "r")
     monkeypatch.setattr(config, "LIP_PROVIDER", "pixverse")
+    # 非 studio 草稿档才允许 cascade；studio 默认单供应商
+    monkeypatch.setattr(
+        "tools.drama_profiles.resolve_quality_profile",
+        lambda slug=None, models=None: "draft",
+    )
+    monkeypatch.setattr(
+        "tools.drama_hq_contract.is_hq_no_fallback",
+        lambda slug="", models=None: False,
+    )
     cascade = lip_provider_cascade("pixverse")
     assert cascade[0] in ("pixverse", "pixverse-lipsync")
 

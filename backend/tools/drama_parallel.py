@@ -144,9 +144,9 @@ def parallel_map(
 ) -> list[R]:
     """Run worker over items with a bounded thread pool.
 
-    fail_fast=True (default): raise the first error after cancelling siblings.
-    fail_fast=False: run all items; return only successful results and raise an
-    AggregateError-like RuntimeError at the end if any failed.
+    懒提交：最多同时跑 max_workers 个；空出槽位再开下一个。
+    fail_fast=True（默认）：任一失败后不再开启新任务；已在跑的跑完当前项再停，然后抛出首错。
+    fail_fast=False：全部跑完；经 on_done 回报失败，只返回成功项。
     """
     if not items:
         return []
@@ -170,48 +170,61 @@ def parallel_map(
                 on_done(i, item, result)
             out.append(result)
         if errors:
-            # Caller already saw failures via on_done; return successes only.
             return out
         return out
 
     results: list[R | None] = [None] * len(items)
-    error: list[BaseException] = []
+    first_error: list[BaseException] = []
+    stop_submit = threading.Event()
     futures: dict[Future[R], int] = {}
-    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
-        for i, item in enumerate(items):
-            if cancel_check:
-                cancel_check()
-            futures[pool.submit(worker, item)] = i
-        for fut in as_completed(futures):
-            i = futures[fut]
-            item = items[i]
-            if fail_fast and error:
-                fut.cancel()
-                continue
-            if cancel_check:
+    next_i = 0
+    n = len(items)
+
+    def _submit_one(pool: ThreadPoolExecutor, idx: int) -> None:
+        if cancel_check:
+            cancel_check()
+        futures[pool.submit(worker, items[idx])] = idx
+
+    with ThreadPoolExecutor(max_workers=min(workers, n)) as pool:
+        while True:
+            while (
+                not stop_submit.is_set()
+                and next_i < n
+                and len(futures) < workers
+            ):
                 try:
-                    cancel_check()
-                except BaseException as exc:  # noqa: BLE001
-                    error.append(exc)
-                    if fail_fast:
-                        continue
-                    errors.append((item, exc))
-                    continue
+                    _submit_one(pool, next_i)
+                except BaseException as exc:  # noqa: BLE001 — cancel_check / submit
+                    if not first_error:
+                        first_error.append(exc)
+                    stop_submit.set()
+                    break
+                next_i += 1
+
+            if not futures:
+                break
+
+            done = next(as_completed(list(futures.keys())))
+            idx = futures.pop(done)
+            item = items[idx]
             try:
-                result = fut.result()
+                result = done.result()
             except BaseException as exc:  # noqa: BLE001
-                error.append(exc)
-                errors.append((item, exc))
                 if on_done:
-                    on_done(i, item, exc)
-                continue
-            results[i] = result
-            if on_done:
-                on_done(i, item, result)
-    if error and fail_fast:
-        raise error[0]
+                    on_done(idx, item, exc)
+                errors.append((item, exc))
+                if not first_error:
+                    first_error.append(exc)
+                if fail_fast:
+                    stop_submit.set()
+            else:
+                results[idx] = result
+                if on_done:
+                    on_done(idx, item, result)
+
+    if first_error and fail_fast:
+        raise first_error[0]
     if errors and not fail_fast:
-        # Caller already saw failures via on_done; return successes only.
         return [r for r in results if r is not None]  # type: ignore[return-value]
     return [r for r in results if r is not None]  # type: ignore[return-value]
 

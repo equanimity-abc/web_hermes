@@ -44,8 +44,8 @@ def test_image_provider_chain_studio_no_cascade(monkeypatch):
     assert chain == ["seedream"]
 
 
-def test_image_provider_chain_studio_character_ref_commercial_cascade(monkeypatch):
-    """定妆在 studio 下仍可跨商用后端级联，但不落入 pollinations。"""
+def test_image_provider_chain_studio_character_ref_single(monkeypatch):
+    """定妆在 studio 下也只走单一商用供应商，禁止 cascade。"""
     monkeypatch.setattr(
         "tools.drama_hq_contract.is_hq_no_fallback",
         lambda slug, models=None: True,
@@ -55,20 +55,13 @@ def test_image_provider_chain_studio_character_ref_commercial_cascade(monkeypatc
         lambda cap, pid: cap == "image"
         and pid in ("seedream", "kling-image", "wanx", "pollinations"),
     )
-    monkeypatch.setattr(
-        "tools.drama_styles.default_character_ref_image_route",
-        lambda: {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628"},
-    )
     chain = _image_provider_chain(
         "seedream",
         {"kind": "character_ref"},
         refs=(),
         slug="demo",
     )
-    assert chain[0] == "seedream"
-    assert "kling-image" in chain
-    assert "wanx" in chain
-    assert "pollinations" not in chain
+    assert chain == ["seedream"]
 
 
 def test_seedream_gen_size_clamps_portrait_1980():

@@ -38,6 +38,8 @@ const {
   busyShotNs: dramaBusyShotNs,
   videoGenProgress: dramaVideoGenProgress,
   batchProgress: dramaBatchProgress,
+  activeJobs: dramaActiveJobs,
+  renderJobs: dramaRenderJobs,
   error: dramaError,
   notice: dramaNotice,
   bust: dramaBust,
@@ -215,6 +217,7 @@ const {
 const dramaBatchPct = computed(() => {
   const p = dramaBatchProgress.value
   if (!p) return 0
+  if (p.pct != null && !Number.isNaN(Number(p.pct))) return Math.max(0, Math.min(100, Number(p.pct)))
   if (p.total) {
     return Math.min(100, Math.round(((p.current || 0) / p.total) * 100))
   }
@@ -243,6 +246,64 @@ const dramaBatchStatusMessage = computed(() => {
   }
   if (p.message) parts.push(p.message)
   return parts.filter(Boolean).join(' · ') || '就绪'
+})
+
+const dramaJobBars = computed(() => {
+  const bars = []
+  const seen = new Set()
+  const active = dramaActiveJobs.value || []
+  for (const job of active) {
+    const id = String(job.job_id || '')
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    const p = job.progress || {}
+    const total = Math.max(0, Number(p.total) || 0)
+    const finished = Math.max(0, Number(p.finished) || 0)
+    const failed = Math.max(0, Number(p.failed) || 0)
+    const ok = Math.max(0, Number(p.ok) || Number(p.current) || 0)
+    const doneN = Math.max(finished, ok + failed)
+    const pct = total > 0 ? Math.min(99, Math.round((doneN / total) * 100)) : 35
+    const ep = job.episode != null ? `EP${String(job.episode).padStart(2, '0')}` : ''
+    bars.push({
+      id,
+      pct,
+      status: 'running',
+      title: `${job.action || '后台任务'}${ep ? ` · ${ep}` : ''}`,
+      message: String(p.message || '进行中…'),
+    })
+  }
+  // 有任务在跑时只显示进行中的条，避免「正在执行 + 旧失败」双条叠在底部
+  if (!active.length) {
+    for (const job of dramaRenderJobs.value || []) {
+      const id = String(job.job_id || '')
+      if (!id || seen.has(id)) continue
+      if (job.status !== 'error' && job.status !== 'done') continue
+      const updated = Date.parse(job.updated_at || '') || 0
+      if (job.status === 'done' && Date.now() - updated > 8000) continue
+      if (job.status === 'error' && Date.now() - updated > 5 * 60 * 1000) continue
+      seen.add(id)
+      const ep = job.episode != null ? `EP${String(job.episode).padStart(2, '0')}` : ''
+      bars.push({
+        id,
+        pct: job.status === 'done' ? 100 : 0,
+        status: job.status === 'done' ? 'done' : 'error',
+        title: `${job.action || '后台任务'}${ep ? ` · ${ep}` : ''} · ${job.status === 'done' ? '完成' : '失败'}`,
+        message: job.status === 'done'
+          ? (job.result?.impact?.summary || job.result?.assemble || '已完成')
+          : (job.error || '失败'),
+      })
+    }
+  }
+  if (!bars.length && dramaBatchProgress.value) {
+    bars.push({
+      id: 'batch',
+      pct: dramaBatchPct.value,
+      status: dramaBatchProgress.value.status || 'idle',
+      title: dramaBatchStatusTitle.value,
+      message: dramaBatchStatusMessage.value,
+    })
+  }
+  return bars
 })
 
 function newChat() {
@@ -427,9 +488,9 @@ async function onRefreshDramaJob(index) {
   }
 }
 
-async function onResumeDramaJob(index) {
+async function onResumeDramaJob(payload) {
   try {
-    await resumeDramaJob(index)
+    await resumeDramaJob(payload)
   } catch (e) {
     console.error('继续渲染失败:', e)
     showToast(e?.message || '继续渲染失败')
@@ -620,13 +681,15 @@ async function onResumeDramaJob(index) {
       @clear-bgm="clearBgm"
     />
 
-    <aside v-if="view === 'drama' && dramaBatchProgress" class="drama-job-bar">
+    <aside v-if="view === 'drama' && dramaJobBars.length" class="drama-job-bar drama-job-bars">
       <DramaProgressStatusBar
+        v-for="bar in dramaJobBars"
+        :key="bar.id"
         class="drama-job-bar-progress"
-        :pct="dramaBatchPct"
-        :status="dramaBatchProgress.status || 'idle'"
-        :title="dramaBatchStatusTitle"
-        :message="dramaBatchStatusMessage"
+        :pct="bar.pct"
+        :status="bar.status"
+        :title="bar.title"
+        :message="bar.message"
       />
     </aside>
 

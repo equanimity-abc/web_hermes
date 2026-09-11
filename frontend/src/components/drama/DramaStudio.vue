@@ -416,6 +416,13 @@ function onGenerateAllCastRefs() {
 const currentCandidateIndex = ref(0)
 const sceneCandidatesList = computed(() => props.selected?.candidates || [])
 const currentCandidate = computed(() => sceneCandidatesList.value[currentCandidateIndex.value] || null)
+/** 当前轮播图是否为已锁定的那一张（仅一张可为锁定态） */
+const currentCandidateIsLocked = computed(() => {
+  const cand = currentCandidate.value
+  if (!cand || !props.selected) return false
+  if (String(cand.id || '') !== String(props.selected.chosen || '').trim()) return false
+  return (props.selected.locked || []).includes('scene')
+})
 
 function prevCandidate() {
   const len = sceneCandidatesList.value.length
@@ -429,10 +436,41 @@ function nextCandidate() {
   currentCandidateIndex.value = (currentCandidateIndex.value + 1) % len
 }
 
+function onCandidateLockClick() {
+  if (selectedShotBusy.value || shotFrozen.value) return
+  const cand = currentCandidate.value
+  if (!cand?.id) return
+  const chosen = String(props.selected?.chosen || '').trim()
+  // 正在看已选中那张 → 切换 scene 锁；看其它张 → 选中并锁定为唯一一张
+  if (String(cand.id) === chosen) {
+    emit('toggle-lock', 'scene')
+    return
+  }
+  onChooseCandidate(cand.id)
+}
+
 watch(
   () => props.selectedN,
   () => {
     currentCandidateIndex.value = 0
+  },
+)
+
+watch(
+  () => [props.selected?.chosen, sceneCandidatesList.value.length, props.selectedN],
+  () => {
+    const list = sceneCandidatesList.value
+    if (!list.length) {
+      currentCandidateIndex.value = 0
+      return
+    }
+    if (currentCandidateIndex.value >= list.length) {
+      currentCandidateIndex.value = list.length - 1
+    }
+    const chosen = String(props.selected?.chosen || '').trim()
+    if (!chosen) return
+    const idx = list.findIndex((c) => String(c.id) === chosen)
+    if (idx >= 0) currentCandidateIndex.value = idx
   },
 )
 
@@ -1897,22 +1935,35 @@ const statusBar = computed(() => {
             </div>
             <div class="drama-cast-list">
               <div v-if="castCategory === 'character'" class="drama-cast-rows">
-                <button
+                <div
                   v-for="item in castAssets"
                   :key="item.id"
-                  type="button"
                   class="drama-cast-row"
                   :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked, busy: isCharacterBusy(item.id) }"
-                  @click="emit('select-character', item.id)"
                 >
-                  <div class="drama-cast-avatar">
-                    <img v-if="item.ref_url" :src="castAssetUrl(item.ref_url)" :alt="item.name" />
-                    <span v-else class="drama-cast-avatar-empty">{{ (item.name || item.id || '?').slice(0, 1) }}</span>
-                  </div>
-                  <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
-                  <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
-                  <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
-                </button>
+                  <button
+                    type="button"
+                    class="drama-cast-row-main"
+                    @click="emit('select-character', item.id)"
+                  >
+                    <div class="drama-cast-avatar">
+                      <img v-if="item.ref_url" :src="castAssetUrl(item.ref_url)" :alt="item.name" />
+                      <span v-else class="drama-cast-avatar-empty">{{ (item.name || item.id || '?').slice(0, 1) }}</span>
+                    </div>
+                    <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
+                    <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
+                    <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-tiny drama-cast-row-gen"
+                    :disabled="isCharacterBusy(item.id) || item.ref_locked"
+                    :title="item.ref_locked ? '已锁定' : (isCharacterBusy(item.id) ? '生成中' : '生成定妆图')"
+                    @click.stop="emit('generate-character-ref', item.id)"
+                  >
+                    {{ isCharacterBusy(item.id) ? '…' : '生成' }}
+                  </button>
+                </div>
               </div>
               <div v-else class="drama-cast-folder-grid">
                 <button
@@ -2215,8 +2266,13 @@ const statusBar = computed(() => {
                     <h4>候选图</h4>
                     <div class="drama-candidates-actions">
                       <span class="drama-candidate-count">{{ sceneCandidatesList.length ? currentCandidateIndex + 1 : 0 }}/{{ sceneCandidatesList.length }}</span>
-                      <button type="button" class="btn-tiny" :disabled="selectedShotBusy || shotFrozen" @click="emit('toggle-lock', 'scene')">
-                        {{ isLocked('scene') ? '解锁' : '锁定' }}
+                      <button
+                        type="button"
+                        class="btn-tiny"
+                        :disabled="selectedShotBusy || shotFrozen || !currentCandidate"
+                        @click="onCandidateLockClick"
+                      >
+                        {{ currentCandidateIsLocked ? '解锁' : '锁定' }}
                       </button>
                       <button type="button" class="btn-tiny" :disabled="selectedShotBusy || !currentCandidate" @click="emit('delete-candidate', currentCandidate && currentCandidate.id)">删除</button>
                     </div>
@@ -2224,7 +2280,17 @@ const statusBar = computed(() => {
                   <div class="drama-scene-carousel">
                     <button type="button" class="drama-candidate-nav drama-candidate-prev" :disabled="sceneCandidatesList.length <= 1" @click="prevCandidate">‹</button>
                     <div class="drama-candidate-frame">
-                      <DramaThumbImg v-if="currentCandidate && candUrl(currentCandidate)" :key="currentCandidate.id" :src="candUrl(currentCandidate)" :alt="currentCandidate.id" loading="eager" fetchpriority="high" />
+                      <DramaThumbImg
+                        v-if="currentCandidate && candUrl(currentCandidate)"
+                        :key="`${currentCandidate.id}-${currentCandidate.bytes || 0}-${props.bust || 0}`"
+                        :src="candUrl(currentCandidate)"
+                        :alt="currentCandidate.id"
+                        loading="eager"
+                        fetchpriority="high"
+                      />
+                      <span v-else-if="currentCandidate && currentCandidate.exists === false" class="drama-candidate-empty">
+                        {{ currentCandidate.id }} 文件缺失
+                      </span>
                       <span v-else class="drama-candidate-empty">无候选图，点击「生成候选图」</span>
                     </div>
                     <button type="button" class="drama-candidate-nav drama-candidate-next" :disabled="sceneCandidatesList.length <= 1" @click="nextCandidate">›</button>

@@ -93,8 +93,9 @@ def test_build_asset_ref_prompt_includes_three_view_look():
     from tools.drama_characters import build_asset_ref_prompt
 
     prompt = build_asset_ref_prompt({"category": "character", "look": "正面黑长发，侧面高马尾，背面白披风"})
-    assert "三视图：正面黑长发" in prompt
+    assert "外形：正面黑长发" in prompt
     assert "只有一个" in prompt
+    assert "禁止手持" in prompt
 
 
 def test_character_ref_prompt_single_pose():
@@ -103,9 +104,30 @@ def test_character_ref_prompt_single_pose():
     prompt = build_asset_ref_prompt({"category": "character", "look": "测试角色", "ref_size": 1024})
     assert "只有一个" in prompt
     assert "禁止多个视角" in prompt
+    assert "禁止手持" in prompt
     neg = character_ref_negative_prompt()
     assert "多视角" in neg
+    assert "锄头" in neg
 
+
+def test_sanitize_character_look_strips_props():
+    from tools.drama_characters import sanitize_character_look_for_portrait
+
+    look = sanitize_character_look_for_portrait("青年男子，短发，手持锄头开山，粗布短打")
+    assert "锄头" not in look
+    assert "青年男子" in look
+
+
+def test_face_ref_prompt_from_body_locks_identity():
+    from tools.drama_characters import build_face_ref_prompt
+
+    prompt = build_face_ref_prompt(
+        {"name": "愚公长子", "look": "青年男子，短发，粗布短打", "gender": "male"},
+        from_body_ref=True,
+    )
+    assert "同一人" in prompt
+    assert "男性" in prompt
+    assert "禁止换成" in prompt
 
 def test_normalize_ref_image_route():
     from tools.drama_characters import REF_IMAGE_OPTIONS, character_ref_shot, normalize_ref_image_route

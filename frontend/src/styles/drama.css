@@ -400,12 +400,16 @@
   background: #fff;
   border-bottom: 1px solid var(--color-border);
   box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
-  max-height: 200px;
+  max-height: 280px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
 }
 
 .drama-job-bar-progress {
-  margin: 8px 12px;
+  margin: 4px 12px;
 }
 
 .drama-board-tabs button {
@@ -2224,16 +2228,29 @@
 .drama-cast-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   width: 100%;
   border: 1px solid transparent;
   border-radius: 10px;
-  padding: 6px 8px;
+  padding: 4px 6px 4px 4px;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.drama-cast-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 6px;
   cursor: pointer;
   background: transparent;
   text-align: left;
   font: inherit;
-  color: var(--color-text);
+  color: inherit;
 }
 
 .drama-cast-row:hover {
@@ -2243,6 +2260,17 @@
 .drama-cast-row.active {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
+}
+
+.drama-cast-row.busy {
+  opacity: 0.92;
+}
+
+.drama-cast-row-gen {
+  flex-shrink: 0;
+  min-width: 2.5rem;
+  padding: 2px 6px;
+  font-size: 11px;
 }
 
 .drama-cast-row.locked .drama-cast-avatar {

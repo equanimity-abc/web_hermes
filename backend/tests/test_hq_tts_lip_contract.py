@@ -58,6 +58,24 @@ def test_lip_cascade_studio_no_mock(monkeypatch):
     assert lip_provider_cascade("mock", slug="demo") == []
 
 
+def test_lip_cascade_studio_single_provider(monkeypatch):
+    monkeypatch.setattr(
+        "tools.drama_lip._provider_ready",
+        lambda pid: pid in ("pixverse", "latentsync"),
+    )
+    monkeypatch.setattr(
+        "tools.drama_hq_contract.is_hq_no_fallback",
+        lambda slug, models=None: True,
+    )
+    monkeypatch.setattr(
+        "tools.drama_profiles.resolve_quality_profile",
+        lambda slug=None, models=None: "studio",
+    )
+    assert lip_provider_cascade("pixverse", slug="demo") == ["pixverse"]
+    assert lip_provider_cascade("latentsync", slug="demo") == ["latentsync"]
+    assert lip_provider_cascade("missing", slug="demo") == []
+
+
 def test_assert_hq_lip_requires_motion(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         "tools.drama_models.models_with_overrides",

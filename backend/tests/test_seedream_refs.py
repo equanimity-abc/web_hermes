@@ -24,6 +24,11 @@ def test_prompt_with_identity_refs():
     assert "拼贴" in two or "叠印" in two
     none = ark_providers._prompt_with_identity_refs("空镜", ref_count=0)
     assert none == "空镜"
+    face = ark_providers._prompt_with_identity_refs(
+        "正脸特写", ref_count=1, lock_mode="face_from_body"
+    )
+    assert "正脸特写" in face and "同一性别" in face
+    assert "全新构图" not in face
 
 
 def test_seedream_image_payload_single_and_multi(tmp_path, monkeypatch):

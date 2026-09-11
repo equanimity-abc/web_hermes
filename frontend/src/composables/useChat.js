@@ -60,6 +60,8 @@ export function useChat(deps) {
       last.status = last.dramaJob?.line || last.status || ''
     } else if (dramaState === 'done') {
       last.status = ''
+    } else if (opts.cancelled && dramaState === 'idle') {
+      last.status = last.dramaJob?.line || '已停止'
     } else if (!opts.keepStatus) {
       last.status = ''
     }
@@ -92,22 +94,75 @@ export function useChat(deps) {
     messages.value = list
   }
 
-  async function stopGeneration() {
+  function collectActiveDramaJobIds(msg) {
+    const ids = new Set()
+    const push = (id) => {
+      const s = String(id || '').trim()
+      if (s) ids.add(s)
+    }
+    push(msg?.dramaJob?.jobId)
+    for (const j of msg?.dramaJobs || []) push(j?.jobId)
+    for (const tool of msg?.toolCalls || []) {
+      if (String(tool?.name || '') !== 'tiktok_drama') continue
+      try {
+        const data = JSON.parse(tool.result || '')
+        if (!data?.job_id) continue
+        // 成片轮询阶段 tool 可能已是 done，但 job 仍在跑
+        if (data.play_url || data.status === 'done') continue
+        push(data.job_id)
+      } catch {
+        /* ignore */
+      }
+    }
+    return [...ids]
+  }
+
+  function stopGeneration() {
     const sid = activeStreamId.value
+    const last = lastAssistant()
+    const dramaJobIds = collectActiveDramaJobIds(last)
     pendingApproval.value = null
-    // 1) 立即中断本地 SSE 读取，让界面先「停」下来，不等后端。
-    abortController?.abort()
-    // 2) 尽力通知后端停止；加超时保护，避免因后端忙而再次卡住。
+
+    // 1) 立刻打断本地等待（SSE / 成片轮询 / 续跑）
+    try {
+      abortController?.abort()
+    } catch {
+      /* ignore */
+    }
+
+    // 2) 立刻解锁输入框与停止按钮，不等后端
+    isLoading.value = false
+    statusText.value = ''
+    if (last) {
+      last.isStreaming = false
+      if (last.dramaJob && ['running', 'pending', 'error'].includes(String(last.dramaJob.state || ''))) {
+        last.dramaJob = {
+          ...last.dramaJob,
+          state: 'idle',
+          line: '已停止',
+          resuming: false,
+          refreshing: false,
+          canResume: true,
+          canRefresh: Boolean(last.dramaJob.jobId),
+        }
+        last.dramaJobs = [last.dramaJob]
+        last.status = '已停止'
+      } else if (!last.content) {
+        last.status = ''
+      }
+    }
+    activeStreamId.value = null
+
+    // 3) 后台取消：聊天流 + 漫剧任务（不 await，避免按钮像卡住）
     if (sid) {
       const cancelAbort = new AbortController()
-      const timer = setTimeout(() => cancelAbort.abort(), 3000)
-      try {
-        await cancelChat(sid, cancelAbort.signal)
-      } catch (e) {
-        console.error('cancel failed:', e)
-      } finally {
-        clearTimeout(timer)
-      }
+      const timer = setTimeout(() => cancelAbort.abort(), 2500)
+      cancelChat(sid, cancelAbort.signal)
+        .catch((e) => console.error('cancel chat failed:', e))
+        .finally(() => clearTimeout(timer))
+    }
+    for (const jobId of dramaJobIds) {
+      dramaApi.cancelJob(jobId).catch((e) => console.error('cancel drama job failed:', e))
     }
   }
 
@@ -299,8 +354,9 @@ export function useChat(deps) {
         terminal = 'error'
       }
     } finally {
-      // 成片未就绪时继续等待后台 job，对话框保持 loading + 进度；失败写进气泡正文
-      if (terminal !== 'cancelled') {
+      // 成片未就绪时继续等待后台 job；用户已点停止则不再等待
+      const stopped = Boolean(abortController?.signal?.aborted) || terminal === 'cancelled'
+      if (!stopped) {
         const last = lastAssistant()
         if (last) {
           try {
@@ -322,6 +378,7 @@ export function useChat(deps) {
               last.isStreaming = true
               last.status = '成片生成中，请稍候…进度会实时更新，失败也会直接显示原因'
               statusText.value = last.status
+              isLoading.value = true
               const waitResult = await awaitPendingDramaVideos(last, {
                 signal: abortController?.signal,
                 sessionId: deps.getSessionId?.() || '',
@@ -357,11 +414,13 @@ export function useChat(deps) {
                   error: String(e.message || e),
                 }
               }
+            } else {
+              terminal = 'cancelled'
             }
           }
         }
       }
-      finishAssistant({ cancelled: terminal === 'cancelled' })
+      finishAssistant({ cancelled: terminal === 'cancelled' || Boolean(abortController?.signal?.aborted) })
       isLoading.value = false
       // Keep error statusText briefly visible via message.status / dramaJob panel
       if (lastAssistant()?.dramaJob?.state !== 'error') {
@@ -435,6 +494,8 @@ export function useChat(deps) {
     const job = msg.dramaJob
     if (!job?.jobId || job.refreshing || job.resuming) return false
 
+    abortController = new AbortController()
+    isLoading.value = true
     msg.dramaJob = {
       ...job,
       refreshing: true,
@@ -456,6 +517,7 @@ export function useChat(deps) {
 
     try {
       const had = await awaitPendingDramaVideos(msg, {
+        signal: abortController.signal,
         sessionId: deps.getSessionId?.() || '',
         forcePoll: true,
         onStatus: (text) => {
@@ -481,6 +543,18 @@ export function useChat(deps) {
       scrollToBottom()
       return had
     } catch (e) {
+      if (e?.name === 'AbortError') {
+        if (msg.dramaJob) {
+          msg.dramaJob.refreshing = false
+          msg.dramaJob.state = 'idle'
+          msg.dramaJob.line = '已停止'
+          msg.dramaJob.canRefresh = true
+          msg.dramaJob.canResume = true
+        }
+        msg.isStreaming = false
+        msg.status = '已停止'
+        return false
+      }
       if (msg.dramaJob) {
         msg.dramaJob.refreshing = false
         msg.dramaJob.state = 'error'
@@ -490,56 +564,122 @@ export function useChat(deps) {
       }
       msg.isStreaming = false
       throw e
+    } finally {
+      abortController = null
+      isLoading.value = false
     }
   }
 
-  async function resumeDramaJob(index) {
+  async function resumeDramaJob(payload) {
+    const index = typeof payload === 'number' ? payload : Number(payload?.index)
+    const preferJobId = typeof payload === 'object' && payload ? String(payload.jobId || '') : ''
+    const preferSlug = typeof payload === 'object' && payload ? String(payload.slug || '') : ''
+    const preferEpisode =
+      typeof payload === 'object' && payload ? Number(payload.episode || 0) || 0 : 0
+    const preferKind = typeof payload === 'object' && payload ? String(payload.kind || '') : ''
+
     const list = messages.value || []
     const msg = list[index]
     if (!msg || msg.role !== 'assistant') return false
     const job = msg.dramaJob || {}
-    if (job.resuming || job.refreshing) return false
+    const jobFromList = (msg.dramaJobs || []).find(
+      (j) => preferJobId && String(j.jobId || '') === preferJobId,
+    )
+    const anchor = jobFromList || job
+    if (anchor.resuming || job.resuming || anchor.refreshing || job.refreshing) return false
 
-    let kind = job.kind || ''
-    let slug = job.slug || ''
-    let episode = Number(job.episode || 0) || 0
-    let oldJobId = job.jobId || ''
+    let kind = preferKind || anchor.kind || job.kind || ''
+    let slug = preferSlug || anchor.slug || job.slug || ''
+    let episode = preferEpisode || Number(anchor.episode || job.episode || 0) || 0
+    let oldJobId = preferJobId || anchor.jobId || job.jobId || ''
     let toolHit = null
-    for (const tool of msg.toolCalls || []) {
-      if (String(tool.name || '') !== 'tiktok_drama') continue
+
+    // Prefer the tool that matches the failed/selected job_id; never blindly take the first slug tool
+    // (that may be an old done produce with play_url and causes「秒结束」).
+    const tools = msg.toolCalls || []
+    const pickFromTool = (tool) => {
       try {
         const data = JSON.parse(tool.result || '')
-        if (!data?.job_id && !data?.slug) continue
-        toolHit = tool
+        if (!data?.job_id && !data?.slug) return false
         oldJobId = String(data.job_id || oldJobId || '')
         slug = String(data.slug || slug || '')
         episode = Number(data.episode || episode || 0) || episode
         kind = String(data.kind || data.action || kind || 'produce_episode')
         if (kind === 'create_from_premise') kind = 'produce_episode'
-        break
+        if (kind === 'resume_produce') kind = 'produce_episode'
+        toolHit = tool
+        return true
       } catch {
-        /* */
+        return false
+      }
+    }
+    if (oldJobId) {
+      for (const tool of tools) {
+        if (String(tool.name || '') !== 'tiktok_drama') continue
+        try {
+          const data = JSON.parse(tool.result || '')
+          if (String(data?.job_id || '') === oldJobId && pickFromTool(tool)) break
+        } catch {
+          /* */
+        }
+      }
+    }
+    if (!toolHit) {
+      // Fall back: last failed / unfinished produce-like tool
+      for (let i = tools.length - 1; i >= 0; i -= 1) {
+        const tool = tools[i]
+        if (String(tool.name || '') !== 'tiktok_drama') continue
+        try {
+          const data = JSON.parse(tool.result || '')
+          const action = String(data?.action || data?.kind || '')
+          const isProduceLike = [
+            'produce_episode',
+            'create_from_premise',
+            'resume_produce',
+            'render_episode',
+            'export',
+          ].includes(action)
+          if (!isProduceLike && !data?.job_id) continue
+          if (data?.ok === false || data?.error || data?.status === 'error' || !data?.play_url) {
+            if (pickFromTool(tool)) break
+          }
+        } catch {
+          /* */
+        }
+      }
+    }
+    if (!toolHit) {
+      for (let i = tools.length - 1; i >= 0; i -= 1) {
+        const tool = tools[i]
+        if (String(tool.name || '') !== 'tiktok_drama') continue
+        if (pickFromTool(tool)) break
       }
     }
     if (!slug && !oldJobId) return false
 
+    abortController = new AbortController()
+    const signal = abortController.signal
+    isLoading.value = true
     msg.dramaJob = {
+      ...anchor,
       ...job,
       resuming: true,
       refreshing: false,
       state: 'running',
-      line: '正在继续渲染…',
+      line: '正在提交续跑任务…',
       canRefresh: false,
       canResume: false,
       slug,
       episode: episode || 1,
       kind: kind || 'produce_episode',
+      jobId: oldJobId || anchor.jobId || job.jobId,
     }
     msg.isStreaming = true
     msg.status = '正在继续渲染…'
     statusText.value = '正在继续渲染…'
 
     try {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       let next
       try {
         next = await dramaApi.resumeJob({
@@ -549,18 +689,20 @@ export function useChat(deps) {
           episode: episode || 1,
         })
       } catch (e) {
+        if (e?.name === 'AbortError' || signal.aborted) throw e
         // 旧 job 丢失时直接按项目集新建 produce
         if (!slug) throw e
         next = await dramaApi.createJob(slug, episode || 1, {
           kind: kind || 'produce_episode',
         })
       }
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       const newId = String(next?.job_id || '')
       if (!newId) throw new Error('续跑未返回 job_id')
 
       const payload = {
         ok: true,
-        action: kind || 'produce_episode',
+        action: 'produce_episode',
         kind: next?.kind || kind || 'produce_episode',
         job_id: newId,
         slug: next?.slug || slug,
@@ -588,16 +730,22 @@ export function useChat(deps) {
         slug: payload.slug,
         episode: payload.episode,
         kind: payload.kind,
-        line: '成片生成中，续跑已启动…',
+        line: `续跑已启动（${newId.slice(0, 8)}…），等待后台完成…`,
         resuming: false,
         canRefresh: false,
         canResume: false,
       }
+      // 只保留当前续跑任务条，去掉同气泡里的旧失败条
+      msg.dramaJobs = [msg.dramaJob]
       msg.content = ''
+      msg.status = msg.dramaJob.line
+      statusText.value = msg.dramaJob.line
 
       await awaitPendingDramaVideos(msg, {
+        signal,
         sessionId: deps.getSessionId?.() || '',
         forcePoll: true,
+        onlyJobId: newId,
         onStatus: (text) => {
           msg.status = text || msg.status || ''
           statusText.value = text || ''
@@ -618,6 +766,19 @@ export function useChat(deps) {
       scrollToBottom()
       return true
     } catch (e) {
+      if (e?.name === 'AbortError' || signal.aborted) {
+        if (msg.dramaJob) {
+          msg.dramaJob.resuming = false
+          msg.dramaJob.state = 'idle'
+          msg.dramaJob.line = '已停止'
+          msg.dramaJob.canRefresh = true
+          msg.dramaJob.canResume = true
+        }
+        msg.isStreaming = false
+        msg.status = '已停止'
+        statusText.value = ''
+        return false
+      }
       if (msg.dramaJob) {
         msg.dramaJob.resuming = false
         msg.dramaJob.state = 'error'
@@ -627,6 +788,13 @@ export function useChat(deps) {
       }
       msg.isStreaming = false
       throw e
+    } finally {
+      abortController = null
+      isLoading.value = false
+      if (msg.dramaJob?.state === 'running' || msg.dramaJob?.state === 'pending') {
+        // 仍在跑：保持气泡 streaming，由进度条展示；全局 loading 可放下
+        msg.isStreaming = true
+      }
     }
   }
 

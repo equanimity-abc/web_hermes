@@ -193,9 +193,18 @@ def _provider_ready(pid: str) -> bool:
 def lip_provider_cascade(wanted: str | None = None, *, slug: str = "") -> list[str]:
     """Ordered list of runnable lip providers (best first).
 
-    Studio / HQ: never append mock; empty list means Fail Loud upstream.
+    Studio / HQ: 只跑配置的单一商用供应商；未就绪则空列表 → 上游 Fail Loud。
     """
     wanted = str(wanted or _provider() or "").strip().lower()
+    from tools.drama_hq_contract import is_hq_no_fallback
+    from tools.drama_profiles import resolve_quality_profile
+
+    profile = resolve_quality_profile(slug) if slug else resolve_quality_profile()
+    if profile == "studio" or (slug and is_hq_no_fallback(slug)):
+        if wanted and wanted not in ("none", "off", "fail", "l0", "mock") and _provider_ready(wanted):
+            return [wanted]
+        return []
+
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -218,12 +227,6 @@ def lip_provider_cascade(wanted: str | None = None, *, slug: str = "") -> list[s
             push(pid)
 
     ready = [p for p in ordered if _provider_ready(p)]
-    from tools.drama_hq_contract import is_hq_no_fallback
-    from tools.drama_profiles import resolve_quality_profile
-
-    profile = resolve_quality_profile(slug) if slug else resolve_quality_profile()
-    if profile == "studio" or (slug and is_hq_no_fallback(slug)):
-        return ready
     if not ready and _allow_mock():
         ready = ["mock"]
     elif not ready and not _quality_max():

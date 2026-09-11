@@ -36,7 +36,7 @@ def test_build_episode_status_dirty_and_failed():
     text = build_episode_status("demo", 1, doc)
     assert "脏镜: 1" in text
     assert "产线失败镜: 2" in text
-    assert "rerender_dirty" in text
+    assert "继续渲染" in text or "resume_produce" in text or "produce_episode" in text
 
 
 def test_write_episode_status_file(monkeypatch, tmp_path):

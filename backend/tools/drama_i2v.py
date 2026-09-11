@@ -520,43 +520,38 @@ _UNKNOWN_I2V_PROVIDERS = (
 
 
 def _run_i2v_provider(provider: str, scene: Path, dest: Path, shot: dict[str, Any], sec: float) -> bool:
-    """Dispatch one I2V adapter with retry; returns True only on real 'ai' output.
+    """Dispatch one I2V adapter once; returns True only on real 'ai' output.
 
-    失败时不再偷偷用 mock 冒充 ai；由上层决定是否写 Ken Burns fallback。
+    专业档 / 自动化：禁止同供应商重试、禁止 mock 冒充 ai。
     """
-    from tools.drama_retry import retry_call
     from tools.providers import registry
 
-    result = retry_call(
-        registry.dispatch,
-        "i2v",
-        provider,
-        scene,
-        dest,
-        shot,
-        sec,
-        ok=lambda r: r == "ai",
-    )
+    result = registry.dispatch("i2v", provider, scene, dest, shot, sec)
     return result == "ai"
 
 
-def _same_tier_alt_provider(provider: str, models: dict[str, Any] | None) -> str | None:
-    """One alternate same-tier I2V vendor (Seedance ↔ Kling/Hailuo)."""
-    if not models:
-        return None
-    from tools.drama_models import provider_usable
+def _same_tier_alt_providers(provider: str, models: dict[str, Any] | None) -> list[str]:
+    """Deprecated: automation no longer hops providers. Kept for unit tests only."""
+    return []
 
-    p = str(provider or "").strip().lower()
-    if p in ("seedance", "ark", "doubao-video"):
-        for cand in ("kling", "kling-video", "kling-maas"):
-            if provider_usable(models, cand):
-                return cand
-        return None
-    if p in ("kling", "kling-video", "kling-maas", "hailuo"):
-        if provider_usable(models, "seedance"):
-            return "seedance"
-        return None
+
+def _same_tier_alt_provider(provider: str, models: dict[str, Any] | None) -> str | None:
     return None
+
+
+def _is_privacy_i2v_error(err: str) -> bool:
+    s = str(err or "").lower()
+    return any(
+        token in s
+        for token in (
+            "privacyinformation",
+            "sensitivecontent",
+            "real person",
+            "inputimagesensitive",
+            "疑似真人",
+            "真人",
+        )
+    )
 
 
 def _run_i2v_with_same_tier_alt(
@@ -569,19 +564,10 @@ def _run_i2v_with_same_tier_alt(
     models: dict[str, Any] | None,
     planned: str,
 ) -> bool:
-    """Primary provider, then one same-tier alternate for L1/L2/L3."""
-    if _run_i2v_provider(provider, scene, dest, shot, sec):
-        return True
-    if planned not in ("L1", "L2", "L3"):
-        return False
-    alt = _same_tier_alt_provider(provider, models)
-    if not alt or alt == provider:
-        return False
-    if _run_i2v_provider(alt, scene, dest, shot, sec):
-        shot["i2v_provider"] = alt
-        return True
-    return False
-
+    """Primary provider only — no same-tier alternate hop."""
+    del models, planned  # reserved for call-site compatibility
+    shot["i2v_provider"] = provider
+    return _run_i2v_provider(provider, scene, dest, shot, sec)
 
 def try_generate_i2v(
     scene: Path,
@@ -759,6 +745,12 @@ def generate_shot_i2v(
         if kind not in HQ_I2V_OPTIONAL_KINDS:
             detail = str(shot.get("i2v_error") or "").strip()
             provider = str(shot.get("i2v_provider") or "").strip()
+            if _is_privacy_i2v_error(detail):
+                detail = (
+                    "供应商判定画面疑似真人肖像（隐私拦截）；"
+                    "请换更明显的二次元/插画风画面后由人重抽（禁止自动换供应商/重试）。"
+                    f" 原始：{detail}"
+                )[:280]
             shot.pop("_slug", None)
             shot.pop("_episode", None)
             raise RuntimeError(

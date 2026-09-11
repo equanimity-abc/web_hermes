@@ -44,21 +44,22 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 9. lock_shot 锁住 scene 后，改台词只换声和字幕，不会覆盖画面
 10. lock_shot 锁住 shot（整镜）后，save_episode 改剧本不会覆盖该镜
 11. get / list 回看进度；成片 videos/epNN.mp4
-12. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）
+12. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）；**失败后续跑优先 resume_produce**（分析失败点，从失败步骤继续到导出）
 13. save_character 写角色卡（外形 look + 音色 voice）；produce_episode 会按分镜 `- 角色:` 自动补卡
 14. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 15. 锁参考图后无法覆盖已锁定的定妆 png
 16. **禁止** generate_candidates / choose_candidate；所有步骤禁止使用候选项结果与重抽步骤（单次出图，失败 Fail Loud）
 17. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
-18. poll_job 查询后台任务（produce_episode / render_episode / rerender_dirty）
-19. generate_i2v 对已锁关键帧试 2–3s I2V 运动（失败回退静图运镜）
+18. poll_job 查询后台任务（produce_episode / render_episode / rerender_dirty / resume_produce）
+19. generate_i2v 对已锁关键帧做真 I2V 运动（专业档失败 Fail Loud，禁止静图运镜顶替）
 20. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
-21. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；失败回退闭口静图）
+21. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；专业档失败 Fail Loud，禁止闭口静图顶替）
 22. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
 23. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
 24. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
 25. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过；响度不达标只重 mix；人在工作台点通过或退回单镜
 26. apply_style 为本集切换风格包（一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）
+27. **resume_produce** 分析上次失败点（身份/I2V/口型/导出），收窄脏层，跳过已通过镜，从失败步骤续跑直至导出
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -767,6 +768,64 @@ def _action_rerender_dirty(args: dict) -> str:
     )
 
 
+def _action_resume_produce(args: dict) -> str:
+    """Diagnose prior failures and continue produce from the failed step through export."""
+    from tools.drama_resume import diagnose_episode, prepare_episode_resume
+    from tools.drama_studio import DramaBadRequest, DramaNotFound, resume_render_job
+
+    slug, n, err = _episode_number(args)
+    if err:
+        return _err(err, slug=slug)
+    if not _load_project(slug):
+        return _err("项目不存在，请先 init", slug=slug)
+
+    job_id = str(args.get("job_id") or "").strip()
+    try:
+        report = prepare_episode_resume(slug, n)
+    except Exception:
+        report = diagnose_episode(slug, n)
+
+    if report.get("next_action") == "done":
+        return _ok(
+            action="resume_produce",
+            slug=slug,
+            episode=n,
+            diagnosis=report,
+            hint="已无失败点且成片存在，无需续跑。",
+        )
+
+    try:
+        job = resume_render_job(
+            job_id=job_id,
+            kind="produce_episode",
+            slug=slug,
+            episode=n,
+            params={"smart_resume": True, "force": False},
+        )
+    except (DramaNotFound, DramaBadRequest, ValueError, RuntimeError) as e:
+        return _err(str(e), slug=slug, episode=n, diagnosis=report)
+
+    return _ok(
+        action="resume_produce",
+        slug=slug,
+        episode=n,
+        job_id=job.get("job_id"),
+        status=job.get("status"),
+        diagnosis={
+            "failed_count": report.get("failed_count"),
+            "next_action": report.get("next_action"),
+            "summary": report.get("summary"),
+            "hints": report.get("hints") or [],
+            "prepared": report.get("prepared") or [],
+        },
+        hint=(
+            f"智能续跑已提交：{report.get('summary') or ''}。"
+            "已先复检失败点是否人工修好；已解决则向后推进，否则按当前状态继续直至导出。"
+            "不要循环狂刷 poll_job。"
+        ),
+    )
+
+
 def _action_poll_job(args: dict) -> str:
     from tools.drama_studio import DramaNotFound, get_render_job
 
@@ -1288,6 +1347,7 @@ def _tiktok_drama(args: dict) -> str:
         "rerender_shot": _action_rerender_shot,
         "lock_shot": _action_lock_shot,
         "rerender_dirty": _action_rerender_dirty,
+        "resume_produce": _action_resume_produce,
         "save_character": _action_save_character,
         "generate_character_ref": _action_generate_character_ref,
         "generate_candidates": _action_generate_candidates,
@@ -1332,7 +1392,7 @@ def register_tiktok_drama() -> None:
             "produce_episode（已有剧本时 HQ 全自动：角色/定妆/逐镜 scene+配音+口型+I2V+BGM+导出 mp4）、"
             "render_episode（按镜出 clip，不含 I2V/口型/导出）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
-"rerender_dirty（只重渲脏镜）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
+"rerender_dirty（只重渲脏镜）、resume_produce（分析失败点并从失败步骤续跑到导出）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
             "generate_candidates/choose_candidate（已禁用：禁止候选项与重抽）、"
             "export_timeline（导出整集：脏镜先重渲再拼接混音）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
@@ -1342,7 +1402,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | resume_produce | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -1359,6 +1419,7 @@ def register_tiktok_drama() -> None:
                         "rerender_shot",
                         "lock_shot",
                         "rerender_dirty",
+                        "resume_produce",
                         "save_character",
                         "generate_character_ref",
                         "generate_candidates",
@@ -1555,6 +1616,7 @@ def register_tiktok_drama() -> None:
         "禁止拆成 init/save_bible/save_episode/parse_shots/produce_episode 多步让用户确认，"
         "除非用户明确只要剧本不要成片，或已有项目只要重渲。"
         "已有剧本项目要出片用 produce_episode（同样单图+锁定妆+自动导出）。"
+        "成片失败或中断时：用 resume_produce（或工作台「继续渲染」）智能分析失败点，跳过已通过镜，从失败步骤续跑直至导出；不要整集盲重开。"
         "小改单镜后用 export_timeline。"
         "create_from_premise / produce_episode 默认异步（返回 job_id），"
         "前端对话框会继续等待进度与结果（失败也会显示第几镜/原因）；"

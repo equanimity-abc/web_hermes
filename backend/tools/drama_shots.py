@@ -474,11 +474,21 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
             if not _asset_exists(assets.get(layer) or ""):
                 dirty.append(layer)
     locked = _as_str_list(raw.get("locked"))
+    # 手动锁优先：dirty ∩ locked 一律清掉，避免锁态与脏态并存后被再渲染
+    locked_set = set(locked)
+    if "shot" in locked_set:
+        dirty = []
+    elif locked_set and dirty:
+        dirty = [layer for layer in dirty if layer not in locked_set]
     status = str(raw.get("status") or "")
     if not status:
         status = "rendered" if _asset_exists(assets.get("clip") or "") and not dirty else (
             "dirty" if dirty else "pending"
         )
+    elif dirty and status == "rendered":
+        status = "dirty"
+    elif not dirty and status == "dirty" and _asset_exists(assets.get("clip") or ""):
+        status = "rendered"
 
     duration = round_timing(raw.get("duration") or 5, minimum=MIN_PLAY_SEC)
     tl = normalize_shot_timeline(raw)
@@ -1133,11 +1143,19 @@ def merge_from_parsed(
                 or str(rec.get("地点") or "") != str(old.get("地点") or "")
                 or roles_key(rec.get("道具")) != roles_key(old.get("道具"))
             )
-            if scene_changed:
+            if scene_changed and ("scene" in locked or "shot" in locked):
+                # 手动锁定画面 = 最高优先级：保留板面与文案，禁止自动解锁/标脏/重绘
+                rec["画面"] = str(old.get("画面") or "")
+                rec["地点"] = str(old.get("地点") or "")
+                rec["道具"] = normalize_roles(old.get("道具"))
+                rec["location_id"] = str(old.get("location_id") or "")
+                if isinstance(old.get("prop_ids"), list):
+                    rec["prop_ids"] = [str(x).strip() for x in old.get("prop_ids") if str(x).strip()]
+                else:
+                    rec["prop_ids"] = normalize_roles(old.get("prop_ids"))
+                rec["prompt"] = str(old.get("prompt") or "")
+            elif scene_changed:
                 rec["prompt"] = ""
-                if "scene" in locked:
-                    locked.discard("scene")
-                    rec["locked"] = [layer for layer in rec["locked"] if layer != "scene"]
             else:
                 rec["prompt"] = str(old.get("prompt") or "")
             rec["camera"] = str(old.get("camera") or rec["camera"])

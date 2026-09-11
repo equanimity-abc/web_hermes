@@ -17,11 +17,12 @@ export class SessionBusyError extends Error {
   }
 }
 
-export async function startChat({ sessionId, message }) {
+export async function startChat({ sessionId, message }, { signal } = {}) {
   const response = await fetch('/api/chat/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, message }),
+    signal,
   })
 
   if (response.status === 409) {
@@ -241,7 +242,7 @@ export async function streamChat(
   handlers = {},
   { signal } = {},
 ) {
-  const started = await startChat({ sessionId, message })
+  const started = await startChat({ sessionId, message }, { signal })
   handlers.onMeta?.({
     type: 'meta',
     session_id: started.session_id,

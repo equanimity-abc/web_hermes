@@ -94,10 +94,12 @@ def build_episode_script_system(
         "- 配乐: 情绪/风格/乐器/节奏起伏（成片 BGM 依据，勿写具体版权曲名）\n\n"
         "## 角色设定\n"
         "### 角色名\n"
-        "- 外形: 年龄感、五官、发型发色、服饰、配色、标志性细节（可画定妆）\n"
+        "- 外形: 年龄感、五官、发型发色、服饰、配色、标志性细节（可画定妆；只写人物本体，禁止手持道具）\n"
         "- 性格: 2–4 词或短句\n"
         "- 音色倾向: 如女声温柔 / 男声低沉（供配音选型）\n"
-        "- 口头禅: 可选\n\n"
+        "- 口头禅: 可选\n"
+        "硬性：每位具名角色外形须在年龄段/性别/发型发色/服装配色中至少 3 项与其他角色明显不同；"
+        "村民/路人等群演不得与主角或具名配角撞脸。\n\n"
         "## 场景设定\n"
         "单集只用 1–3 个主场景；名称短而稳定（如「广寒宫前殿」），跨镜必须同一写法。\n"
         "每条场景必须写到「能生成无人物竖屏主底板」的粒度，禁止「气氛压抑」「华美宫殿」这类空话。\n"
@@ -150,6 +152,8 @@ def build_episode_user_prompt(
         parts.append("故事大纲（按本集节拍展开，勿越界写其它集正文）：\n" + truncate_context(outline))
     parts.append(
         "请先写齐角色设定、场景设定、道具设定与配乐，再写分镜。\n"
+        "角色外形彼此必须可一眼区分（年龄/性别/发型/服装拉开差距），禁止村民与具名角色长得像；"
+        "外形只写人物，锄头等工具写进道具设定。\n"
         "场景设定必须具体到可生成「无人物竖屏主底板」；道具设定必须具体到可画设定图。\n"
         "分镜中的角色/地点/道具必须与设定块逐字同名；"
         "同一地点跨镜复用同一场景名，不要在画面散文里发明新地名。"
@@ -283,6 +287,9 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
             (f"口头禅：{str(rec.get('口头禅')).strip()}" if str(rec.get("口头禅") or "").strip() else ""),
         ]
         look = "；".join(p for p in look_parts if p) or f"{name}，竖屏漫剧角色，五官清晰可辨"
+        from tools.drama_characters import sanitize_character_look_for_portrait
+
+        look = sanitize_character_look_for_portrait(look) or look
         aliases = [
             a.strip()
             for a in str(rec.get("别名") or "").replace("，", "、").split("、")

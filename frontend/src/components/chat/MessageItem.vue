@@ -23,71 +23,92 @@ const htmlContent = computed(() => {
 const toolCalls = computed(() => props.message.toolCalls || [])
 const mediaItems = computed(() => props.message.media || [])
 const dramaJob = computed(() => props.message.dramaJob || null)
-const showDramaProgress = computed(() => {
-  const j = dramaJob.value
+const dramaJobList = computed(() => {
+  const list = props.message.dramaJobs
+  const rows = Array.isArray(list) && list.length ? list : dramaJob.value ? [dramaJob.value] : []
+  const hasActive = rows.some((j) => j?.state === 'running' || j?.state === 'pending')
+  // 续跑进行中时只展示进行中的条，不叠旧失败条
+  if (hasActive) {
+    return rows.filter((j) => j?.state === 'running' || j?.state === 'pending')
+  }
+  return rows
+})
+const showDramaProgress = computed(() => dramaJobList.value.some((j) => shouldShowJob(j)))
+
+function shouldShowJob(j) {
   if (!j) return false
   return (
     j.state === 'running' ||
     j.state === 'pending' ||
     j.state === 'error' ||
+    j.state === 'timeout' ||
     j.state === 'idle' ||
     (j.state === 'done' && j.line)
   )
-})
-const dramaPct = computed(() => {
-  const p = dramaJob.value?.pct
+}
+
+function jobPct(j) {
+  const p = j?.pct
   if (p == null || Number.isNaN(Number(p))) {
-    if (dramaJob.value?.state === 'running' || dramaJob.value?.state === 'pending') return 8
-    if (dramaJob.value?.state === 'done') return 100
+    if (j?.state === 'running' || j?.state === 'pending') return 8
+    if (j?.state === 'done') return 100
     return 0
   }
   return Math.max(0, Math.min(100, Number(p)))
-})
-const canRefreshDrama = computed(() => {
-  const j = dramaJob.value
-  if (!j?.jobId) return false
-  if (j.refreshing || j.resuming) return false
-  return j.canRefresh || j.state === 'idle' || j.state === 'error'
-})
-const canResumeDrama = computed(() => {
-  const j = dramaJob.value
-  if (!j) return false
-  if (j.refreshing || j.resuming) return false
-  if (j.state === 'running' || j.state === 'pending') return false
-  if (j.state === 'done' && j.mediaReady) return false
-  return j.canResume || j.state === 'error' || j.state === 'idle'
-})
-const dramaProgressTitle = computed(() => {
-  const s = dramaJob.value?.state
-  if (s === 'error') return '渲染失败'
-  if (s === 'done') return '成片完成'
-  if (s === 'idle') return '历史任务'
-  return '成片进行中'
-})
-const dramaProgressStatus = computed(() => {
-  const s = dramaJob.value?.state
+}
+
+function jobTitle(j) {
+  const ep = j?.episode != null ? `第 ${j.episode} 集` : ''
+  const label = j?.label || ep
+  const s = j?.state
+  let head = '成片进行中'
+  if (s === 'error') head = '渲染失败'
+  else if (s === 'done') head = '成片完成'
+  else if (s === 'idle') head = '历史任务'
+  return label ? `${head} · ${label}` : head
+}
+
+function jobStatus(j) {
+  const s = j?.state
   if (s === 'pending') return 'running'
   if (s === 'idle') return 'idle'
+  if (s === 'timeout') return 'running' // 历史态：仍按进行中展示
   return s || 'idle'
-})
-const dramaProgressMessage = computed(() => {
-  const j = dramaJob.value
-  const line = j?.line || props.message.status || ''
+}
+
+function jobMessage(j) {
+  const line = j?.line || ''
   if (j?.state === 'error' && j.shot != null) {
     return `${line}${line ? ' · ' : ''}问题镜头：第 ${j.shot} 镜`
   }
   return line || '就绪'
-})
+}
+
+function canRefreshJob(j) {
+  if (!j?.jobId) return false
+  if (j.refreshing || j.resuming) return false
+  return j.canRefresh || j.state === 'idle' || j.state === 'error'
+}
+
+function canResumeJob(j) {
+  if (!j) return false
+  if (j.refreshing || j.resuming) return false
+  if (j.state === 'running' || j.state === 'pending') return false
+  if (j.state === 'done' && j.mediaReady) return false
+  return j.canResume || j.state === 'error' || j.state === 'timeout' || j.state === 'idle'
+}
+
 const showStatus = computed(
   () =>
     Boolean(
       (props.message.isStreaming && props.message.status) ||
-        (dramaJob.value && (dramaJob.value.state === 'running' || dramaJob.value.state === 'pending') && props.message.status),
+        (dramaJob.value &&
+          (dramaJob.value.state === 'running' || dramaJob.value.state === 'pending') &&
+          props.message.status),
     ),
 )
 const showMarkdown = computed(() => {
   if (props.message.content) return true
-  // Keep a streaming cursor when there is no status line yet.
   return Boolean(props.message.isStreaming && !showStatus.value)
 })
 </script>
@@ -137,32 +158,38 @@ const showMarkdown = computed(() => {
             <ToolCard v-for="(tool, i) in toolCalls" :key="tool.id || i" :tool="tool" />
           </div>
 
-          <div v-if="showDramaProgress" class="drama-chat-job-row">
-            <DramaProgressStatusBar
-              class="drama-chat-job-bar-wrap"
-              :pct="dramaPct"
-              :status="dramaProgressStatus"
-              :title="dramaProgressTitle"
-              :message="dramaProgressMessage"
-            />
-            <button
-              v-if="canResumeDrama"
-              type="button"
-              class="drama-refresh-btn drama-resume-btn"
-              :disabled="!!dramaJob?.resuming || !!dramaJob?.refreshing"
-              @click="emit('resume-drama', index)"
+          <div v-if="showDramaProgress" class="drama-chat-jobs">
+            <div
+              v-for="(job, ji) in dramaJobList.filter(shouldShowJob)"
+              :key="job.jobId || ji"
+              class="drama-chat-job-row"
             >
-              {{ dramaJob?.resuming ? '续跑中…' : '继续渲染' }}
-            </button>
-            <button
-              v-if="canRefreshDrama"
-              type="button"
-              class="drama-refresh-btn"
-              :disabled="!!dramaJob?.refreshing || !!dramaJob?.resuming"
-              @click="emit('refresh-drama', index)"
-            >
-              {{ dramaJob?.refreshing ? '查询中…' : '查询进度' }}
-            </button>
+              <DramaProgressStatusBar
+                class="drama-chat-job-bar-wrap"
+                :pct="jobPct(job)"
+                :status="jobStatus(job)"
+                :title="jobTitle(job)"
+                :message="jobMessage(job)"
+              />
+              <button
+                v-if="canResumeJob(job)"
+                type="button"
+                class="drama-refresh-btn drama-resume-btn"
+                :disabled="!!job.resuming || !!job.refreshing"
+                  @click="emit('resume-drama', { index, jobId: job.jobId, slug: job.slug, episode: job.episode, kind: job.kind })"
+              >
+                {{ job.resuming ? '续跑中…' : '继续渲染' }}
+              </button>
+              <button
+                v-if="canRefreshJob(job)"
+                type="button"
+                class="drama-refresh-btn"
+                :disabled="!!job.refreshing || !!job.resuming"
+                @click="emit('refresh-drama', index)"
+              >
+                {{ job.refreshing ? '查询中…' : '查询进度' }}
+              </button>
+            </div>
           </div>
 
           <div v-if="mediaItems.length" class="chat-media-cards">
@@ -260,12 +287,18 @@ const showMarkdown = computed(() => {
 </template>
 
 <style scoped>
+.drama-chat-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 10px;
+  max-width: 640px;
+}
+
 .drama-chat-job-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 0 10px;
-  max-width: 640px;
   flex-wrap: wrap;
 }
 

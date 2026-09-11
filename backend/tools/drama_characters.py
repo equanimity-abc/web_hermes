@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import zlib
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,26 @@ from tools.workspace import resolve_safe
 _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$")
 _SPEAKER = re.compile(r"^[\s【\[]*([^:：\]】\s]{1,16})\s*[]】]?\s*[:：]")
 _SPLIT = re.compile(r"[,，、/|]+")
+
+# 出图风格锚：压低写实摄影感，降低 Seedance/Kling/Wanx「疑似真人」拒图
+ANIME_STYLE_GUARD = (
+    "二次元动漫插画风，赛璐璐上色，清晰线稿与色块，非写实，"
+    "禁止写实摄影、真人照片、超写实皮肤毛孔、镜头景深与照片颗粒"
+)
+
+# 多角色并行定妆时，characters.json 读写改必须串行，否则后写覆盖先写。
+_slug_file_locks: dict[str, threading.RLock] = {}
+_slug_file_locks_guard = threading.Lock()
+
+
+def _characters_file_lock(slug: str) -> threading.RLock:
+    key = str(slug or "").strip() or "_"
+    with _slug_file_locks_guard:
+        lock = _slug_file_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _slug_file_locks[key] = lock
+        return lock
 
 DEFAULT_VOICES: tuple[tuple[str, str], ...] = (
     ("zh-CN-YunxiNeural", "云希 · 男"),
@@ -262,13 +283,17 @@ def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, s
     )
 
 
-def character_ref_shot(char: dict[str, Any]) -> dict[str, Any]:
+def character_ref_shot(char: dict[str, Any], *, face_from_body: bool = False) -> dict[str, Any]:
     provider, model = normalize_ref_image_route(char.get("ref_image_provider"), char.get("ref_image_model"))
-    return {
+    shot: dict[str, Any] = {
         "kind": "character_ref",
         "ref_image_provider": provider,
         "ref_image_model": model,
     }
+    if face_from_body:
+        # 告诉图生图后端：参考图是全身定妆，目标是同人正脸特写，勿当「新构图分镜」
+        shot["ref_lock_mode"] = "face_from_body"
+    return shot
 
 
 def default_ref_size_for(category: Any) -> int:
@@ -585,8 +610,37 @@ def character_ref_negative_prompt() -> str:
         "网格线，黑色边框，分割线，九宫格，分格，表格线，参考线，身高尺，刻度尺，"
         "标尺，数字，编号，设定表，模型板，三视图，多视角，并排，分栏，侧面，背面，"
         "横线，竖线，character sheet，model sheet，turnaround，grid，border，ruler，"
-        "measurement，multiple views，side view，back view"
+        "measurement，multiple views，side view，back view，"
+        "锄头，镐头，斧头，铲子，扁担，武器，刀剑，手持道具，工具，场景杂物"
     )
+
+
+_PROP_LOOK_RE = re.compile(
+    r"(手持|握着|拿着|扛着|背着|拄着|带着|挥舞|抡起)[^，；。、,]{0,12}"
+    r"(锄|镐|斧|铲|刀|剑|枪|杖|棍|锤|筐|担|扁担|镐头|锄头|斧头|武器|工具|道具)"
+    r"|"
+    r"(锄头|镐头|斧头|铲子|扁担|铁镐|木杖|长剑|大刀|武器|农具)"
+)
+
+
+def sanitize_character_look_for_portrait(look: str) -> str:
+    """定妆只画人物本体：去掉手持工具/武器等道具措辞。"""
+    s = str(look or "").strip()
+    if not s:
+        return s
+    s = _PROP_LOOK_RE.sub("", s)
+    s = re.sub(r"[，、；]{2,}", "，", s)
+    s = re.sub(r"^[\s，、；]+|[\s，、；]+$", "", s)
+    return s.strip("，、； ") or str(look or "").strip()
+
+
+def _gender_phrase(char: dict[str, Any]) -> str:
+    g = str(char.get("gender") or "").strip().lower()
+    if g in ("male", "男", "m"):
+        return "男性"
+    if g in ("female", "女", "f"):
+        return "女性"
+    return ""
 
 
 def build_asset_ref_prompt(char: dict[str, Any]) -> str:
@@ -611,12 +665,18 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
     if category == "scene":
         # Scenes no longer use a separate 设定图 — plate prompt is the authority.
         return build_location_plate_prompt(char)
+    look = sanitize_character_look_for_portrait(look)
+    gender = _gender_phrase(char)
     bits = [
         "一张正方形插画，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
-        "正面全身站立，居中构图，人物占画面主体",
+        "正面全身站立，居中构图，人物从头到脚完整可见，占画面主体",
+        f"性别：{gender}" if gender else "",
         f"外形：{look}",
+        "双手自然垂放或空闲，禁止手持任何道具、工具、武器、农具、锄头、镐头",
+        "禁止出现锄头/工具/场景杂物/第二人/动物抢戏",
         "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
-        "完整上色插画，高质量二次元立绘",
+        "完整上色二次元立绘，不是半身、不是特写",
+        ANIME_STYLE_GUARD,
         no_text,
     ]
     return "，".join(b for b in bits if b)
@@ -635,7 +695,9 @@ def build_location_plate_prompt(char: dict[str, Any]) -> str:
         f"色调：{colors}" if colors else "",
         "无人物、无剪影、无动物、无车辆驾驶者",
         "固定机位可复现构图，建筑轮廓与地面材质清晰",
-        "电影感主光方向稳定，满幅构图无黑边",
+        "动漫背景插画，色块分明，禁止写实摄影风景照",
+        ANIME_STYLE_GUARD,
+        "满幅构图无黑边",
         no_text,
     ]
     return "，".join(b for b in bits if b)
@@ -667,22 +729,36 @@ def environment_anchor_prompt(char: dict[str, Any] | None) -> str:
     return "，".join(bits)
 
 
-def build_face_ref_prompt(char: dict[str, Any]) -> str:
-    """正脸特写定妆：肩上以上，中性表情，专供身份锁与 ArcFace。"""
+def build_face_ref_prompt(char: dict[str, Any], *, from_body_ref: bool = False) -> str:
+    """正脸特写定妆：肩上以上，中性表情，专供身份锁与 ArcFace。
+
+    ``from_body_ref=True`` 时强调必须与全身定妆参考图为同一人，避免文生图另起一张脸。
+    """
     name = str(char.get("name") or char.get("id") or "角色").strip() or "角色"
-    look = enriched_look(char) or str(char.get("look") or "").strip() or "原创二次元角色"
+    look = sanitize_character_look_for_portrait(
+        enriched_look(char) or str(char.get("look") or "").strip() or "原创二次元角色"
+    )
+    gender = _gender_phrase(char)
     no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
     bits = [
         "一张正方形二次元角色正脸特写",
         f"角色「{name}」",
         "肩部以上近景，正面平视，五官清晰居中，中性表情",
-        f"外形：{look}",
-        "同一张脸同一发型同一妆面，禁止侧面背面多视角拼图",
+        f"性别：{gender}" if gender else "",
+        f"外形提示（仅辅助，不得另造新人）：{look}" if from_body_ref else f"外形：{look}",
+        (
+            "必须与参考全身定妆立绘为同一人：同一性别、年龄感、五官、发型发色与妆面；"
+            "只改景别为肩上正脸，禁止换成老头子/女生/路人等另一张脸"
+            if from_body_ref
+            else "同一张脸同一发型同一妆面，禁止侧面背面多视角拼图"
+        ),
+        "禁止手持道具、禁止第二人、禁止全身站姿复刻",
         "均匀浅色纯色背景，无分栏无网格",
-        "高质量面部细节，瞳色与五官可辨识",
+        "高质量二次元面部细节，大眼睛与清晰瞳色，动漫五官可辨识",
+        ANIME_STYLE_GUARD,
         no_text,
     ]
-    return "，".join(bits)
+    return "，".join(b for b in bits if b)
 
 
 _LOOK_WEAK_MARKERS = (
@@ -736,13 +812,15 @@ def expand_character_look(
     system = (
         "你是竖屏漫剧角色造型设计师。只输出一段简体中文外形描述，不要标题、不要列表、不要引号。"
         "描述必须可直接喂给文生图：具体到脸型五官、瞳色、发型发色、服装剪裁与配饰、体态气质、题材风格。"
+        "只写人物本体，禁止写手持锄头/工具/武器等道具（道具另有条目）。"
+        "若给出性别，必须严格遵守，禁止改写性别或年龄段（如把青年男写成老翁或女生）。"
         "禁止空话（如「五官清晰」「气质独特」「高质量二次元」）。字数 80–160。"
     )
     user = (
         f"角色名：{name}。{gender_hint}\n"
         f"现有描述：{raw or '（无）'}\n"
         f"{bible_bit}"
-        "请扩写为可复现的定妆外形描述。"
+        "请扩写为可复现的定妆外形描述（仅人物，无手持道具）。"
     )
     try:
         out = str(draft_text_sync(slug, user, system=system) or "").strip()
@@ -880,6 +958,7 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
         bible = ""
     updated: list[str] = []
     cards = load_characters(slug)
+    pending: list[dict[str, Any]] = []
     for rec in cards:
         if str(rec.get("category") or "character") != "character":
             continue
@@ -891,6 +970,11 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
         look = str(rec.get("look") or "")
         if not look_needs_expand(look):
             continue
+        pending.append(rec)
+
+    def _one(rec: dict[str, Any]) -> str | None:
+        cid = str(rec.get("id") or "")
+        look = str(rec.get("look") or "")
         # 已锁定定妆时仍可扩写 look（只影响 prompt 文案，不改图），利于后续重渲。
         expanded = expand_character_look(
             slug,
@@ -901,7 +985,22 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
         )
         if expanded and expanded != look:
             upsert_character(slug, {"id": cid, "look": expanded})
-            updated.append(cid)
+            return cid
+        return None
+
+    if not pending:
+        return updated
+    try:
+        from tools.drama_parallel import parallel_map, shot_concurrency
+
+        for cid in parallel_map(pending, _one, max_workers=min(4, shot_concurrency()), fail_fast=False):
+            if cid:
+                updated.append(cid)
+    except Exception:
+        for rec in pending:
+            cid = _one(rec)
+            if cid:
+                updated.append(cid)
     return updated
 
 
@@ -1060,7 +1159,9 @@ def save_characters(slug: str, characters: list[dict[str, Any]]) -> str:
     payload = {
         "characters": [normalize_character(slug, c) for c in characters],
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    with _characters_file_lock(slug):
+        path.write_text(text, encoding="utf-8")
     return rel
 
 
@@ -1094,43 +1195,67 @@ def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         # Tolerate non-ASCII / empty ids (e.g. an LLM passing a Chinese name as id).
         # Fall back to a deterministic ascii id derived from the name.
         cid = suggest_character_id(name or raw_id or "c")
-    cards = load_characters(slug)
-    # 已有同名正脸卡时，合并到该卡，避免影子 id 残留。
-    by_name = match_character_token(name, cards) if name else None
-    if by_name and not is_shadow_stage_card(by_name):
-        cid = str(by_name.get("id") or cid)
-    existing_rec = find_character(cards, cid)
-    is_new = existing_rec is None
-    existing = existing_rec or {"id": cid}
-    merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}
-    merged["id"] = cid
-    merged["name"] = name or str(merged.get("name") or cid)
-    # 新建角色未显式指定音色时，按性别自动挑选（避免所有角色都落 DEFAULT_VOICE）
-    if is_new and not str(merged.get("voice") or "").strip():
-        merged["voice"] = pick_default_voice(slug, normalize_gender(merged.get("gender")), cards)
-    rec = normalize_character(slug, merged)
-    if is_shadow_stage_card(rec):
-        raise CharacterError(
-            "剪影/影子是镜头表现，不能单独建角色卡；请用本名角色，影子写在分镜「画面」里"
+    with _characters_file_lock(slug):
+        cards = load_characters(slug)
+        # 已有同名正脸卡时，合并到该卡，避免影子 id 残留。
+        by_name = match_character_token(name, cards) if name else None
+        if by_name and not is_shadow_stage_card(by_name):
+            cid = str(by_name.get("id") or cid)
+        existing_rec = find_character(cards, cid)
+        is_new = existing_rec is None
+        existing = existing_rec or {"id": cid}
+        merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}
+        merged["id"] = cid
+        merged["name"] = name or str(merged.get("name") or cid)
+        # 新建角色未显式指定音色时，按性别自动挑选（避免所有角色都落 DEFAULT_VOICE）
+        if is_new and not str(merged.get("voice") or "").strip():
+            merged["voice"] = pick_default_voice(slug, normalize_gender(merged.get("gender")), cards)
+        rec = normalize_character(slug, merged)
+        if is_shadow_stage_card(rec):
+            raise CharacterError(
+                "剪影/影子是镜头表现，不能单独建角色卡；请用本名角色，影子写在分镜「画面」里"
+            )
+        next_cards = [rec if c.get("id") == cid else c for c in cards]
+        if not find_character(next_cards, cid):
+            next_cards.append(rec)
+        # 写入时顺带丢掉其它影子卡
+        next_cards = [c for c in next_cards if not is_shadow_stage_card(c)]
+        rel = characters_rel(slug)
+        path = resolve_safe(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"characters": [normalize_character(slug, c) for c in next_cards]},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-    next_cards = [rec if c.get("id") == cid else c for c in cards]
-    if not find_character(next_cards, cid):
-        next_cards.append(rec)
-    # 写入时顺带丢掉其它影子卡
-    next_cards = [c for c in next_cards if not is_shadow_stage_card(c)]
-    save_characters(slug, next_cards)
-    return rec
+        return rec
 
 
 def delete_character(slug: str, cid: str) -> None:
     cid = parse_character_id(cid)
-    cards = load_characters(slug)
-    rec = find_character(cards, cid)
-    if rec is None:
-        raise CharacterError(f"找不到角色：{cid}")
-    if rec.get("ref_locked"):
-        raise CharacterError("参考图已锁定，先解锁再删除角色")
-    save_characters(slug, [c for c in cards if c.get("id") != cid])
+    with _characters_file_lock(slug):
+        cards = load_characters(slug)
+        rec = find_character(cards, cid)
+        if rec is None:
+            raise CharacterError(f"找不到角色：{cid}")
+        if rec.get("ref_locked"):
+            raise CharacterError("参考图已锁定，先解锁再删除角色")
+        path = resolve_safe(characters_rel(slug))
+        keep = [c for c in cards if c.get("id") != cid]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"characters": [normalize_character(slug, c) for c in keep]},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 def set_ref_locked(slug: str, cid: str, locked: bool) -> dict[str, Any]:

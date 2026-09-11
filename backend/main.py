@@ -484,9 +484,13 @@ _PLAYABLE = {
 
 
 def _thumbnail_file(target, size: int):
-    """Downscale a workspace image to a cached PNG thumbnail."""
+    """Downscale a workspace image to a cached JPEG thumbnail."""
     try:
-        from PIL import Image
+        from PIL import Image, ImageFile
+
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        # 允许大竖屏分镜（Seedream 2K+）做缩略图
+        Image.MAX_IMAGE_PIXELS = max(int(getattr(Image, "MAX_IMAGE_PIXELS", 0) or 0), 80_000_000)
     except ImportError:
         return None
     try:
@@ -494,8 +498,9 @@ def _thumbnail_file(target, size: int):
         cache.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    key = hashlib.md5(f"{target.as_posix()}:{size}".encode("utf-8")).hexdigest()
-    out = cache / f"{key}.png"
+    size = max(32, min(int(size or 240), 720))
+    key = hashlib.md5(f"{target.as_posix()}:{size}:jpg".encode("utf-8")).hexdigest()
+    out = cache / f"{key}.jpg"
     try:
         src_mtime = target.stat().st_mtime
     except OSError:
@@ -509,8 +514,8 @@ def _thumbnail_file(target, size: int):
     try:
         with Image.open(target) as img:
             img = img.convert("RGB")
-            img.thumbnail((size, size), Image.LANCZOS)
-            img.save(out, "PNG")
+            img.thumbnail((size, size), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
+            img.save(out, "JPEG", quality=82, optimize=True)
     except Exception:
         return None
     return out if out.is_file() and out.stat().st_size > 0 else None
@@ -531,7 +536,8 @@ async def workspace_file(path: str, size: int | None = None):
     if size and size > 0 and media.startswith("image/"):
         thumb = _thumbnail_file(target, size)
         if thumb is not None:
-            return FileResponse(thumb, media_type="image/png", filename=target.name)
+            return FileResponse(thumb, media_type="image/jpeg", filename=f"{target.stem}_thumb.jpg")
+        # 缩略图失败时仍回原图，避免候选墙空白
     return FileResponse(target, media_type=media, filename=target.name)
 
 

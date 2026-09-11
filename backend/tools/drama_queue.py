@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 import uuid
@@ -283,9 +284,13 @@ class DramaQueue:
                     )
 
             # S5: dedupe against a recent identical terminal job too.
-            for job in self._jobs.values():
-                if job.idem_key == idem and job.status == "done":
-                    return public_job(job)
+            # Explicit smart_resume / continue-render must not reuse a stale "done"
+            # job — otherwise the UI ends immediately while nothing new runs.
+            reuse_done = not bool((params or {}).get("smart_resume"))
+            if reuse_done:
+                for job in self._jobs.values():
+                    if job.idem_key == idem and job.status == "done":
+                        return public_job(job)
 
             job = DramaJob(
                 job_id=uuid.uuid4().hex[:12],
@@ -333,13 +338,19 @@ class DramaQueue:
             self._persist(job)
         return public_job(job)
 
-    def retry(self, job_id: str) -> dict[str, Any]:
+    def retry(self, job_id: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         old = self.get(job_id)
         if old is None:
             raise KeyError(job_id)
         if old.status not in ("error", "cancelled"):
             raise ValueError("只能重试失败或已取消的任务")
-        return self.submit(old.kind, old.slug, old.episode, params=dict(old.params or {}))
+        merged = dict(old.params or {})
+        if params:
+            merged.update(params)
+        # 失败/取消后续跑：默认智能从失败点继续（跳过已通过步骤）
+        merged.setdefault("smart_resume", True)
+        merged.setdefault("force", False)
+        return self.submit(old.kind, old.slug, old.episode, params=merged)
 
     def resume_or_retry(
         self,
@@ -350,20 +361,30 @@ class DramaQueue:
         episode: int = 0,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """历史会话续跑：优先按 job_id 重试；磁盘/内存都没有时按 slug+episode+kind 新建。"""
+        """历史会话续跑：优先按 job_id 重试；磁盘/内存都没有时按 slug+episode+kind 新建。
+
+        用户点「继续渲染」必须真正入队新任务（或挂上仍在跑的同一集任务），
+        不得把已 done 的旧 job 直接交回前端导致秒结束。
+        """
+        import time
+
+        merged = dict(params or {})
+        merged.setdefault("smart_resume", True)
+        if "force" not in merged:
+            merged["force"] = False
+        # 打破与历史 done 任务的 idem 碰撞；仍可与「进行中」任务去重
+        merged["resume_token"] = str(merged.get("resume_token") or f"{time.time_ns()}")
         jid = str(job_id or "").strip()
         if jid:
             try:
-                return self.retry(jid)
+                return self.retry(jid, params=merged)
             except KeyError:
                 pass
             except ValueError:
-                # 已是 done/running —— 若仍要续跑则走新建
                 cur = self.get(jid)
                 if cur and cur.status in ("pending", "running"):
                     return public_job(cur)
-                if cur and cur.status == "done":
-                    return public_job(cur)
+                # done / 其它终态：落到下方按 slug+episode 新建
         kind = str(kind or "").strip() or "produce_episode"
         slug = str(slug or "").strip()
         if not slug:
@@ -374,7 +395,14 @@ class DramaQueue:
             ep = 0
         if ep < 1:
             raise ValueError("续跑需要合法 episode")
-        return self.submit(kind, slug, ep, params=dict(params or {}))
+        # 同集已有进行中的排他任务：直接返回，让前端继续 poll，不要报错秒退
+        key = f"{slug}:ep{ep:02d}"
+        with self._lock:
+            active = self._active_jobs(key)
+            for cur in active:
+                if cur.kind in EXCLUSIVE_KINDS or cur.kind == kind:
+                    return public_job(cur)
+        return self.submit(kind, slug, ep, params=merged)
 
     def resume_interrupted(self, *, slug: str = "", limit: int = 20) -> list[dict[str, Any]]:
         """Re-queue jobs marked resumable after process restart."""
@@ -437,6 +465,35 @@ class DramaQueue:
             if not bucket:
                 self._slug_busy.pop(key, None)
 
+    def _stop_siblings_after_failure(self, failed: DramaJob) -> None:
+        """同项目其他任务：pending 直接取消；running 打取消标记，跑完当前步骤后停。"""
+        slug = str(failed.slug or "")
+        if not slug:
+            return
+        with self._lock:
+            siblings = [
+                j
+                for j in self._jobs.values()
+                if j.slug == slug
+                and j.job_id != failed.job_id
+                and j.status in ("pending", "running")
+            ]
+        for sib in siblings:
+            sib.cancel_event.set()
+            if sib.status == "pending":
+                sib.touch(
+                    status="cancelled",
+                    error=f"因任务 {failed.job_id} 失败，不再开启新任务",
+                )
+                self._release_busy(sib)
+                self._persist(sib)
+            else:
+                # running：保留 running，worker 在 check_cancel 处结束并标 cancelled
+                prog = dict(sib.progress or {})
+                prog["message"] = prog.get("message") or f"因任务 {failed.job_id} 失败，完成当前步骤后停止"
+                sib.touch(progress=prog)
+                self._persist(sib)
+
     def _ensure_worker(self) -> None:
         self._workers = [w for w in self._workers if w.is_alive()]
         need = self.max_workers - len(self._workers)
@@ -477,9 +534,13 @@ class DramaQueue:
                     err = str(e)
                     prog = job.progress or {}
                     if prog.get("shot") and f"Shot {prog['shot']}" not in err and f"第{prog['shot']}镜" not in err:
-                        err = f"第{prog['shot']}镜：{err}"
+                        # 整集汇总失败不要再挂「第X镜：」，避免误读成单镜根因
+                        if not re.search(r"HQ 有\s*\d+\s*镜失败", err):
+                            err = f"第{prog['shot']}镜：{err}"
                     job.touch(status="error", error=err, result=None)
                     self._progress(job, message=err)
+                    # 一任务失败：同项目待跑的不再开启；已在跑的收到取消信号，完成当前步骤后停
+                    self._stop_siblings_after_failure(job)
             self._release_busy(job)
             self._persist(job)
 

@@ -56,8 +56,8 @@ def build_episode_status(slug: str, episode: int, doc: dict[str, Any] | None = N
     if not shots:
         lines.append("1. 先生成/保存结构化剧本（角色/场景/道具/配乐/分镜）")
     elif dirty or failed:
-        lines.append("1. rerender_dirty 重渲失败/脏镜")
-        lines.append("2. 通过后 export_timeline")
+        lines.append("1. 续跑 produce_episode / 工作台「继续渲染」（智能从失败点继续，跳过已通过镜）")
+        lines.append("2. 通过后自动导出；也可 export_timeline")
     elif blockers:
         lines.append("1. 先处理状态卡阻断项（或 force=true 覆盖）")
         lines.append("2. produce_episode / export_timeline")

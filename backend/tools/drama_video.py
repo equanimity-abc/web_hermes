@@ -23,6 +23,7 @@ from tools.drama_characters import (
     normalize_roles,
     primary_voice,
     resolve_shot_characters,
+    ANIME_STYLE_GUARD,
 )
 from tools.drama_dialogue import (
     apply_turn_timings,
@@ -624,27 +625,6 @@ def _scene_prompt(
             )
         else:
             scene = f"{scene}，主要角色面部清晰可辨、正面或四分之三正面"
-    if shot.get("_identity_framing_boost") and needs_face:
-        retry_n = int(shot.get("_identity_retry") or 0)
-        # 失败重抽：把「中景双人并排」压成说话人近景，避免 ArcFace 双人同大头双输
-        scene = re.sub(r"中景竖构图", "近景竖构图", scene)
-        scene = re.sub(r"中近景竖构图", "近景竖构图", scene)
-        scene = re.sub(r"(?<![近])中景", "近景", scene)
-        if speaker and retry_n >= 2:
-            scene = (
-                f"{scene}，强制「{speaker}」单人近景正面脸为主（脸占画面至少四分之一），"
-                "其他角色最多边缘肩膀或半张侧脸，禁止双人并排同大头抢戏"
-            )
-        elif speaker:
-            scene = (
-                f"{scene}，强制近景，「{speaker}」正面脸最大最清晰占画面主体，"
-                "配角缩小靠后或侧身，禁止第二人物整脸与主体同大"
-            )
-        else:
-            scene = (
-                f"{scene}，强制中近景或近景，主要角色正面或四分之三正面，"
-                "面部占画面足够大，禁止侧脸背影、禁止把第二人物整脸拼进背景抢主体"
-            )
     kinetic_map = {
         "punch_in": "动态姿态，隐含运动感，衣摆飘动",
         "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
@@ -729,13 +709,12 @@ def _scene_prompt(
             f"身份锁角色「{speaker}」必须清晰露脸并占本镜主要人脸位置，"
             f"禁止只画其他角色正脸而把「{speaker}」画成背影、过小剪影或看不清五官"
         )
-    if shot.get("_env_retry") and loc_clause:
-        bits.append("强制保持与地点设定同一建筑轮廓、主光方向与地面材质，禁止换成无关背景")
     if style_clause:
         bits.append(style_clause)
     bits.append(
-        "现代都市条漫插画，戏剧性轮廓光，细节丰富，"
-        "画面中人物清晰可见，非空镜非黑屏，无文字、无字幕、无水印、无界面"
+        f"竖屏漫剧条漫插画，{ANIME_STYLE_GUARD}，"
+        "戏剧性轮廓光，细节丰富，画面中人物清晰可见，非空镜非黑屏，"
+        "无文字、无字幕、无水印、无界面"
     )
     return ", ".join(b for b in bits if b)
 
@@ -923,11 +902,10 @@ def _image_provider_chain(
     refs: tuple[str, ...] = (),
     slug: str = "",
 ) -> list[str]:
-    """Ordered image providers to try; character_ref gets DashScope/Kling fallbacks.
+    """Ordered image providers to try.
 
-    Studio / HQ scene shots: single commercial provider only — no free cascade.
-    Character ref (定妆) still cascades across commercial backends so a Seedream
-    size/network blip can fall through to Wanx/Kling without pollinations free tier.
+    Studio / HQ（含定妆）：只走配置的单一商用供应商，禁止 cascade / 免费兜底。
+    非 HQ：保留旧链路供草稿调试。
     """
     from tools.drama_hq_contract import hq_image_provider_chain, is_hq_no_fallback
     from tools.providers import registry
@@ -935,7 +913,7 @@ def _image_provider_chain(
     sid = str(slug or (shot or {}).get("_slug") or "").strip()
     kind = str((shot or {}).get("kind") or "").strip().lower()
     hq = bool(sid and is_hq_no_fallback(sid))
-    if hq and kind != "character_ref":
+    if hq:
         return hq_image_provider_chain(primary, shot)
 
     skip = frozenset({"", "none", "off", "mock"})
@@ -949,7 +927,6 @@ def _image_provider_chain(
             chain.append(p)
 
     if refs:
-        # 有定妆参考：优先项目配置的出图路由（Seedream 已支持 image），再兜底可灵等。
         add(primary)
         add("seedream")
         add("ark")
@@ -962,18 +939,15 @@ def _image_provider_chain(
     if kind == "character_ref":
         from tools.drama_styles import default_character_ref_image_route
 
-        for key in ("provider",):
-            add(str(default_character_ref_image_route().get(key) or ""))
+        add(str(default_character_ref_image_route().get("provider") or ""))
         add("kling-image")
         add("kling")
         add("wanx")
         add("dashscope")
-        # Studio 定妆仍禁止免费降级；非 studio 才兜底 pollinations。
-        if not hq:
-            fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-            add(fb)
-            if fb != "pollinations":
-                add("pollinations")
+        fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+        add(fb)
+        if fb != "pollinations":
+            add("pollinations")
     elif not refs:
         fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
         add(fb)
@@ -1169,7 +1143,11 @@ def generate_character_face_portrait(
     *,
     seed: int | None = None,
 ) -> str | None:
-    """基于全身定妆（若有）生成正脸特写锚，写入 ``{cid}_face.png``。"""
+    """基于全身定妆（若有）生成正脸特写锚，写入 ``{cid}_face.png``。
+
+    有全身定妆时强制图生图同人锁脸；生成后用 ArcFace 比对全身↔正脸，
+    身份明显不一致则回滚并失败（避免「全身是老头、正脸是女生」进库）。
+    """
     import time
     import zlib
 
@@ -1190,37 +1168,88 @@ def generate_character_face_portrait(
     out_rel = ref_face_rel(slug, cid)
     dest = resolve_safe(out_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    has_body = ref_exists(slug, char)
     if seed is None:
         seed = (zlib.crc32(f"{slug}:{cid}:face:{out_rel}:{time.time_ns()}".encode()) & 0x7FFFFFFF)
+    elif has_body:
+        # 有全身参考时与全身共用种子，减少无故另起一张脸
+        seed = int(seed) & 0x7FFFFFFF
     else:
         seed = (int(seed) + 97) & 0x7FFFFFFF
+    bak_bytes: bytes | None = None
     if dest.is_file() and dest.stat().st_size > 0:
         bak = dest.with_name(dest.stem + ".prev.png")
         try:
-            bak.write_bytes(dest.read_bytes())
+            bak_bytes = dest.read_bytes()
+            bak.write_bytes(bak_bytes)
         except OSError:
-            pass
-    prompt = build_face_ref_prompt(char)
-    refs: tuple[str, ...] = ()
+            bak_bytes = None
     body_rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
-    if ref_exists(slug, char):
-        refs = (body_rel,)
+    refs: tuple[str, ...] = (body_rel,) if has_body else ()
+    prompt = build_face_ref_prompt(char, from_body_ref=bool(refs))
     # 正脸特写固定 1024²：身份嵌入够用，不必跟全身边长绑定
     face_w = int(FACE_REF_SIZE)
     face_h = face_w
+    shot = character_ref_shot(char, face_from_body=bool(refs))
     ok = _generate_scene_image(
         prompt,
         dest,
         seed=seed,
         slug=slug,
-        shot=character_ref_shot(char),
+        shot=shot,
         width=face_w,
         height=face_h,
         refs=refs,
     )
     if not ok or not (dest.is_file() and dest.stat().st_size > 1000):
+        err = str(shot.get("_image_error") or "").strip()
+        generate_character_face_portrait.last_error = err  # type: ignore[attr-defined]
         return None
+
+    if has_body:
+        mismatch = _face_body_identity_mismatch(body_rel, out_rel)
+        if mismatch:
+            # 回滚坏脸，避免脏身份进库
+            try:
+                if bak_bytes is not None:
+                    dest.write_bytes(bak_bytes)
+                elif dest.is_file():
+                    dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            generate_character_face_portrait.last_error = mismatch  # type: ignore[attr-defined]
+            return None
+
+    generate_character_face_portrait.last_error = ""  # type: ignore[attr-defined]
     return out_rel
+
+
+# 全身↔正脸：全身脸小，阈值略低于镜内身份闸；低于此分视为换脸失败
+_BODY_FACE_MIN_COSINE = 0.52
+
+
+def _face_body_identity_mismatch(body_rel: str, face_rel: str) -> str:
+    """若 ArcFace 可用且余弦过低，返回错误文案；否则空串（跳过）。"""
+    try:
+        from tools.drama_qc import score_pair
+        from tools.workspace import resolve_safe as _rs
+
+        body_p = _rs(body_rel)
+        face_p = _rs(face_rel)
+        scored = score_pair(body_p, face_p)
+        if scored.get("status") != "ok" or scored.get("method") != "arcface":
+            return ""
+        cos = scored.get("cosine")
+        if cos is None:
+            return ""
+        if float(cos) < _BODY_FACE_MIN_COSINE:
+            return (
+                f"正脸与全身定妆不是同一人（ArcFace cosine={float(cos):.3f}"
+                f"<{_BODY_FACE_MIN_COSINE}），已拒绝入库；请重试生成或先修正全身定妆"
+            )
+    except Exception:
+        return ""
+    return ""
 
 
 def _write_scene_png(data: bytes, dest: Path) -> None:
@@ -1264,6 +1293,9 @@ def generate_shot_candidates(
     """
     count = max(1, min(int(count or CANDIDATE_COUNT), 4))
     locked = set(shot.get("locked") or [])
+    # 已锁画面：绝对禁止再出图（缺文件也不自动补，需先手动解锁）
+    if "shot" in locked or "scene" in locked:
+        return list(shot.get("candidates") or [])
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     # Full project cards for alias → name/voice/face match (N speakers)
@@ -1300,9 +1332,6 @@ def generate_shot_candidates(
     shot.pop("_memory_hits", None)
     shot["prompt"] = prompt
     base_seed = character_seed(slug, cast, int(shot.get("n") or 1)) & 0x7FFFFFFF
-    retry_n = int(shot.get("_identity_retry") or 0)
-    if retry_n:
-        base_seed = (base_seed + retry_n * 9973) & 0x7FFFFFFF
     ids = next_candidate_ids(shot, count)
     created: list[dict[str, Any]] = []
     used_ai = False
@@ -1381,6 +1410,8 @@ def generate_shot_candidates(
                     slug=slug,
                     shot=shot,
                     episode=episode,
+                    attempts=1 if hq else 3,
+                    ok=lambda r: bool(r),
                 )
             )
             source = "ai" if ai_ok else "fallback"
@@ -1402,22 +1433,53 @@ def generate_shot_candidates(
     for rec in rendered:
         created.append({"id": rec["id"], "path": rec["path"], "source": rec["source"], "seed": rec["seed"]})
         used_ai = used_ai or rec["ai"]
-    shot["candidates"] = list(shot.get("candidates") or []) + created
-    prune_candidates(shot)
-    if "shot" not in locked and "scene" not in locked and created:
-        apply_candidate_to_scene(shot, created[0])
-        if used_ai:
-            shot["scene_source"] = str(created[0].get("source") or "ai")
-        shot["dirty"] = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
-        if "clip" not in (shot.get("dirty") or []) and "clip" not in locked:
-            shot.setdefault("dirty", []).append("clip")
-            shot["status"] = "dirty"
+
+    # Autopilot（count=1）：只落 scene.png，绝不往候选墙追加——否则产线/续跑会把用户删掉的墙又填回来。
+    # 工作台手工墙（count>1）才追加并 prune。
+    if count > 1:
+        shot["candidates"] = list(shot.get("candidates") or []) + created
+        prune_candidates(shot)
+        if "shot" not in locked and "scene" not in locked and created:
+            apply_candidate_to_scene(shot, created[0])
+            if used_ai:
+                shot["scene_source"] = str(created[0].get("source") or "ai")
+            shot["dirty"] = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+            if "clip" not in (shot.get("dirty") or []) and "clip" not in locked:
+                shot.setdefault("dirty", []).append("clip")
+                shot["status"] = "dirty"
+    elif created and "shot" not in locked and "scene" not in locked:
+        # 单图直写 scene，不登记 candidates / chosen（保留用户已清空的候选墙）
+        try:
+            src = resolve_safe(str(created[0].get("path") or ""))
+            dest = _path_for(shot, "scene")
+            if src.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest)
+                if used_ai:
+                    shot["scene_source"] = str(created[0].get("source") or "ai")
+                dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+                if "clip" not in dirty and "clip" not in locked:
+                    dirty.append("clip")
+                shot["dirty"] = dirty
+                shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
+                # 临时 cand 文件可删，避免工作台又扫到
+                try:
+                    src.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except (ValueError, OSError, FileNotFoundError):
+            apply_candidate_to_scene(shot, created[0])
+            if used_ai:
+                shot["scene_source"] = str(created[0].get("source") or "ai")
     return created
 
 
 def choose_shot_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any]:
-    if "shot" in (shot.get("locked") or []):
+    locked = set(shot.get("locked") or [])
+    if "shot" in locked:
         raise ValueError("整镜已锁定，不能换图")
+    if "scene" in locked:
+        raise ValueError("画面已锁定，不能换图")
     cand = find_candidate(shot, cid)
     if cand is None:
         raise ValueError(f"找不到候选 {cid}")
@@ -1426,8 +1488,11 @@ def choose_shot_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any]:
 
 
 def upload_shot_candidate(slug: str, episode: int, shot: dict[str, Any], data: bytes) -> dict[str, Any]:
-    if "shot" in (shot.get("locked") or []):
+    locked = set(shot.get("locked") or [])
+    if "shot" in locked:
         raise ValueError("整镜已锁定，不能换图")
+    if "scene" in locked:
+        raise ValueError("画面已锁定，不能换图")
     if not data:
         raise ValueError("图片不能为空")
     cid = next_candidate_ids(shot, 1)[0]
@@ -1800,6 +1865,7 @@ def _synthesize_shot_voice(
 
     tts_cfg = (load_models(slug) or {}).get("tts") or {}
     tts_provider = str(tts_cfg.get("provider") or "edge-tts").strip() or "edge-tts"
+    tts_attempts = 1 if is_hq_no_fallback(slug) else 3
     if is_hq_no_fallback(slug) and tts_provider.lower() in ("edge-tts", "edge", "mock", ""):
         raise RuntimeError(
             f"第{int(shot.get('n') or 0)}镜专业档 TTS 禁止 edge-tts（provider={tts_provider}）"
@@ -1816,6 +1882,7 @@ def _synthesize_shot_voice(
                 turns[0]["text"],
                 voice_path,
                 voice=turns[0].get("voice") or primary,
+                attempts=tts_attempts,
             )
         )
         dur = float(_probe_duration(voice_path) or 0) if ok else 0.0
@@ -1846,6 +1913,7 @@ def _synthesize_shot_voice(
                     turn["text"],
                     part,
                     voice=turn.get("voice") or primary,
+                    attempts=tts_attempts,
                 )
             )
             if not ok:

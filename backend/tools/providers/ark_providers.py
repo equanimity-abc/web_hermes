@@ -128,11 +128,21 @@ def _prompt_with_identity_refs(
     *,
     ref_count: int,
     env_ref_count: int = 0,
+    lock_mode: str = "",
 ) -> str:
     """参考图分工：环境底板锁背景，角色定妆锁脸——不是整图编辑底图。"""
     base = str(prompt or "").strip()
     if ref_count <= 0:
         return base
+    mode = str(lock_mode or "").strip().lower()
+    if mode == "face_from_body":
+        clause = (
+            "参考图为同一角色的全身定妆立绘：必须生成该人肩上以上的正脸特写，"
+            "严格保持同一性别、年龄感、五官、发型发色与妆面；"
+            "禁止换成另一张脸（如把青年男改成老翁或女生），禁止手持道具，"
+            "不要复刻全身站姿与定妆背景，只改景别为面部近景"
+        )
+        return f"{base}。{clause}" if base else clause
     env_n = max(0, min(int(env_ref_count or 0), ref_count))
     face_n = max(0, ref_count - env_n)
     if env_n >= 1 and face_n >= 1:
@@ -257,6 +267,7 @@ def _ark_image(
         str(prompt),
         ref_count=ref_count,
         env_ref_count=env_ref_count,
+        lock_mode=str((shot or {}).get("ref_lock_mode") or "") if isinstance(shot, dict) else "",
     )
 
     # Content-addressed cache (skip network when prompt/seed/model unchanged).
@@ -499,6 +510,21 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
 
             deadline = time.monotonic() + float(getattr(config, "I2V_POLL_TIMEOUT", 300) or 300)
             while time.monotonic() < deadline:
+                # 其它镜失败 / 用户取消：立刻退出轮询，避免空等数分钟收尾
+                cancel = shot.get("_cancel_check") if isinstance(shot, dict) else None
+                if callable(cancel):
+                    try:
+                        cancel()
+                    except Exception as exc:
+                        # PeerAbort / JobCancelled：立刻结束轮询，交给上层收尾
+                        name = type(exc).__name__
+                        if name in ("PeerAbort", "JobCancelled") or "加速收尾" in str(exc) or "已取消" in str(exc):
+                            _remember_error(f"cancelled:{exc}"[:240])
+                            log.info("ark i2v poll aborted task=%s err=%s", task_id, exc)
+                            raise
+                        _remember_error(f"cancelled:{exc}"[:240])
+                        log.info("ark i2v poll aborted task=%s err=%s", task_id, exc)
+                        return "none"
                 time.sleep(float(getattr(config, "I2V_POLL_INTERVAL", 2.0) or 2.0))
                 poll = client.get(
                     f"{_ark_base()}/contents/generations/tasks/{task_id}",

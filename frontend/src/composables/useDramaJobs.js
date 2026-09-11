@@ -62,12 +62,11 @@ export function useDramaJobs({ onTerminal } = {}) {
     return job
   }
 
-  async function waitForJob(job, slug, { timeoutMs = 15 * 60 * 1000 } = {}) {
+  async function waitForJob(job, slug, { onProgress } = {}) {
     if (!job?.job_id) return job
     await trackJob(job, slug)
     if (TERMINAL.has(job.status)) return job
-    const started = Date.now()
-    while (Date.now() - started < timeoutMs) {
+    while (true) {
       await new Promise((r) => setTimeout(r, 1200))
       let latest = (jobs.value || []).find((j) => j.job_id === job.job_id)
       if (!latest || !TERMINAL.has(latest.status)) {
@@ -84,17 +83,18 @@ export function useDramaJobs({ onTerminal } = {}) {
               error: `后台任务已失效（${job.job_id}），可能因服务重启丢失`,
             }
             upsertJob(gone)
+            onProgress?.(gone)
             return gone
           }
           /* keep polling on transient errors */
         }
       }
+      if (latest) onProgress?.(latest)
       if (latest && TERMINAL.has(latest.status)) {
         if (slug) startPolling(slug)
         return latest
       }
     }
-    throw new Error(`任务超时：${job.job_id}`)
   }
 
   async function cancelJob(jobId) {

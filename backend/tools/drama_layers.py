@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.drama_characters import (
+    ANIME_STYLE_GUARD,
     character_requires_face_identity,
     load_characters,
 )
@@ -184,7 +185,7 @@ def generate_layered_scene(
             f"竖屏9:16场景底板，{title or '短剧'}，{scene_txt}，"
             f"{loc_hint + '，' if loc_hint else ''}"
             "空镜或极弱化人物剪影，突出环境与光影，不要清晰可辨的人脸，"
-            "现代都市条漫插画，戏剧性轮廓光，无文字无字幕无水印"
+            f"现代都市条漫插画，戏剧性轮廓光，{ANIME_STYLE_GUARD}，无文字无字幕无水印"
         )
         env_refs: tuple[str, ...] = ()
         if loc_id:
@@ -234,7 +235,7 @@ def generate_layered_scene(
             f"竖屏9:16单人角色层，{name}，{ap}，"
             f"角色位于{anchor}，半身或全身清晰可见，五官清楚，"
             "简洁浅色或虚化背景便于抠图合成，同一张脸同一套服装，"
-            "条漫插画，无文字无字幕无水印，画面中只有这一个角色"
+            f"条漫插画，{ANIME_STYLE_GUARD}，无文字无字幕无水印，画面中只有这一个角色"
         )
         ok_layer = bool(
             _generate_scene_image(
@@ -354,7 +355,8 @@ def regenerate_failing_layers(
         layer_prompt = (
             f"竖屏9:16单人角色层，{name}，{ap}，"
             f"角色位于{anchor}，半身特写五官清晰，"
-            "简洁浅色背景，同一张脸同一套服装，条漫插画，无文字无水印，只有这一个角色"
+            f"简洁浅色背景，同一张脸同一套服装，条漫插画，{ANIME_STYLE_GUARD}，"
+            "无文字无水印，只有这一个角色"
         )
         ok_layer = bool(
             _generate_scene_image(
