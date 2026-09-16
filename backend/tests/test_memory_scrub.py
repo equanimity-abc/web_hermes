@@ -32,13 +32,12 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
     monkeypatch.setattr(drama_studio, "parse_slug", lambda s: s)
     monkeypatch.setattr(
         drama_studio,
-        "load_project",
-        lambda s: {"slug": s, "title": "大闹天宫"},
+        "load_project_file",
+        lambda s: {"slug": s, "title": "大闹天宫", "logline": "孙悟空大闹天宫"},
     )
-    monkeypatch.setattr(drama_studio, "load_project_file", lambda _s: None)
 
     class _Jobs:
-        def remove_slug(self, _s):
+        def remove_slug(self, _s, wait_s=2.5):
             return 2
 
     import tools.drama_queue as dq
@@ -60,6 +59,13 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
         def exists(self):
             return True
 
+        def __truediv__(self, other):
+            class _Child:
+                def is_file(self):
+                    return False
+
+            return _Child()
+
     target_path = _Target()
 
     def fake_resolve2(rel):
@@ -69,7 +75,9 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
 
     monkeypatch.setattr(drama_studio, "resolve_safe", fake_resolve2)
     monkeypatch.setattr(drama_studio, "_rel", lambda *parts: "dramas/" + "/".join(parts))
-    monkeypatch.setattr(drama_studio.shutil, "rmtree", lambda p: None)
+    monkeypatch.setattr(drama_studio, "_force_rmtree", lambda p, retries=6: "deleted")
+    monkeypatch.setattr(drama_studio, "find_project_slug_by_title", lambda t: None)
+    monkeypatch.setattr(drama_studio, "find_project_slug_by_logline", lambda t: None)
 
     def fake_scrub(*terms):
         calls.append(terms)
@@ -85,4 +93,5 @@ def test_remove_project_calls_memory_scrub(monkeypatch):
     assert result["jobs_removed"] == 2
     assert result["memory_scrubbed"] is True
     assert result["removed"] == ["havoc-in-heaven"]
-    assert calls == [("havoc-in-heaven", "大闹天宫")]
+    assert any("havoc-in-heaven" in c for c in calls[0])
+    assert any("大闹天宫" in str(c) for c in calls[0])

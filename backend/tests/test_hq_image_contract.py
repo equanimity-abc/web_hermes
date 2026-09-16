@@ -67,15 +67,23 @@ def test_image_provider_chain_studio_character_ref_single(monkeypatch):
 def test_seedream_gen_size_clamps_portrait_1980():
     from tools.providers.ark_providers import _seedream_gen_size
 
-    # 1980×3520 exceeds Pro pixel ceiling — must shrink while staying ~9:16
+    # 超大竖屏：须落在 lite 总像素窗口内，且保持约 9:16
     size = _seedream_gen_size(1980, 3520)
     assert "x" in size
     w, h = (int(x) for x in size.split("x", 1))
-    assert w * h <= 4_624_220
+    assert w * h <= 10_404_496
+    assert w * h >= 3_686_400
     assert abs(w / h - 1980 / 3520) < 0.05
-    # square character canvas maps to a named/safe square
+    # square character canvas: API 下限约 1920²，统一用 2048²
     assert _seedream_gen_size(1980, 1980) == "2048x2048"
-    assert _seedream_gen_size(1024, 1024) == "1024x1024"
+    assert _seedream_gen_size(1024, 1024) == "2048x2048"
+    # 旧竖屏 1080×1920 须抬到 ≥3686400
+    size_p = _seedream_gen_size(1080, 1920)
+    pw, ph = (int(x) for x in size_p.split("x", 1))
+    assert pw * ph >= 3_686_400
+    # 官方 2K 9:16 / 分镜画布：不得被错误压扁
+    assert _seedream_gen_size(1600, 2848) == "1600x2848"
+    assert _seedream_gen_size(1440, 2560) == "1440x2560"
 
 
 def test_assert_hq_image_ready_missing_lock(monkeypatch):

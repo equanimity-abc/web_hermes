@@ -37,7 +37,8 @@ _PROVIDER_LANE: dict[str, str] = {
 
 
 def shot_concurrency() -> int:
-    return max(1, int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 8) or 8))
+    """Max concurrent shots. Default 1 = fully serial (one shot after another)."""
+    return max(1, int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 1) or 1))
 
 
 def lane_for_provider(provider_id: str) -> str:

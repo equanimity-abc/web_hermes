@@ -25,6 +25,107 @@ def _ark_base() -> str:
     ).rstrip("/")
 
 
+def _is_agent_plan() -> bool:
+    """Agent Plan 使用 /api/plan/v3；与按量 /api/v3 权益不同。"""
+    return "/api/plan/" in _ark_base().lower()
+
+
+def _resolve_seedream_model(raw: str | None = None) -> str:
+    """Normalize Seedream IDs. Agent Plan 仅支持 5.0 lite（不含 pro）。"""
+    model = str(
+        raw or getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-lite-260128"
+    ).strip()
+    aliases = {
+        "doubao-seedream-5.0-lite": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5.0": "doubao-seedream-5-0-lite-260128",
+        "seedream-5.0": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5-0": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5-0-260128": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5.0-pro": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5-0-pro": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5-0-pro-260628": "doubao-seedream-5-0-lite-260128",
+    }
+    resolved = aliases.get(model, model) or "doubao-seedream-5-0-lite-260128"
+    if _is_agent_plan() and "pro" in resolved.lower() and "seedream" in resolved.lower():
+        log.warning(
+            "Agent Plan 不支持 Seedream Pro（%s）→ 改用 doubao-seedream-5-0-lite-260128",
+            resolved,
+        )
+        return "doubao-seedream-5-0-lite-260128"
+    return resolved
+
+
+def resolve_ark_text_model(raw: str | None = None) -> str:
+    """Normalize chat model for Ark. Agent Plan 不含 Seed Character。"""
+    model = str(
+        raw or getattr(config, "ARK_TEXT_MODEL", "") or "glm-5-2-260617"
+    ).strip()
+    aliases = {
+        "doubao-seed-2.0-lite": "doubao-seed-2-0-lite-260215",
+        "doubao-seed-2-0-lite": "doubao-seed-2-0-lite-260215",
+        "doubao-seed-2.0-pro": "doubao-seed-2-0-pro-260215",
+        "doubao-seed-2-0-pro": "doubao-seed-2-0-pro-260215",
+        "doubao-seed-2.0-mini": "doubao-seed-2-0-mini-260215",
+        "doubao-seed-2-0-mini": "doubao-seed-2-0-mini-260215",
+        "glm-5.2": "glm-5-2-260617",
+        "glm-5-2": "glm-5-2-260617",
+    }
+    model = aliases.get(model, model)
+    if not _is_agent_plan():
+        return model or "doubao-seed-character-260628"
+    # Agent Plan 文本：Seed Character / 旧角色模型不可用
+    low = model.lower()
+    if "seed-character" in low or "character-250" in low or "character-260" in low:
+        alt = str(getattr(config, "ARK_TEXT_MODEL_ALT", "") or "").strip() or "glm-5-2-260617"
+        alt = aliases.get(alt, alt)
+        log.warning(
+            "Agent Plan 不支持文本模型 %s → 改用 %s（可在 .env 设 ARK_TEXT_MODEL）",
+            model,
+            alt,
+        )
+        return alt
+    return model or "glm-5-2-260617"
+
+
+def _resolve_seedance_model(raw: str | None = None) -> str:
+    """Normalize Seedance marketing names → official dated API model IDs.
+
+    Tier note (Agent Plan): Medium 不含 Seedance 2.0；Large/Max 可用 2.0 / 2.0-fast。
+    不在此按套餐降级——由 ``ARK_VIDEO_MODEL`` 显式配置。
+    """
+    model = str(
+        raw or getattr(config, "ARK_VIDEO_MODEL", "") or "doubao-seedance-2-0-260128"
+    ).strip()
+    aliases = {
+        "doubao-seedance-2.0": "doubao-seedance-2-0-260128",
+        "doubao-seedance-2-0": "doubao-seedance-2-0-260128",
+        "seedance-2.0": "doubao-seedance-2-0-260128",
+        "doubao-seedance-2.0-fast": "doubao-seedance-2-0-fast-260128",
+        "doubao-seedance-2-0-fast": "doubao-seedance-2-0-fast-260128",
+        "seedance-2.0-fast": "doubao-seedance-2-0-fast-260128",
+        "doubao-seedance-1.5-pro": "doubao-seedance-1-5-pro-251215",
+        "doubao-seedance-1-5-pro": "doubao-seedance-1-5-pro-251215",
+        "seedance-1.5-pro": "doubao-seedance-1-5-pro-251215",
+    }
+    return aliases.get(model, model) or "doubao-seedance-2-0-260128"
+
+
+def format_ark_http_error(status: int, body: str, *, model: str = "") -> str:
+    """Human-readable Ark HTTP error; specially handle UnsupportedModel on Agent Plan."""
+    detail = str(body or "")[:400]
+    if "UnsupportedModel" in detail or "does not support the agent plan" in detail.lower():
+        hint = (
+            "当前 ARK_BASE_URL 是 Agent Plan（/api/plan/v3），该模型不在套餐内。"
+            "文本请用 glm-5-2-260617 或 doubao-seed-2-0-lite-260215；"
+            "出图请用 doubao-seedream-5-0-lite-260128（不要用 pro）；"
+            "视频 Seedance 2.0 需 Large/Max，Medium 请改 doubao-seedance-1-5-pro-251215。"
+        )
+        if model:
+            return f"模型 {model} 不支持 Agent Plan。{hint} 原始：{detail[:180]}"
+        return f"模型不支持 Agent Plan。{hint} 原始：{detail[:180]}"
+    return f"HTTP {status}: {detail[:240]}"
+
+
 def _ark_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {_ark_key()}",
@@ -104,7 +205,99 @@ def _seedance_duration(seconds: float | int | None) -> int:
     except (TypeError, ValueError):
         raw = 5.0
     sec = int(round(raw)) if raw > 0 else 5
-    return max(4, min(sec, 12))
+    return max(4, min(sec, 15))
+
+
+def _audio_path_to_data_uri(path: Path, *, max_bytes: int = 14 * 1024 * 1024) -> str | None:
+    """本地 TTS → Seedance ``audio_url`` data URI（mp3/wav，单段 ≤15MB）。"""
+    import base64
+
+    if not path.is_file():
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size < 64 or size > max_bytes:
+        return None
+    suffix = path.suffix.lower()
+    mime = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+    }.get(suffix)
+    if not mime:
+        return None
+    try:
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError as e:
+        log.warning("ark audio encode failed (%s): %s", path, e)
+        return None
+    return f"data:{mime};base64,{b64}"
+
+
+def _shot_voice_path(shot: Any) -> Path | None:
+    """Resolve shot assets.voice to a local file, if present."""
+    if not isinstance(shot, dict):
+        return None
+    rel = str((shot.get("assets") or {}).get("voice") or "").strip()
+    if not rel:
+        return None
+    try:
+        from tools.workspace import resolve_safe
+
+        path = resolve_safe(rel)
+    except Exception:
+        return None
+    if path.is_file() and path.stat().st_size > 64:
+        return path
+    return None
+
+
+def _manual_voice_enabled(shot: Any) -> bool:
+    """仅「手动配音」开启时才挂 TTS reference_audio；默认走 Seedance 自带声。"""
+    if not isinstance(shot, dict):
+        return False
+    if "manual_voice" in shot:
+        return bool(shot.get("manual_voice"))
+    slug = str(shot.get("_slug") or "").strip()
+    if not slug:
+        return False
+    try:
+        from tools.drama_studio import project_manual_voice
+
+        return bool(project_manual_voice(slug))
+    except Exception:
+        return False
+
+
+def _seedance_want_ref_audio(shot: Any) -> bool:
+    """手动配音 + 对白镜：把 TTS 作为 Seedance reference_audio，驱动口型/节奏。"""
+    if not isinstance(shot, dict):
+        return False
+    if not _manual_voice_enabled(shot):
+        return False
+    if _shot_voice_path(shot) is None:
+        return False
+    dialogue = str(shot.get("字幕") or shot.get("对白") or "").strip()
+    if dialogue:
+        return True
+    try:
+        from tools.drama_models import infer_kind
+
+        return infer_kind(shot) in ("dialogue", "reaction")
+    except Exception:
+        return False
+
+
+def _probe_voice_seconds(path: Path) -> float:
+    try:
+        from tools.drama_video import _probe_duration
+
+        return float(_probe_duration(path) or 0)
+    except Exception:
+        return 0.0
 
 
 def _seedream_image_payload(refs: tuple[str, ...]) -> str | list[str] | None:
@@ -176,16 +369,18 @@ def _prompt_with_identity_refs(
 
 
 def _seedream_gen_size(width: int, height: int) -> str:
-    """Map canvas to Seedream 5.0 Pro-safe ``size`` (named tier or WxH).
+    """Map canvas to Seedream ``size`` (WxH string).
 
-    Pro total-pixel range is roughly ``[921600, 4624220]`` with aspect in
-    ``[1/16, 16]``. Raw ``1980x3520`` (9:16 @1980) exceeds the ceiling and
-    the API rejects the request — clamp while preserving aspect.
+    Seedream **5.0 lite**（Agent Plan 默认）：
+      总像素 ∈ [3_686_400, ~10_404_496]，宽高比 ∈ [1/16, 16]
+    过小的 1024² / 1080×1920 会被抬升；过大则等比缩小。
+    方形统一落到 ``2048x2048``（官方 2K 1:1，且稳过下限）。
     """
-    w = max(64, int(width or 1024))
-    h = max(64, int(height or 1024))
-    max_px = 4_624_220
-    min_px = 921_600
+    w = max(64, int(width or 2048))
+    h = max(64, int(height or 2048))
+    # lite 上限约 3072²×1.1025；勿用过紧的 4.6M（会错误压扁 1600×2848 / 1620×2880）
+    max_px = 10_404_496
+    min_px = 3_686_400  # API: image size must be at least 3686400 pixels
     pixels = w * h
     if pixels > max_px:
         scale = (max_px / float(pixels)) ** 0.5
@@ -197,12 +392,18 @@ def _seedream_gen_size(width: int, height: int) -> str:
         h = max(64, int(h * scale))
     w = max(64, (w // 8) * 8)
     h = max(64, (h // 8) * 8)
+    # 对齐后可能再次略低于下限
+    if w * h < min_px:
+        scale = (min_px / float(max(1, w * h))) ** 0.5
+        w = max(64, int(w * scale))
+        h = max(64, int(h * scale))
+        w = max(64, (w // 8) * 8)
+        h = max(64, (h // 8) * 8)
+        while w * h < min_px:
+            w += 8
+            h += 8
     if abs(w - h) <= 16:
-        side = max(w, h)
-        if side <= 1280:
-            return "1024x1024"
-        if side <= 1600:
-            return "1536x1536"
+        # 方形：禁止再回落到 1024/1536（低于 API 下限）
         return "2048x2048"
     return f"{w}x{h}"
 
@@ -239,10 +440,21 @@ def _ark_image(
 
     from PIL import Image
 
-    model = str(getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-pro-260628").strip()
-    # Prefer portrait for drama; clamp into Seedream Pro pixel budget.
-    w = int(width or 1080)
-    h = int(height or 1920)
+    # Model：shot 路由 → env；统一经 _resolve_seedream_model（Agent Plan 禁 pro）
+    model = ""
+    if isinstance(shot, dict):
+        model = str(
+            shot.get("_image_model")
+            or shot.get("ref_image_model")
+            or shot.get("image_model")
+            or ""
+        ).strip()
+    if not model:
+        model = str(getattr(config, "ARK_IMAGE_MODEL", "") or "").strip()
+    model = _resolve_seedream_model(model)
+    # Prefer portrait for drama; clamp into Seedream pixel budget.
+    w = int(width or 1440)
+    h = int(height or 2560)
     size = _seedream_gen_size(w, h) if w and h else "2048x2048"
 
     image_payload = _seedream_image_payload(tuple(refs or ()))
@@ -331,6 +543,27 @@ def _ark_image(
                 headers=_ark_headers(),
                 json=body,
             )
+            if resp.status_code >= 400:
+                detail = format_ark_http_error(resp.status_code, resp.text or "", model=model)
+                log.warning("ark image %s", detail)
+                if isinstance(shot, dict):
+                    shot["_image_error"] = f"Seedream {detail[:280]}"
+                if slug:
+                    try:
+                        from tools.drama_observability import append_cost_log
+
+                        append_cost_log(
+                            slug,
+                            capability="image",
+                            provider="ark",
+                            model=model,
+                            cost=0.0,
+                            ok=False,
+                            detail=f"HTTP {resp.status_code}: {detail[:160]}",
+                        )
+                    except Exception:
+                        pass
+                return False
             resp.raise_for_status()
             data = resp.json()
             items = data.get("data") or []
@@ -358,8 +591,8 @@ def _ark_image(
             from tools.providers.image_providers import _is_character_ref_shot, _save_provider_image
 
             img = Image.open(dest).convert("RGB")
-            tw = int(width or 1620)
-            th = int(height or 2880)
+            tw = int(width or 1600)
+            th = int(height or 2848)
             _save_provider_image(img, dest, shot=shot, target_w=tw, target_h=th)
             ok = dest.is_file() and dest.stat().st_size > 0
             if ok and slug:
@@ -427,7 +660,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
 
     from tools.drama_i2v import _motion_prompt
 
-    model = str(getattr(config, "ARK_VIDEO_MODEL", "") or "doubao-seedance-2-5-260628").strip()
+    model = _resolve_seedance_model(getattr(config, "ARK_VIDEO_MODEL", ""))
     prompt = _motion_prompt(shot)
     scene_path = Path(scene)
     if not scene_path.is_file():
@@ -443,42 +676,87 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         return "none"
     duration = _seedance_duration(seconds)
 
+    # 默认：Seedance generate_audio 自带声（人声/音效）。
+    # 手动配音：先 TTS，再挂 reference_audio，并关闭模型出声，成片 mux TTS。
+    used_ref_audio = False
+    voice_path = _shot_voice_path(shot) if _seedance_want_ref_audio(shot) else None
+    audio_url = _audio_path_to_data_uri(voice_path) if voice_path is not None else None
+    if audio_url and voice_path is not None:
+        voice_sec = _probe_voice_seconds(voice_path)
+        # API：单段参考音频约 2–15s；过短则不强挂，避免 InvalidParameter。
+        if 1.8 <= voice_sec <= 15.5 or voice_sec <= 0:
+            if voice_sec > 0:
+                duration = _seedance_duration(max(float(seconds or 0), voice_sec))
+            prompt = (
+                f"{prompt}。角色按参考音频说话，口型与语音节奏精准同步，自然张合，"
+                "不要额外旁白字幕。"
+            )
+            used_ref_audio = True
+        else:
+            audio_url = None
+            log.info(
+                "ark i2v skip reference_audio: voice_sec=%.2f out of 2–15s window",
+                voice_sec,
+            )
+
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": prompt},
+        {
+            "type": "image_url",
+            "image_url": {"url": image_url},
+            "role": "first_frame",
+        },
+    ]
+    if used_ref_audio and audio_url:
+        content.append(
+            {
+                "type": "audio_url",
+                "audio_url": {"url": audio_url},
+                "role": "reference_audio",
+            }
+        )
+
+    # 挂了参考音频则关模型出声，避免双音轨；否则默认开原生音频。
+    gen_audio = not used_ref_audio
     body = {
         "model": model,
-        "content": [
-            {"type": "text", "text": prompt},
-            {
-                "type": "image_url",
-                "image_url": {"url": image_url},
-                "role": "first_frame",
-            },
-        ],
+        "content": content,
         "duration": duration,
         # Seedance 2.5 首帧/首尾帧任务强制 ratio=adaptive，传 9:16 会 400。
         "ratio": "adaptive",
-        "generate_audio": False,
+        "generate_audio": gen_audio,
     }
+    if isinstance(shot, dict):
+        shot["i2v_audio_ref"] = bool(used_ref_audio)
+        shot["i2v_generate_audio"] = bool(gen_audio)
+        shot["manual_voice"] = bool(_manual_voice_enabled(shot))
 
     def _remember_error(msg: str) -> None:
         if isinstance(shot, dict):
             shot["i2v_error"] = str(msg or "")[:240]
-
-    def _format_http_error(resp: httpx.Response) -> str:
-        text = (resp.text or "").strip()
         try:
-            data = resp.json()
-            err = data.get("error") if isinstance(data, dict) else None
-            if isinstance(err, dict):
-                code = err.get("code") or err.get("type") or ""
-                message = err.get("message") or err.get("msg") or ""
-                detail = f"{code}: {message}".strip(": ").strip()
-                if detail:
-                    return f"HTTP {resp.status_code}: {detail}"[:240]
-            if isinstance(data, dict) and data.get("message"):
-                return f"HTTP {resp.status_code}: {data.get('message')}"[:240]
+            from tools.drama_observability import append_cost_log, estimate_provider_cost
+
+            slug = str((shot or {}).get("_slug") or "") if isinstance(shot, dict) else ""
+            ep = int((shot or {}).get("_episode") or 0) if isinstance(shot, dict) else 0
+            sn = int((shot or {}).get("n") or 0) if isinstance(shot, dict) else 0
+            if slug:
+                append_cost_log(
+                    slug,
+                    capability="i2v",
+                    provider="ark",
+                    model=model,
+                    cost=0.0,
+                    shot=sn or None,
+                    episode=ep or None,
+                    ok=False,
+                    detail=str(msg or "")[:400],
+                )
         except Exception:
             pass
-        return f"HTTP {resp.status_code}: {text[:200]}"
+
+    def _format_http_error(resp: httpx.Response) -> str:
+        return format_ark_http_error(resp.status_code, resp.text or "", model=model)
 
     try:
         with httpx.Client(timeout=300.0, follow_redirects=True) as client:
@@ -488,8 +766,8 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 json=body,
             )
             if submit.status_code >= 400:
-                _remember_error(_format_http_error(submit))
-                log.warning("ark i2v submit failed: %s", submit.text[:500])
+                _remember_error(f"model={model}; {_format_http_error(submit)}")
+                log.warning("ark i2v submit failed model=%s: %s", model, submit.text[:500])
                 return "none"
             job = submit.json()
             task_id = str(job.get("id") or job.get("task_id") or "").strip()
@@ -503,6 +781,8 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 if video_url and _download(video_url, Path(dest)):
                     if isinstance(shot, dict):
                         shot.pop("i2v_error", None)
+                        if used_ref_audio or gen_audio:
+                            shot["seedance_lip"] = True
                     return "ai"
                 log.warning("ark i2v no task id: %s", job)
                 _remember_error("no_task_id")
@@ -546,6 +826,8 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                     if video_url and _download(str(video_url), Path(dest)):
                         if isinstance(shot, dict):
                             shot.pop("i2v_error", None)
+                            if used_ref_audio or gen_audio:
+                                shot["seedance_lip"] = True
                         try:
                             from tools.drama_observability import append_cost_log, estimate_provider_cost
 
@@ -562,6 +844,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                                     shot=sn or None,
                                     episode=ep or None,
                                     ok=True,
+                                    detail="seedance_ref_audio" if used_ref_audio else "",
                                 )
                         except Exception:
                             pass

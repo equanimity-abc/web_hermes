@@ -1,4 +1,6 @@
 <script setup>
+import { computed } from 'vue'
+
 const props = defineProps({
   item: {
     type: Object,
@@ -7,6 +9,20 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['open-drama'])
+
+const isImage = computed(() => {
+  const t = String(props.item?.type || '').toLowerCase()
+  if (t === 'image' || t === 'img' || t === 'scene') return true
+  const url = String(props.item?.url || '')
+  return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url)
+})
+
+const isAudio = computed(() => {
+  const t = String(props.item?.type || '').toLowerCase()
+  if (t === 'audio' || t === 'voice') return true
+  const url = String(props.item?.url || '')
+  return /\.(mp3|wav|m4a|aac)(\?|$)/i.test(url)
+})
 
 function onOpen() {
   emit('open-drama', {
@@ -17,15 +33,30 @@ function onOpen() {
 </script>
 
 <template>
-  <div class="drama-video-card">
+  <div class="drama-video-card" :class="{ 'is-fail-preview': item.failPreview }">
     <div class="drama-video-card-head">
-      <strong>{{ item.title || '漫剧成片' }}</strong>
+      <strong>{{ item.title || (isImage ? '失败画面' : isAudio ? '失败音频' : '失败视频') }}</strong>
       <span v-if="item.slug" class="drama-video-card-meta">
         {{ item.slug }}
         <template v-if="item.episode != null"> · EP{{ String(item.episode).padStart(2, '0') }}</template>
+        <template v-if="item.shot != null"> · Shot {{ item.shot }}</template>
       </span>
     </div>
+    <img
+      v-if="isImage"
+      class="drama-video-card-player drama-video-card-image"
+      :src="item.url"
+      :alt="item.title || '失败画面'"
+    />
+    <audio
+      v-else-if="isAudio"
+      class="drama-video-card-audio"
+      controls
+      preload="metadata"
+      :src="item.url"
+    />
     <video
+      v-else
       class="drama-video-card-player"
       controls
       preload="metadata"

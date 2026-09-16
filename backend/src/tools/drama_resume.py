@@ -89,9 +89,25 @@ def classify_failure(error: str) -> dict[str, Any]:
         }
 
     if _hit(
+        "outputvideosensitive",
+        "outputimagesensitive",
+        "OutputVideoSensitiveContentDetected",
+        "OutputImageSensitiveContentDetected",
+    ):
+        return {
+            "stage": "i2v",
+            "dirty": ["motion", "clip"],
+            "resume_from": "motion",
+            "hint": "输出侧审核拦截（与输入是否动漫无关）：保留画面与配音，改运镜描述后重做运动；反复触发再考虑微调画面",
+        }
+
+    if _hit(
         "sensitive",
         "real person",
         "privacyinformation",
+        "inputimagesensitive",
+        "inputvideosensitive",
+        "疑似真人",
         "真人",
         "敏感",
     ):
@@ -99,7 +115,7 @@ def classify_failure(error: str) -> dict[str, Any]:
             "stage": "scene",
             "dirty": ["scene", "overlay", "motion", "clip"],
             "resume_from": "scene",
-            "hint": "画面触发敏感/真人检测，需改分镜描述或换图后再续跑",
+            "hint": "输入侧敏感/真人检测：需改分镜描述或换图后再续跑",
         }
 
     if _hit("身份", "identity", "cosine", "人脸", "定妆", "arcface", "no_face", "unmatched"):
@@ -110,12 +126,12 @@ def classify_failure(error: str) -> dict[str, Any]:
             "hint": "身份未过：重做画面（不重配音）；改 look/构图后再续跑",
         }
 
-    if _hit("闪烁", "flicker", "ssim"):
+    if _hit("闪烁", "flicker", "ssim", "相邻帧相似度", "画面抖动"):
         return {
             "stage": "flicker",
             "dirty": ["motion", "clip"],
             "resume_from": "motion",
-            "hint": "闪烁未过：只重做运动/成片，保留画面与配音",
+            "hint": "画面抖动未过：只重做视频/成片，保留画面与配音",
         }
 
     if _hit("口型", "lip", "pixverse", "latentsync", "musetalk", "wav2lip"):

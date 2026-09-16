@@ -89,13 +89,17 @@ def llm_endpoint(provider: str | None = None) -> dict[str, str]:
             "chat_path": "/chat/completions",
         }
     if name in ("ark", "volcengine", "火山", "doubao"):
+        from tools.providers.ark_providers import resolve_ark_text_model
+
         return {
             "provider": "ark",
             "api_key": str(getattr(config, "ARK_API_KEY", "") or "").strip(),
             "base_url": str(
                 getattr(config, "ARK_BASE_URL", "") or "https://ark.cn-beijing.volces.com/api/v3"
             ).rstrip("/"),
-            "model": str(getattr(config, "ARK_TEXT_MODEL", "") or "doubao-seed-character-260628").strip(),
+            "model": resolve_ark_text_model(
+                str(getattr(config, "ARK_TEXT_MODEL", "") or "").strip() or None
+            ),
             "chat_path": "/chat/completions",
         }
     # deepseek default
@@ -191,8 +195,13 @@ class LLMClient:
         model: str | None = None,
         provider: str = "deepseek",
     ) -> dict:
+        chosen = (model or "").strip() or llm_endpoint(provider)["model"]
+        if provider == "ark":
+            from tools.providers.ark_providers import resolve_ark_text_model
+
+            chosen = resolve_ark_text_model(chosen)
         body: dict[str, Any] = {
-            "model": (model or "").strip() or llm_endpoint(provider)["model"],
+            "model": chosen,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,

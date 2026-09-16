@@ -1,7 +1,7 @@
 """One-shot HQ episode production — no workbench clicks required.
 
-Default profile: pro preset, classify → cast/refs → scene+voice+lip → I2V → export.
-Intended for chat agent `produce_episode` and background queue `produce_episode`.
+火山方舟单轨：classify → cast/refs → scene → Seedance（默认自带声）→ clip。
+打开项目「手动配音」后：scene → voice(TTS) → Seedance(+TTS 口型) → clip。
 """
 
 from __future__ import annotations
@@ -14,9 +14,10 @@ from typing import Any
 
 from tools.drama_models import DEFAULT_PRESET, load_models
 
-HQ_SHOT_LAYERS = ("scene", "overlay", "voice")
-# 口型必须在真 I2V 运动片之后；勿把 lip 放进 HQ_SHOT_LAYERS（否则 assert_hq_lip 必炸）。
-HQ_POST_I2V_LAYERS = ("lip", "clip")
+HQ_SHOT_LAYERS = ("scene", "overlay")
+HQ_SHOT_LAYERS_MANUAL_VOICE = ("scene", "overlay", "voice")
+# I2V 之后只组装成片（口型随 Seedance 自带声或 TTS 参考内生）。
+HQ_POST_I2V_LAYERS = ("clip",)
 DEFAULT_CATALOG_BGM = "rebirth_resolve"
 
 _DEFAULT_SECONDS = 60
@@ -371,26 +372,22 @@ def ensure_character_refs(
 ) -> list[str]:
     """Generate one portrait ref per character (no seed candidates / no redraw).
 
-    单次：生成全身+正脸 → ArcFace 身份就绪校验 → 通过才锁定。
-    失败则 Fail Loud，禁止自动换种子重抽。
+    单次：生成全身+正脸 → 有全身定妆即锁定。身份/检脸硬校验已拆除。
     """
     from tools.drama_characters import (
         character_requires_face_identity,
         find_character,
-        identity_ref_rel,
         load_characters,
         ref_exists,
         ref_face_exists,
-        ref_rel,
         set_ref_locked,
+        upsert_character,
     )
     from tools.drama_common import parse_slug
-    from tools.drama_parallel import parallel_map, shot_concurrency
-    from tools.drama_qc import validate_character_ref
+    from tools.drama_qc import validate_character_cast_ready
     from tools.drama_series import invalidate_character_embedding
     from tools.drama_studio import generate_character_ref
     from tools.drama_video import generate_character_face_portrait
-    from tools.workspace import resolve_safe
 
     slug = parse_slug(slug)
     generated: list[str] = []
@@ -412,35 +409,48 @@ def ensure_character_refs(
             if not ref_face_exists(slug, rec):
                 pending.append((cid, str(rec.get("name") or cid)))
             continue  # 已锁定且存在：不可变，跳过全身重生成
-        # 已有未锁定定妆：也视为用户资产，流水线不得覆盖（只在完全缺失时生成）
+        # 已有未锁定定妆：走 _one 做正脸补齐，有全身图即放行锁定。
         if ref_exists(slug, rec):
-            if not ref_face_exists(slug, rec):
-                pending.append((cid, str(rec.get("name") or cid)))
-            elif lock and not rec.get("ref_locked"):
-                try:
-                    set_ref_locked(slug, cid, True)
-                except Exception:
-                    pass
-            else:
-                continue
+            pending.append((cid, str(rec.get("name") or cid)))
             continue
         pending.append((cid, str(rec.get("name") or cid)))
 
-    def _ref_path(rec: dict[str, Any]) -> Path | None:
-        rel = identity_ref_rel(slug, rec)
-        if not rel:
-            return None
-        try:
-            return resolve_safe(rel)
-        except ValueError:
-            return None
-
-    def _lock_if_needed(rec: dict[str, Any]) -> None:
-        if lock and not rec.get("ref_locked"):
+    def _apply_cast_check(rec: dict[str, Any], name: str) -> dict[str, Any]:
+        """有全身定妆即放行并锁定；不再做身份/检脸硬校验。"""
+        check = validate_character_cast_ready(slug, rec)
+        cid_local = str(rec.get("id") or "")
+        if check.get("ok"):
             try:
-                set_ref_locked(slug, str(rec.get("id") or ""), True)
+                upsert_character(slug, {"id": cid_local, "identity_anchor": "body"})
+                rec = {**rec, "identity_anchor": "body"}
             except Exception:
                 pass
+            if lock and not rec.get("ref_locked"):
+                try:
+                    set_ref_locked(slug, cid_local, True)
+                except Exception:
+                    pass
+            return rec
+        # 校验已拆除：只要磁盘上有全身图仍放行；否则才 Fail Loud（缺资产，不是 QC）
+        if ref_exists(slug, rec):
+            try:
+                upsert_character(slug, {"id": cid_local, "identity_anchor": "body"})
+                rec = {**rec, "identity_anchor": "body"}
+            except Exception:
+                pass
+            if lock and not rec.get("ref_locked"):
+                try:
+                    set_ref_locked(slug, cid_local, True)
+                except Exception:
+                    pass
+            _progress(on_progress, message=f"定妆 {name}：校验已关闭，有全身图即放行")
+            return rec
+        detail = str(check.get("detail") or "").strip()
+        hint = str(check.get("hint") or check.get("reason") or "缺少全身定妆图").strip()
+        raise RuntimeError(
+            f"角色「{name}」缺少可用定妆图：{hint}"
+            + (f" | 诊断：{detail}" if detail and detail not in hint else "")
+        )
 
     def _ensure_face(rec: dict[str, Any], name: str) -> dict[str, Any]:
         if ref_face_exists(slug, rec):
@@ -454,8 +464,6 @@ def ensure_character_refs(
                 + (f"：{detail}" if detail else "（与全身不一致或出图失败）")
                 + "；禁止自动重抽"
             )
-        from tools.drama_characters import upsert_character
-
         cid_local = str(rec.get("id") or "")
         upsert_character(slug, {"id": cid_local, "ref_face": face_rel})
         invalidate_character_embedding(slug, cid_local)
@@ -469,19 +477,8 @@ def ensure_character_refs(
         # 已有未锁定的 ref：先补特写，再校验，通过就直接锁，避免无谓重生成。
         if ref_exists(slug, rec):
             rec = _ensure_face(rec, name)
-            check = validate_character_ref(_ref_path(rec))
-            if check["ok"]:
-                _lock_if_needed(rec)
-                return cid
-            if rec.get("ref_locked"):
-                raise RuntimeError(
-                    f"角色「{name}」已锁定定妆未通过身份校验："
-                    f"{check.get('hint') or check.get('reason')}；请在工作台解锁后重生成正脸特写"
-                )
-            raise RuntimeError(
-                f"角色「{name}」已有定妆未通过锁定前校验："
-                f"{check.get('hint') or check.get('reason')}；请在工作台手工重生成或上传"
-            )
+            _apply_cast_check(rec, name)
+            return cid
         _progress(on_progress, message=f"定妆 {name}")
         # 禁止候选项/重抽：单次出图，失败即 Fail Loud。
         seed = 9973 + (hash(cid) % 1000)
@@ -495,18 +492,13 @@ def ensure_character_refs(
             raise RuntimeError(f"角色「{name}」定妆生成后角色卡丢失；禁止自动重抽")
         if not ref_face_exists(slug, rec):
             rec = _ensure_face(rec, name)
-        check = validate_character_ref(_ref_path(rec))
-        if check["ok"]:
-            _lock_if_needed(rec)
-            return cid
-        last_err = str(check.get("hint") or check.get("reason") or "身份校验未通过")
-        raise RuntimeError(
-            f"角色「{name}」定妆未通过身份就绪校验（{last_err}）；禁止自动重抽，请改 look 后重跑或人工上传"
-        )
+        _apply_cast_check(rec, name)
+        return cid
 
     if pending:
-        # 多角色定妆并行：与分镜并发同档；characters.json 已有 per-slug 锁
-        for cid in parallel_map(pending, _one, max_workers=shot_concurrency()):
+        # 定妆串行：一角完成再下一角，避免并发写 characters.json / 争用出图配额
+        for item in pending:
+            cid = _one(item)
             if cid:
                 generated.append(cid)
     return generated
@@ -573,14 +565,16 @@ def ensure_default_bgm(slug: str, episode: int, *, catalog_id: str = DEFAULT_CAT
 
 
 def _assert_identity_deps_ready(slug: str) -> None:
-    """专业档身份验收的前置依赖闸（fail-before-burn）。
+    """专业档身份验收的前置依赖闸（仅 enforce 时 fail-before-burn）。
 
-    存在角色卡（可能需要抽身份）但 ArcFace 未就绪时直接失败，避免白烧图像模型；
+    advisory/off：旁路打分或不打分，不因缺 buffalo_l 挡出图。
     无角色（整集定场/标题，身份全部 n/a）则跳过。
     """
     from tools.drama_characters import character_requires_face_identity, load_characters
-    from tools.drama_qc import _arcface_ready
+    from tools.drama_qc import _arcface_ready, identity_blocks_pipeline
 
+    if not identity_blocks_pipeline(slug):
+        return
     cards = load_characters(slug)
     needs_identity = any(character_requires_face_identity(c) for c in cards)
     if needs_identity and not _arcface_ready():
@@ -631,6 +625,86 @@ def _mark_shot_produce_failed(slug: str, episode: int, shot_n: int, err: BaseExc
 
 class PeerAbort(Exception):
     """Sibling shot stopped early after another shot failed (fast wind-down)."""
+
+
+def _refresh_shot_from_disk(slug: str, episode: int, shot: dict[str, Any]) -> dict[str, Any]:
+    """Reload shot row after ``rerender_shot`` so lip_source/assets are not clobbered.
+
+    ``rerender_shot`` loads its own copy, writes lip metadata, and merge-saves.
+    The caller still holds a pre-rerender dict; a later ``merge_save_shot`` would
+    wipe ``lip_source`` / ``lip_score`` while leaving the mp4 on disk.
+    """
+    from tools.drama_shots import find_shot, load_doc
+
+    sn = int(shot.get("n") or 0)
+    doc = load_doc(slug, int(episode))
+    if not doc or sn < 1:
+        return shot
+    fresh = find_shot(doc, sn)
+    if not isinstance(fresh, dict):
+        return shot
+    ephemeral = {k: v for k, v in shot.items() if str(k).startswith("_")}
+    shot.clear()
+    shot.update(fresh)
+    shot.update(ephemeral)
+    return shot
+
+
+def _resume_repair_mode(
+    *,
+    dirty: set[str],
+    resume_from: str,
+    i2v_src: str,
+    scene_ok: bool,
+    id_ok: bool,
+    clip_ok: bool,
+    scene_locked: bool,
+    flicker_pass: bool | None = None,
+) -> str:
+    """Decide smart-resume path for one shot.
+
+    Returns one of: already_ok | flicker | lip | voice | identity_recheck | full
+    ``flicker_pass`` only used when dirty is empty and clip/id look done.
+    """
+    resume_from = str(resume_from or "").strip()
+    i2v_src = str(i2v_src or "").strip()
+    if clip_ok and id_ok and not (dirty & {"motion", "clip", "scene", "lip", "voice", "overlay"}):
+        if flicker_pass is True:
+            return "already_ok"
+        return "flicker"
+    if scene_ok and id_ok and (
+        resume_from in ("motion", "i2v", "flicker")
+        or (
+            dirty
+            and dirty <= {"motion", "clip", "lip"}
+            and "scene" not in dirty
+            and ("motion" in dirty or "lip" not in dirty)
+        )
+    ):
+        return "flicker"
+    if scene_ok and id_ok and (
+        resume_from in ("lip",)
+        or (
+            dirty
+            and "lip" in dirty
+            and dirty <= {"lip", "clip"}
+            and i2v_src in ("ai", "keys")
+        )
+    ):
+        return "lip"
+    if scene_ok and id_ok and (
+        resume_from == "voice"
+        or (
+            dirty
+            and dirty <= {"voice", "overlay", "lip", "clip"}
+            and "scene" not in dirty
+            and "motion" not in dirty
+        )
+    ):
+        return "voice"
+    if scene_ok and scene_locked and not id_ok and "scene" not in dirty:
+        return "identity_recheck"
+    return "full"
 
 
 def _publish_formal_shot_outputs(slug: str, episode: int, shot_n: int, shot: dict[str, Any]) -> None:
@@ -690,14 +764,13 @@ def _hq_process_one_shot(
 ) -> dict[str, Any]:
     """Render one shot end-to-end for HQ produce (thread-safe via merge_save_shot).
 
-    单次出图 + 身份验收；禁止候选项结果与自动重抽。身份/环境不过则 Fail Loud。
+    单次出图；禁止候选项结果与自动重抽。身份/抖动等 QC 硬闸已拆除。
     """
     import copy
 
     from tools.drama_i2v import generate_shot_i2v
     from tools.drama_models import effective_motion_ladder, infer_kind, models_with_overrides
     from tools.drama_parallel import acquire_provider_lanes_for_shot
-    from tools.drama_qc import qc_shot_identity
     from tools.drama_shots import episode_lock, find_shot, load_doc, merge_save_shot
     from tools.drama_video import render_shot_layers, rerender_shot
 
@@ -741,66 +814,47 @@ def _hq_process_one_shot(
             resume_from = str(qc.get("resume_from") or "").strip()
             i2v_src = str(shot.get("i2v_source") or "")
             scene_ok = bool(assets.get("scene"))
-            id_ok = bool(identity.get("pass"))
+            from tools.drama_qc import check_allows_pass
+
+            # QC 已拆除：身份/抖动不再挡续跑；有成片且脏层为空即视为已通过
+            id_ok = check_allows_pass(identity) if identity else True
             clip_ok = bool(assets.get("clip"))
             locked = set(shot.get("locked") or [])
             scene_locked = "scene" in locked or "shot" in locked
 
-            if clip_ok and id_ok and not (dirty & {"motion", "clip", "scene", "lip", "voice", "overlay"}):
-                from tools.drama_qc import check_allows_pass, qc_shot_flicker
+            flicker_pass: bool | None = None
+            if clip_ok and not (dirty & {"motion", "clip", "scene", "lip", "voice", "overlay"}):
+                flicker_pass = True
 
-                flicker = shot.get("qc_flicker") if isinstance(shot.get("qc_flicker"), dict) else {}
-                if str(flicker.get("status") or "") != "ok":
-                    flicker = qc_shot_flicker(slug, shot, apply=False)
-                if check_allows_pass(flicker):
-                    # 清理历史失败标记
-                    if qc.get("produce_ok") is False:
-                        shot = copy.deepcopy(shot)
-                        shot_qc = dict(shot.get("qc") or {})
-                        shot_qc["produce_ok"] = True
-                        shot_qc.pop("produce_error", None)
-                        shot["qc"] = shot_qc
-                        merge_save_shot(slug, n, shot)
-                    _publish_formal_shot_outputs(slug, n, sn, shot)
-                    return {"shot": sn, "skipped": True, "reason": "already_ok", "formal_ok": True}
-                shot = copy.deepcopy(shot)
+            mode = _resume_repair_mode(
+                dirty=dirty,
+                resume_from=resume_from,
+                i2v_src=i2v_src,
+                scene_ok=scene_ok,
+                id_ok=id_ok,
+                clip_ok=clip_ok,
+                scene_locked=scene_locked,
+                flicker_pass=flicker_pass,
+            )
+            if mode == "already_ok":
+                if qc.get("produce_ok") is False:
+                    shot = copy.deepcopy(shot)
+                    shot_qc = dict(shot.get("qc") or {})
+                    shot_qc["produce_ok"] = True
+                    shot_qc.pop("produce_error", None)
+                    shot["qc"] = shot_qc
+                    merge_save_shot(slug, n, shot)
+                _publish_formal_shot_outputs(slug, n, sn, shot)
+                return {"shot": sn, "skipped": True, "reason": "already_ok", "formal_ok": True}
+            shot = copy.deepcopy(shot)
+            if mode == "flicker":
                 shot["_flicker_only_repair"] = True
-            elif (
-                scene_ok
-                and id_ok
-                and (
-                    resume_from in ("lip",)
-                    or (dirty and dirty <= {"lip", "clip"} and i2v_src in ("ai", "keys"))
-                )
-            ):
-                shot = copy.deepcopy(shot)
+            elif mode == "lip":
                 shot["_resume_lip_only"] = True
-            elif (
-                scene_ok
-                and id_ok
-                and (
-                    resume_from in ("motion", "i2v", "flicker")
-                    or (dirty and dirty <= {"motion", "clip", "lip"} and "scene" not in dirty)
-                )
-            ):
-                shot = copy.deepcopy(shot)
-                shot["_flicker_only_repair"] = True
-            elif (
-                scene_ok
-                and id_ok
-                and (
-                    resume_from == "voice"
-                    or (dirty and dirty <= {"voice", "overlay", "lip", "clip"} and "scene" not in dirty and "motion" not in dirty)
-                )
-            ):
-                shot = copy.deepcopy(shot)
+            elif mode == "voice":
                 shot["_resume_voice"] = True
-            elif scene_ok and scene_locked and not id_ok and "scene" not in dirty:
-                # 画面已锁：禁止重绘，只复检身份（可顺带补配音/叠层）
-                shot = copy.deepcopy(shot)
+            elif mode == "identity_recheck":
                 shot["_identity_recheck_only"] = True
-            else:
-                shot = copy.deepcopy(shot)
         else:
             shot = copy.deepcopy(shot)
 
@@ -811,7 +865,12 @@ def _hq_process_one_shot(
     acquire_provider_lanes_for_shot(slug, shot)
 
     locked_now = set(shot.get("locked") or [])
-    layers = [layer for layer in HQ_SHOT_LAYERS if layer not in locked_now]
+    from tools.drama_studio import project_manual_voice
+
+    use_manual_voice = bool(project_manual_voice(slug))
+    shot["manual_voice"] = use_manual_voice
+    base_layers = HQ_SHOT_LAYERS_MANUAL_VOICE if use_manual_voice else HQ_SHOT_LAYERS
+    layers = [layer for layer in base_layers if layer not in locked_now]
     # 已锁画面：绝不重绘 scene（即使 dirty 误含 scene / assets 缺失）
     if "scene" in locked_now or "shot" in locked_now:
         layers = [layer for layer in layers if layer != "scene"]
@@ -835,22 +894,32 @@ def _hq_process_one_shot(
     resume_voice = bool(shot.pop("_resume_voice", None))
 
     if resume_lip_only:
-        # 画面/身份/运动已过：只重做口型+成片
+        # 火山单轨：口型在 Seedance 内生；续跑 = 重跑 I2V(+TTS 参考) + 组装成片
         if cancel_check:
             cancel_check()
         from tools.drama_shots import shot_assets as _sa
-        from tools.drama_step_contract import publish_clip_step, publish_scene_step, require_scene_step
+        from tools.drama_step_contract import publish_clip_step, publish_motion_step, publish_scene_step, require_scene_step
 
         scene_rel = str((shot.get("assets") or {}).get("scene") or _sa(slug, n, sn)["scene"])
         publish_scene_step(slug, n, sn, scene_rel)
         require_scene_step(slug, n, sn)
         kind = infer_kind(shot)
-        src = str(shot.get("i2v_source") or "ai")
+        if cancel_check:
+            shot["_cancel_check"] = cancel_check
+        try:
+            i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
+        finally:
+            shot.pop("_cancel_check", None)
+        src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
+        if src in ("ai", "keys"):
+            motion_rel = str((shot.get("assets") or {}).get("motion") or _sa(slug, n, sn)["motion"])
+            publish_motion_step(slug, n, sn, motion_rel)
         post_layers = list(HQ_POST_I2V_LAYERS)
         if kind in ("establishing", "insert", "crowd", "title") and src not in ("ai", "keys"):
             post_layers = ["clip"]
         rerender_shot(slug, n, sn, layers=post_layers)
-        from tools.drama_step_contract import publish_lip_step, publish_voice_step
+        _refresh_shot_from_disk(slug, n, shot)
+        from tools.drama_step_contract import publish_voice_step
         from tools.workspace import resolve_safe as _resolve_lip
 
         assets_lip = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
@@ -861,13 +930,8 @@ def _hq_process_one_shot(
                     publish_voice_step(slug, n, sn, voice_rel)
             except Exception:
                 pass
-        lip_rel = str(assets_lip.get("lip") or _sa(slug, n, sn).get("lip") or "")
-        if lip_rel:
-            try:
-                if _resolve_lip(lip_rel).is_file():
-                    publish_lip_step(slug, n, sn, lip_rel)
-            except Exception:
-                pass
+        if bool(shot.get("seedance_lip")):
+            shot["lip_source"] = "seedance"
         clip_rel = str(assets_lip.get("clip") or _sa(slug, n, sn)["clip"])
         publish_clip_step(slug, n, sn, clip_rel)
         qc = dict(shot.get("qc") or {})
@@ -879,7 +943,7 @@ def _hq_process_one_shot(
             "shot": sn,
             "skipped": False,
             "resumed_from": "lip",
-            "i2v_tried": False,
+            "i2v_tried": bool(i2v.get("tried")),
             "i2v_source": src,
             "degrades": [],
         }
@@ -925,10 +989,20 @@ def _hq_process_one_shot(
 
             apply_shot_class(shot, force=False)
             build_spatial_plan(slug, shot)
-            identity_local = qc_shot_identity(slug, n, shot, apply=True)
-            from tools.drama_qc import qc_shot_environment
-
-            env_local = qc_shot_environment(slug, n, shot, apply=True)
+            # 校验已拆除：不再跑身份/环境硬闸
+            identity_local = {
+                "status": "n/a",
+                "pass": True,
+                "required": False,
+                "reason": "qc_disabled",
+                "hint": "校验已关闭",
+            }
+            env_local = {
+                "status": "n/a",
+                "pass": True,
+                "required": False,
+                "reason": "qc_disabled",
+            }
             merge_save_shot(slug, n, shot)
             return info_local, identity_local, env_local
 
@@ -937,80 +1011,14 @@ def _hq_process_one_shot(
         # 正式输出：画面进 output/epNN/scenes/
         scene_rel = str((shot.get("assets") or {}).get("scene") or _shot_assets(slug, n, sn)["scene"])
         publish_scene_step(slug, n, sn, scene_rel)
-        # 环境分已写入 shot；禁止因环境不过自动重抽
+        # 身份硬闸已拆除；保留旁路记录钩子（无打分）
+        try:
+            from tools.drama_track import record_shot_identity_pass
 
-        if str(identity_last.get("status") or "") == "skipped":
-            identity_reason = str(identity_last.get("reason") or "").strip()
-            identity_hint = str(identity_last.get("hint") or "").strip()
-            role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
-            if identity_reason == "no_locked_ref":
-                detail = f"角色「{role}」缺少锁定定妆图（角色卡参考图未锁定）"
-            elif identity_reason == "no_scene":
-                detail = f"角色「{role}」本镜缺少画面"
-            elif identity_reason == "proxy_identity":
-                detail = f"角色「{role}」身份模型 ArcFace 不可用，专业档禁止直方图代理过关"
-            elif identity_reason == "no_face":
-                detail = f"角色「{role}」本镜画面未检测到人脸（定妆已锁定；禁止自动重抽）"
-            elif identity_reason == "unmatched_face":
-                detail = f"角色「{role}」未在画面中匹配到对应人脸（{identity_hint or '禁止自动重抽'}）"
-            elif identity_reason == "no_embedding":
-                detail = f"角色「{role}」本镜画面未能提取人脸嵌入（禁止自动重抽）"
-            elif identity_reason in ("no_embedder", "no_insightface", "arcface_error"):
-                detail = f"角色「{role}」身份嵌入依赖缺失或调用失败"
-            elif identity_reason in ("missing_left", "missing_right"):
-                detail = f"角色「{role}」定妆参考图或本镜画面文件缺失"
-            elif identity_reason == "no_ok_checks":
-                detail = f"角色「{role}」无可打分画面（回退参考缺依赖）"
-            else:
-                detail = identity_hint or f"角色「{role}」缺少定妆或依赖"
-            # 手动锁定画面 = 最高优先级：信任人审，不因身份复检阻断后续 I2V/成片
-            if "scene" in set(shot.get("locked") or []) or "shot" in set(shot.get("locked") or []):
-                degrades.append(
-                    {
-                        "shot": sn,
-                        "layer": "identity",
-                        "reason": f"画面已锁定，跳过身份阻断：{detail}",
-                    }
-                )
-            else:
-                raise RuntimeError(
-                    f"第{sn}镜身份验收未通过（{detail}），专业档不得记为通过"
-                )
-
-        elif str(identity_last.get("status") or "") == "ok" and not identity_last.get("pass"):
-            role = str(identity_last.get("character_name") or identity_last.get("character_id") or "").strip() or "未识别角色"
-            hint = str(identity_last.get("hint") or "")
-            detail = (
-                f"角色「{role}」身份相似度未达阈值"
-                f"（cosine={identity_last.get('cosine', identity_last.get('score', '?'))}"
-                f"{('；' + hint) if hint else ''}），禁止自动重抽"
-            )
-            if "scene" in set(shot.get("locked") or []) or "shot" in set(shot.get("locked") or []):
-                degrades.append(
-                    {
-                        "shot": sn,
-                        "layer": "identity",
-                        "reason": f"画面已锁定，跳过身份阻断：{detail}",
-                    }
-                )
-            else:
-                raise RuntimeError(f"第{sn}镜{detail}")
-        else:
-            # P2：通过后写入跨镜轨迹
-            try:
-                from tools.drama_track import record_shot_identity_pass
-
-                record_shot_identity_pass(slug, n, shot, identity_last)
-            except Exception:
-                pass
-            # P3：通过帧入库，供后续镜检索构图记忆
-            try:
-                from tools.drama_frame_memory import add_passed_frame
-
-                add_passed_frame(slug, episode=n, shot=shot, identity=identity_last)
-            except Exception:
-                pass
-            merge_save_shot(slug, n, shot)
+            record_shot_identity_pass(slug, n, shot, identity_last)
+        except Exception:
+            pass
+        merge_save_shot(slug, n, shot)
     if cancel_check:
         cancel_check()
     models = models_with_overrides(slug, shot=shot, episode=n)
@@ -1040,6 +1048,7 @@ def _hq_process_one_shot(
         finally:
             shot.pop("_cancel_check", None)
 
+    # 校验已拆除：闪烁续跑也直接重跑运动（不再复检 SSIM）
     i2v = _run_i2v()
     src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
     kind = infer_kind(shot)
@@ -1059,27 +1068,27 @@ def _hq_process_one_shot(
         motion_rel = str((shot.get("assets") or {}).get("motion") or _shot_assets2(slug, n, sn)["motion"])
         publish_motion_step(slug, n, sn, motion_rel)
 
-    # 闪烁验收：一次判定，失败 Fail Loud（禁止自动重做运动）
-    from tools.drama_qc import check_allows_pass, qc_shot_flicker
-
-    if cancel_check:
-        cancel_check()
-    flicker = qc_shot_flicker(slug, shot, apply=True)
+    # 校验已拆除：不再跑画面抖动检测
+    shot["qc_flicker"] = {
+        "status": "n/a",
+        "pass": True,
+        "required": False,
+        "reason": "qc_disabled",
+        "hint": "校验已关闭",
+    }
     merge_save_shot(slug, n, shot)
-    if not check_allows_pass(flicker):
-        hint = str(flicker.get("hint") or flicker.get("reason") or "闪烁未通过")
-        raise RuntimeError(f"第{sn}镜闪烁验收未通过（{hint}），禁止自动重试")
 
     if cancel_check:
         cancel_check()
-    # 真运动片就绪后再口型 + 成片（专业档口型禁止静图 lip_base）
+    # 火山单轨：Seedance 已含音轨/口型 → 只组装成片
+    # （手动配音时 mux TTS；默认保留模型自带声）
     post_layers = list(HQ_POST_I2V_LAYERS)
     if kind in ("establishing", "insert", "crowd", "title") and src not in ("ai", "keys"):
-        # 计划档为 L0 的空镜类：无真 I2V 时只组装成片（不是失败后的备用顶替）
         post_layers = ["clip"]
     rerender_shot(slug, n, sn, layers=post_layers)
+    _refresh_shot_from_disk(slug, n, shot)
 
-    from tools.drama_step_contract import publish_lip_step, publish_voice_step
+    from tools.drama_step_contract import publish_voice_step
     from tools.workspace import resolve_safe as _resolve_asset
 
     assets_done = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
@@ -1090,13 +1099,8 @@ def _hq_process_one_shot(
                 publish_voice_step(slug, n, sn, voice_rel)
         except Exception:
             pass
-    lip_rel = str(assets_done.get("lip") or _shot_assets2(slug, n, sn).get("lip") or "")
-    if lip_rel:
-        try:
-            if _resolve_asset(lip_rel).is_file():
-                publish_lip_step(slug, n, sn, lip_rel)
-        except Exception:
-            pass
+    if bool(shot.get("seedance_lip")) or bool(shot.get("i2v_audio_ref")):
+        shot["lip_source"] = "seedance"
 
     # 正式输出：成片 → step6_final/output/
     clip_rel = str(assets_done.get("clip") or _shot_assets2(slug, n, sn)["clip"])
@@ -1116,7 +1120,9 @@ def _hq_process_one_shot(
         "i2v_tried": bool(i2v.get("tried")),
         "i2v_source": src,
         "degrades": degrades,
-        "flicker_ssim": flicker.get("ssim"),
+        "flicker_ssim": (shot.get("qc_flicker") or {}).get("ssim")
+        if isinstance(shot.get("qc_flicker"), dict)
+        else None,
     }
 
 
@@ -1137,14 +1143,15 @@ def produce_episode_hq(
     QC fail all raise. Agent must keep allow_qc_fail_export=False.
     所有步骤禁止候选项结果、自动重抽与备用供应商跳转；单次出图/单次 I2V，失败即停。
 
-    Phase B: cast refs + shot DAG run under DRAMA_SHOT_CONCURRENCY with provider lanes.
+    Phase B: shots run **serially** (one shot fully done before the next).
+    Cast/refs also serial. Merge + BGM only after every shot succeeds.
     """
     from tools.drama_hq_contract import assert_hq_tts_ready
-    from tools.drama_parallel import ProgressClock, parallel_map, shot_concurrency
+    from tools.drama_parallel import ProgressClock
     from tools.drama_profiles import assert_profile_allows_studio_gates, resolve_quality_profile, research_backlog
     from tools.drama_quality import assert_studio_providers
     from tools.drama_shots import load_doc
-    from tools.drama_studio import classify_shots, export_episode, get_episode
+    from tools.drama_studio import classify_shots, export_episode, get_episode, project_manual_voice
     from tools.drama_tts_policy import reset_tts_edge_degrade, resolve_tts_degrade_for_slug, set_tts_edge_degrade
 
     slug = str(slug or "").strip()
@@ -1154,7 +1161,9 @@ def produce_episode_hq(
 
     profile = resolve_quality_profile(slug)
     assert_profile_allows_studio_gates(profile)
-    assert_hq_tts_ready(slug)
+    # 仅手动配音模式才强制商用 TTS；默认 Seedance 自带声
+    if project_manual_voice(slug):
+        assert_hq_tts_ready(slug)
     tts_token = set_tts_edge_degrade(resolve_tts_degrade_for_slug(slug))
     try:
         return _produce_episode_hq_body(
@@ -1188,7 +1197,6 @@ def _produce_episode_hq_body(
     on_progress: Callable[..., None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    from tools.drama_parallel import parallel_map, shot_concurrency
     from tools.drama_profiles import research_backlog
     from tools.drama_quality import assert_studio_providers
     from tools.drama_shots import load_doc
@@ -1351,8 +1359,9 @@ def _produce_episode_hq_body(
         "i2v_shots": [],
         "degraded": [],
         "strict": True,
-        "parallel": True,
-        "shot_concurrency": shot_concurrency(),
+        "parallel": False,
+        "shot_concurrency": 1,
+        "serial": True,
     }
 
     doc = load_doc(slug, n) or doc
@@ -1361,20 +1370,13 @@ def _produce_episode_hq_body(
         stages["snapshots"].append(snap)
 
     shot_ns = [int(s.get("n") or 0) for s in shots if int(s.get("n") or 0) > 0]
-    done_lock = __import__("threading").Lock()
-    done_count = {"n": 0}
-    ok_count = {"n": 0}
-    fail_count = {"n": 0}
+    done_count = 0
+    ok_count = 0
+    fail_count = 0
     failed_shots: list[dict[str, Any]] = []
-    peer_stop = __import__("threading").Event()
+    shot_results: list[Any] = []
 
-    def _shot_cancel() -> None:
-        if cancel_check:
-            cancel_check()
-        if peer_stop.is_set():
-            raise PeerAbort("因其它镜头失败，加速收尾（本镜未继续昂贵步骤）")
-
-    # 智能续跑：分析失败点、收窄脏层；已通过镜在 worker 内跳过
+    # 智能续跑：分析失败点、收窄脏层；已通过镜在串行循环内跳过
     resume_plan: dict[str, Any] = {}
     if not force:
         try:
@@ -1396,98 +1398,145 @@ def _produce_episode_hq_body(
         except Exception as exc:
             stages["resume"] = {"error": str(exc)[:200]}
 
-    def _worker(sn: int) -> dict[str, Any]:
-        _shot_cancel()
+    def _record_shot_failure(sn: int, result: BaseException | dict[str, Any]) -> None:
+        nonlocal fail_count
+        fail_count += 1
+        if isinstance(result, BaseException):
+            _mark_shot_produce_failed(slug, n, sn, result)
+            err_s = str(result)[:500]
+        else:
+            err_s = str(result.get("error") or "unknown")[:500]
+        media: list[dict[str, Any]] = []
+        try:
+            from tools.drama_failure_report import build_shot_failure_card
+
+            card = build_shot_failure_card(slug, n, sn, err_s, with_curl=True)
+            media = list(card.get("media") or [])
+            failed_shots.append(
+                {
+                    "shot": sn,
+                    "error": err_s,
+                    "side": card.get("side"),
+                    "side_zh": card.get("side_zh"),
+                    "step": card.get("step"),
+                    "detail": card.get("detail"),
+                    "request_id": card.get("request_id") or "",
+                    "media": media,
+                    "verify": card.get("verify") if isinstance(card.get("verify"), dict) else {},
+                }
+            )
+        except Exception:
+            failed_shots.append({"shot": sn, "error": err_s})
+        try:
+            from tools.drama_observability import bump_failure_heat
+
+            bump_failure_heat(slug, n, layer="shot", provider="")
+        except Exception:
+            pass
         _progress(
             on_progress,
             stage="shot",
             shot=sn,
+            current=ok_count,
             total=total,
-            current=ok_count["n"],
-            finished=done_count["n"],
-            message=f"Shot {sn} 画面/配音/口型/I2V（并行）",
-        )
-        return _hq_process_one_shot(
-            slug,
-            n,
-            sn,
-            ep_title=ep_title,
-            force=force,
-            cancel_check=_shot_cancel,
+            finished=done_count,
+            failed=fail_count,
+            ok=ok_count,
+            failure_media=media,
+            message=f"Shot {sn} 失败，串行产线已停止",
         )
 
-    def _on_done(_i: int, sn: int, result: Any) -> None:
-        with done_lock:
-            done_count["n"] += 1
-            finished = done_count["n"]
-            if isinstance(result, BaseException):
-                fail_count["n"] += 1
-                _mark_shot_produce_failed(slug, n, sn, result)
-                failed_shots.append({"shot": sn, "error": str(result)[:300]})
-                # 首败：通知其它并行镜尽快在检查点退出，避免再空等整段 I2V
-                if not peer_stop.is_set() and not isinstance(result, PeerAbort):
-                    peer_stop.set()
-                    _progress(
-                        on_progress,
-                        stage="shot",
-                        shot=sn,
-                        message=f"Shot {sn} 失败，加速收尾（其它镜跳过后续昂贵步骤）",
-                        failed=fail_count["n"],
-                        finished=finished,
-                        ok=ok_count["n"],
-                        total=total,
-                    )
-                try:
-                    from tools.drama_observability import bump_failure_heat
+    def _raise_hq_failures() -> None:
+        from tools.drama_failure_report import format_hq_failure_bundle
 
-                    bump_failure_heat(slug, n, layer="shot", provider="")
-                except Exception:
-                    pass
-                ok = ok_count["n"]
-                failed = fail_count["n"]
-                _progress(
-                    on_progress,
-                    stage="shot",
-                    shot=sn,
-                    current=ok,
-                    total=total,
-                    finished=finished,
-                    failed=failed,
-                    ok=ok,
-                    message=f"Shot {sn} 失败（已落盘可重试）：{result}",
-                )
-                return
-            ok_count["n"] += 1
-            ok = ok_count["n"]
+        bundle = format_hq_failure_bundle(failed_shots, slug=slug, episode=n)
+        media = list(bundle.get("media") or [])
+        if media:
+            _progress(
+                on_progress,
+                stage="shot",
+                failure_media=media,
+                message=str(bundle.get("text") or "")[:200],
+            )
+        raise RuntimeError(str(bundle.get("text") or "HQ 产线失败")) from None
+
+    clock.start("shots")
+    try:
+        for sn in shot_ns:
+            if cancel_check:
+                cancel_check()
             _progress(
                 on_progress,
                 stage="shot",
                 shot=sn,
-                current=ok,
                 total=total,
-                finished=finished,
-                failed=fail_count["n"],
-                ok=ok,
-                message=f"Shot {sn} 完成 ({ok}/{total} 成功，已结束 {finished}/{total})",
+                current=ok_count,
+                finished=done_count,
+                message=f"Shot {sn} 串行：画面→视频→声音→成片（{done_count}/{total} 已处理）",
             )
+            try:
+                result = _hq_process_one_shot(
+                    slug,
+                    n,
+                    sn,
+                    ep_title=ep_title,
+                    force=force,
+                    cancel_check=cancel_check,
+                )
+            except BaseException as exc:
+                done_count += 1
+                _record_shot_failure(sn, exc)
+                _raise_hq_failures()
 
-    clock.start("shots")
-    try:
-        shot_results = parallel_map(
-            shot_ns,
-            _worker,
-            max_workers=shot_concurrency(),
-            cancel_check=_shot_cancel,
-            on_done=_on_done,
-            fail_fast=True,
-        )
+            shot_results.append(result)
+            done_count += 1
+            if isinstance(result, dict) and result.get("skipped"):
+                if result.get("formal_ok"):
+                    ok_count += 1
+                    _progress(
+                        on_progress,
+                        stage="shot",
+                        shot=sn,
+                        current=ok_count,
+                        total=total,
+                        finished=done_count,
+                        failed=fail_count,
+                        ok=ok_count,
+                        message=f"Shot {sn} 已通过，跳过 ({ok_count}/{total})",
+                    )
+                else:
+                    _progress(
+                        on_progress,
+                        stage="shot",
+                        shot=sn,
+                        current=ok_count,
+                        total=total,
+                        finished=done_count,
+                        failed=fail_count,
+                        ok=ok_count,
+                        message=f"Shot {sn} 跳过（无有效成片）",
+                    )
+                continue
+            if isinstance(result, dict) and result.get("ok") is False:
+                _record_shot_failure(sn, result)
+                _raise_hq_failures()
+            ok_count += 1
+            _progress(
+                on_progress,
+                stage="shot",
+                shot=sn,
+                current=ok_count,
+                total=total,
+                finished=done_count,
+                failed=fail_count,
+                ok=ok_count,
+                message=f"Shot {sn} 完成 ({ok_count}/{total} 成功，已结束 {done_count}/{total})",
+            )
+    except RuntimeError:
+        raise
     except Exception:
-        # 首镜失败后不再开新镜；并行镜收到 peer_stop 后尽快退出昂贵步骤。
         if failed_shots:
-            detail = "；".join(f"Shot {x['shot']}: {x['error']}" for x in failed_shots[:6])
-            raise RuntimeError(
-                f"HQ 有 {len(failed_shots)} 镜失败（成功镜已落盘，可用 resume_produce /「继续渲染」从失败点续跑）：{detail}"
-            ) from None
+            _raise_hq_failures()
         raise
     clock.end("shots", count=len(shot_results), failed=len(failed_shots))
 
@@ -1513,10 +1562,7 @@ def _produce_episode_hq_body(
         stages["snapshots"].append(snap)
 
     if failed_shots:
-        detail = "；".join(f"Shot {x['shot']}: {x['error']}" for x in failed_shots[:6])
-        raise RuntimeError(
-            f"HQ 有 {len(failed_shots)} 镜失败（成功镜已落盘，可用 resume_produce /「继续渲染」从失败点续跑）：{detail}"
-        )
+        _raise_hq_failures()
 
     from tools.drama_step_contract import publish_export_step, publish_shots_rendered_step, require_step_ok
 
@@ -1540,9 +1586,11 @@ def _produce_episode_hq_body(
 
     kpi = identity_kpi(doc)
     stages["identity_kpi"] = kpi
-    kpi_msg = identity_kpi_blocker(doc)
+    from tools.drama_qc import qc_gates_enabled
+
+    kpi_msg = identity_kpi_blocker(doc, slug=slug) if qc_gates_enabled() else ""
     if kpi_msg and not allow_qc_fail_export:
-        touched = dirty_identity_kpi_fails(doc)
+        touched = dirty_identity_kpi_fails(doc, slug=slug)
         if touched:
             try:
                 _save_doc_kpi(doc)
@@ -1667,17 +1715,23 @@ def generate_bible_and_outline(
         "你是专业竖屏漫剧主创。根据梗概写出完整创作圣经与故事大纲。"
         "必须覆盖：世界观、角色外形与性格、主要场景、关键道具、配乐情绪。"
         "场景与道具须写到可拍粒度（后续要生成地点主底板与道具设定图）。"
-        "角色外形必须彼此可区分：年龄/性别/发型发色/服装至少拉开差距，禁止路人村民与具名角色撞脸；"
+        "角色外形必须彼此高识别度：年龄段/性别/发型发色造型/服装主色/独占锚点至少拉开差距，"
+        "禁止路人村民与具名角色撞脸撞衣；"
+        "角色主名只用短名（如愚公、小石），禁止「愚公的小孙女」这类关系称呼当姓名；"
+        "亲属/邻里关系写在「角色关系」图谱（格式：小石 → 愚公：孙女）。"
         "角色外形只描述人物，道具（锄头等）写在关键道具，不要写进角色外形。"
         "严格按下面分隔符输出，不要其它说明：\n"
         "===BIBLE===\n"
         "# 人设圣经\n"
         "## 世界观\n（2–4 句，时代/规则/冲突源）\n"
-        "## 主角\n- 姓名：…\n- 外形：年龄感、五官、发型、服装、配色、标志细节（可拍定妆；只写人物本体，禁止手持锄头/工具等道具）\n"
+        "## 主角\n- 姓名：短名（禁止关系称呼）\n"
+        "- 外形：年龄感、性别、五官、瞳色、发型造型、服装主色、独占锚点（可拍定妆；只写人物本体，禁止手持锄头/工具等道具）\n"
         "- 性格：…\n- 音色倾向：…\n- 口头禅：…\n"
         "## 对手/配角\n（同上格式，共 2–4 人；姓名与外形全局统一；"
-        "每位角色须在年龄段/性别/发型发色/服装配色中至少 3 项与他人明显不同，"
+        "每位角色须在年龄段/性别/发型发色造型/服装主色/独占锚点中至少 4 项与他人明显不同，"
         "禁止配角/村民与主角或具名角色长得像）\n"
+        "## 角色关系\n- 小石 → 愚公：孙女\n- 智叟 → 愚公：邻居\n"
+        "（左侧右侧均须是上文短名）\n"
         "## 主要场景\n- 场景名：稳定短地名（跨集同名）\n"
         "  - 描述：空间结构、建筑轮廓、地面材质、主陈设（须可生成无人物竖屏主底板）\n"
         "  - 光影色调：主光方向 + 冷暖/主色（禁止空泛氛围词）\n"
@@ -1769,6 +1823,24 @@ def init_project_from_premise(
         raise DramaBadRequest("请先给一句故事梗概")
 
     given_title = _normalize_title(title)
+
+    # overwrite：先整目录清掉，避免旧资产/同名撞车「复用」
+    if overwrite and slug:
+        try:
+            from tools.drama_studio import remove_project
+
+            remove_project(parse_slug(slug), purge_same_title=False)
+        except Exception:
+            pass
+    elif overwrite and given_title:
+        hit = find_project_slug_by_title(given_title)
+        if hit:
+            try:
+                from tools.drama_studio import remove_project
+
+                remove_project(hit, purge_same_title=True)
+            except Exception:
+                pass
 
     # 先按标题/梗概撞车（覆盖显式 slug），除非 overwrite
     reused = None

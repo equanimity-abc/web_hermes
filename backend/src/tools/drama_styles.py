@@ -166,15 +166,14 @@ def image_route(slug: str, shot: dict[str, Any], *, episode: int | None = None, 
 
 
 def default_character_ref_image_route() -> dict[str, Any]:
-    """定妆图出图路由：优先火山方舟 Seedream；否则可灵 / 百炼。"""
+    """定妆图出图路由：优先火山方舟 Seedream；否则可灵 / 百炼。模型只来自 Config。"""
     from config import config
 
     ark = (getattr(config, "ARK_API_KEY", "") or "").strip()
     if ark:
         return {
             "provider": "seedream",
-            "model": getattr(config, "ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
-            or "doubao-seedream-5-0-pro-260628",
+            "model": str(getattr(config, "ARK_IMAGE_MODEL", "") or "").strip(),
             "cost_per_shot": 0.4,
         }
     key = (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
@@ -182,18 +181,18 @@ def default_character_ref_image_route() -> dict[str, Any]:
     if maas and key:
         return {
             "provider": "kling-image",
-            "model": "kling/kling-v3-omni-image-generation",
+            "model": str(getattr(config, "KLING_IMAGE_MODEL", "") or "").strip(),
             "cost_per_shot": 0.5,
         }
     if key:
         return {
             "provider": "wanx",
-            "model": getattr(config, "DASHSCOPE_IMAGE_MODEL", "qwen-image-plus"),
-            "cost_per_shot": 0.5,
+            "model": str(getattr(config, "DASHSCOPE_IMAGE_MODEL", "") or "").strip(),
+            "cost_per_shot": 0.3,
         }
     return {
         "provider": "seedream",
-        "model": "doubao-seedream-5-0-pro-260628",
+        "model": str(getattr(config, "ARK_IMAGE_MODEL", "") or "").strip(),
         "cost_per_shot": 0.4,
     }
 

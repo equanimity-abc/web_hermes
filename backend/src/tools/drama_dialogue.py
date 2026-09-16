@@ -125,17 +125,17 @@ def _join_spoken(parts: list[str]) -> str:
 
 
 def _character_face_ref(slug: str | None, char: dict[str, Any] | None) -> tuple[str, bool]:
-    """Return (face_ref_rel, face_ready)；优先正脸特写锚，否则全身定妆。"""
+    """Return (face_ref_rel, face_ready)；出图/口型用正脸优先，否则全身。"""
     if not slug or not char:
         return "", False
     try:
-        from tools.drama_characters import identity_ref_rel, ref_exists, ref_face_exists
+        from tools.drama_characters import generation_face_ref_rel, ref_exists, ref_face_exists
     except Exception:
         return "", False
     cid = str(char.get("id") or "").strip()
     if not cid:
         return "", False
-    rel = identity_ref_rel(slug, char)
+    rel = generation_face_ref_rel(slug, char)
     ready = bool(ref_face_exists(slug, char) or ref_exists(slug, char))
     return rel, ready
 

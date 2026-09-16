@@ -32,6 +32,7 @@ REAL_LIP_SOURCES = frozenset(
         "wav2lip",
         "http",
         "ai",
+        "seedance",  # Seedance I2V + TTS reference_audio（生产线口型）
         "recovered",  # orphan lip file restored when metadata was cleared
     }
 )
@@ -465,13 +466,43 @@ def _latentsync_lip(scene, voice, dest, shot, duration) -> str:
         return "fallback"
 
 
+def _seedance_lip(scene, voice, dest, shot, duration) -> str:
+    """口型已在 Seedance I2V 内生：把 motion 复制为 lip 资产即可。"""
+    from tools.workspace import resolve_safe
+
+    assets = shot.get("assets") if isinstance(shot, dict) else {}
+    motion_rel = str((assets or {}).get("motion") or "").strip()
+    src = None
+    if motion_rel:
+        try:
+            src = resolve_safe(motion_rel)
+        except Exception:
+            src = None
+    if src is None or not src.is_file():
+        # try_generate_lip may pass video_base as scene when motion is the base
+        vb = Path(scene) if scene else None
+        if vb is not None and vb.is_file() and vb.suffix.lower() in (".mp4", ".webm", ".mov"):
+            src = vb
+    if src is None or not src.is_file() or src.stat().st_size <= 500:
+        return "fallback"
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if src.resolve() != dest.resolve():
+        shutil.copy2(src, dest)
+    if isinstance(shot, dict):
+        shot["seedance_lip"] = True
+        shot["lip_source"] = "seedance"
+    return "seedance" if dest.is_file() and dest.stat().st_size > 500 else "fallback"
+
+
 # Register adapters
+register("lip", "seedance", _seedance_lip)
 for pid in ("http", "api", "musetalk", "wav2lip"):
     register("lip", pid, _http)
 for pid in ("pixverse", "pixverse-lipsync"):
-    register("lip", pid, _pixverse_lip)
+    register("lip", pid, _seedance_lip)  # 火山单轨：旧 provider 名也走 Seedance 复制
 for pid in ("latentsync", "latent-sync", "replicate-lip"):
-    register("lip", pid, _latentsync_lip)
+    register("lip", pid, _seedance_lip)
 for pid in ("none", "off", "fail"):
     register("lip", pid, _fallback)
 register("lip", "mock", _mock)

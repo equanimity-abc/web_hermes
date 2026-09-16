@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 
+# 唯一正式环境文件：backend/config/.env（示例见同目录 .env.example）
 load_dotenv(_BACKEND_DIR / "config" / ".env")
-load_dotenv(_BACKEND_DIR / ".env")
 
 
 class Config:
@@ -27,10 +27,10 @@ class Config:
     ARK_BASE_URL: str = os.getenv(
         "ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
     )
-    ARK_TEXT_MODEL: str = os.getenv("ARK_TEXT_MODEL", "doubao-seed-character-260628")
+    ARK_TEXT_MODEL: str = os.getenv("ARK_TEXT_MODEL", "glm-5-2-260617")
     ARK_TEXT_MODEL_ALT: str = os.getenv("ARK_TEXT_MODEL_ALT", "glm-5-2-260617")
-    ARK_IMAGE_MODEL: str = os.getenv("ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
-    ARK_VIDEO_MODEL: str = os.getenv("ARK_VIDEO_MODEL", "doubao-seedance-2-5-260628")
+    ARK_IMAGE_MODEL: str = os.getenv("ARK_IMAGE_MODEL", "doubao-seedream-5-0-lite-260128")
+    ARK_VIDEO_MODEL: str = os.getenv("ARK_VIDEO_MODEL", "doubao-seedance-2-0-260128")
     ARK_AUDIO_MODEL: str = os.getenv("ARK_AUDIO_MODEL", "doubao-seed-audio-1-0")
 
     # 阿里云百炼（DashScope）：出图 / 图生视频 / 高拟真配音
@@ -83,8 +83,10 @@ class Config:
     CONTEXT_MAX_CHARS: int = int(os.getenv("CONTEXT_MAX_CHARS", "24000"))
     CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
 
-    DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "4"))
-    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "8"))
+    DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "1"))
+    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "1"))
+    # 0=关闭全部 QC 硬闸（已永久关闭，见 drama_qc.qc_gates_enabled）
+    DRAMA_QC_ENABLED: str = os.getenv("DRAMA_QC_ENABLED", "0")
     DRAMA_RPM_DEFAULT: int = int(os.getenv("DRAMA_RPM_DEFAULT", "0"))
     # Provider lane token buckets (Phase B). 0 = unlimited for that lane.
     DRAMA_RPM_ARK: int = int(os.getenv("DRAMA_RPM_ARK", "20"))
@@ -108,7 +110,7 @@ class Config:
     I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "300.0"))
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
-    LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "pixverse")
+    LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "seedance")
     LIP_API_URL: str = os.getenv("LIP_API_URL", "")
     LIP_API_KEY: str = os.getenv("LIP_API_KEY", "")
     LIP_QUALITY: str = os.getenv("LIP_QUALITY", "max")

@@ -68,8 +68,8 @@ def _pollinations(
 
     from tools.drama_video import _prepare_frame  # pure PIL helper, no cycle
 
-    target_w = int(width or 1620)
-    target_h = int(height or 2880)
+    target_w = int(width or 1600)
+    target_h = int(height or 2848)
     model = config.IMAGE_GEN_MODEL or "flux"
     final_prompt = str(prompt)
     if _is_character_ref_shot(shot):
@@ -234,8 +234,8 @@ def _consistent_http(
     rpm = int(getattr(config, "DRAMA_RPM_DEFAULT", 0) or 0)
     rate_limiter_for("image:consistent", rpm).acquire()
 
-    target_w = int(width or 1620)
-    target_h = int(height or 2880)
+    target_w = int(width or 1600)
+    target_h = int(height or 2848)
     model = config.CONSISTENT_IMAGE_MODEL or "char-consistent"
     key = _cache_key(prompt, seed=seed, width=target_w, height=target_h, model=model, refs=refs)
     if _try_cache(key, dest, slug=slug):
@@ -373,8 +373,8 @@ def _dashscope_image(
     if not key:
         return False
 
-    target_w = int(width or 1620)
-    target_h = int(height or 2880)
+    target_w = int(width or 1600)
+    target_h = int(height or 2848)
 
     # 提示词：refs 退化为加强一致性描述；定妆图关闭扩写以免被改写成设定表风格。
     final_prompt = str(prompt)

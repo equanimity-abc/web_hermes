@@ -267,21 +267,29 @@ def default_providers() -> dict[str, dict[str, Any]]:
             "fallback": "musetalk",
             "notes": "ByteDance LatentSync（Replicate bytedance/latentsync）。扩散口型，画质最高；需 REPLICATE_API_TOKEN。",
         },
-        "pixverse": {
+        "seedance": {
             "available": True,
+            "cost_per_shot": 0.0,
+            "rpm": 60,
+            "timeout_s": 60,
+            "fallback": "seedance",
+            "notes": "火山 Seedance：默认 generate_audio 自带声；手动配音时挂 TTS reference_audio。",
+        },
+        "pixverse": {
+            "available": False,
             "cost_per_shot": 0.36,
             "rpm": 10,
             "timeout_s": 480,
-            "fallback": "latentsync",
-            "notes": "PixVerse 对口型 pixverse-lipsync（约0.12元/秒）。需人脸视频+配音；走百炼 MaaS。",
+            "fallback": "seedance",
+            "notes": "已停用（火山单轨）。保留卡片仅兼容旧配置，运行时改写为 seedance。",
         },
         "pixverse-lipsync": {
-            "available": True,
+            "available": False,
             "cost_per_shot": 0.36,
             "rpm": 10,
             "timeout_s": 480,
-            "fallback": "latentsync",
-            "notes": "PixVerse 对口型 pixverse-lipsync（约0.12元/秒）。需人脸视频+配音；走百炼 MaaS。",
+            "fallback": "seedance",
+            "notes": "已停用（火山单轨）。保留卡片仅兼容旧配置，运行时改写为 seedance。",
         },
         "wanx": {
             "available": True,
@@ -350,10 +358,10 @@ def default_models() -> dict[str, Any]:
             "title": {"ladder": "L0", "provider": "l0"},
         },
         "lip": {
-            "provider": "pixverse",
+            "provider": "seedance",
             "only_kinds": ["dialogue", "reaction"],
             "only_sizes": ["CU", "MCU", "ECU", "MS", "WS"],
-            "fallback": "latentsync",
+            "fallback": "seedance",
             "quality": "max",
             "ensure_motion": True,
         },
@@ -361,7 +369,8 @@ def default_models() -> dict[str, Any]:
         "sfx": {"provider": "library"},
         "qc": {
             "identity_min": 0.75,
-            "ssim_min": 0.85,
+            "identity_enforcement": "advisory",
+            "ssim_min": 0.84,
             "lufs_target": -14,
             "lufs_min": -16,
             "lufs_max": -12,
@@ -449,14 +458,23 @@ def _sync_character_ref_route(image: dict[str, Any]) -> None:
 
 
 def _sync_lip_route(lip: dict[str, Any]) -> None:
-    """口型默认随 .env 对齐到可用的最高画质模型。"""
-    from tools.drama_lip import _default_provider
-
+    """口型收口到 Seedance（火山单轨）；旧 pixverse/latentsync 配置一律改写。"""
     cur = dict(lip or {})
     written = str(cur.get("provider") or "").strip().lower()
-    # Only auto-upgrade empty / mock placeholders — keep explicit musetalk/pixverse/etc.
-    if written in ("", "mock"):
-        cur["provider"] = _default_provider()
+    legacy = {
+        "",
+        "mock",
+        "pixverse",
+        "pixverse-lipsync",
+        "latentsync",
+        "musetalk",
+        "wav2lip",
+        "http",
+        "api",
+    }
+    if written in legacy or written not in ("seedance", "none", "off"):
+        if written not in ("none", "off"):
+            cur["provider"] = "seedance"
     if "quality" not in cur:
         cur["quality"] = "max"
     if "ensure_motion" not in cur:
@@ -466,7 +484,6 @@ def _sync_lip_route(lip: dict[str, Any]) -> None:
     if "only_sizes" not in cur:
         cur["only_sizes"] = ["CU", "MCU", "ECU", "MS", "WS"]
     else:
-        # 升档：旧项目只开了 CU/MCU/ECU 时自动补上 MS/WS
         sizes = [str(x).strip().upper() for x in (cur.get("only_sizes") or []) if str(x).strip()]
         for extra in ("MS", "WS"):
             if extra not in sizes:

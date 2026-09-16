@@ -92,6 +92,7 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
     look = ""
     if slug:
         from tools.drama_characters import (
+            ANIME_STYLE_GUARD,
             character_prompt_clause,
             load_characters,
             resolve_shot_characters,
@@ -99,15 +100,27 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
 
         cast = resolve_shot_characters(shot, load_characters(slug))
         look = character_prompt_clause(cast, slug=slug)
+    else:
+        from tools.drama_characters import ANIME_STYLE_GUARD
+
     bits = [
+        ANIME_STYLE_GUARD,
+        "虚构二次元角色，非真人非明星非公众人物",
         "电影感细微运动",
         camera,
         "竖屏9:16",
-        scene or "人物肖像",
+        scene or "风格化动漫角色半身",
     ]
     if look:
         bits.append(look)
-    bits.extend(["轻微动态", "无文字", "与锁定的角色参考图五官一致"])
+    bits.extend(
+        [
+            "轻微动态",
+            "无文字无Logo无品牌标识",
+            "与锁定的角色参考图五官一致",
+            "禁止写实人脸特写与照片级皮肤",
+        ]
+    )
     return ", ".join(bits)
 
 
@@ -540,18 +553,66 @@ def _same_tier_alt_provider(provider: str, models: dict[str, Any] | None) -> str
 
 
 def _is_privacy_i2v_error(err: str) -> bool:
+    """Input-side privacy / real-person blocks (scene or ref rejected before/during gen)."""
     s = str(err or "").lower()
     return any(
         token in s
         for token in (
             "privacyinformation",
-            "sensitivecontent",
-            "real person",
             "inputimagesensitive",
+            "inputvideosensitive",
+            "real person",
             "疑似真人",
-            "真人",
         )
     )
+
+
+def _is_output_sensitive_i2v_error(err: str) -> bool:
+    """Output-side moderation: model produced a video that failed safety review."""
+    s = str(err or "").lower()
+    return any(
+        token in s
+        for token in (
+            "outputvideosensitive",
+            "outputimagesensitive",
+            "outputvideosensitivecontentdetected",
+            "outputimagesensitivecontentdetected",
+        )
+    )
+
+
+def _is_sensitive_i2v_error(err: str) -> bool:
+    """Any content-safety block (input or output)."""
+    s = str(err or "").lower()
+    if _is_privacy_i2v_error(err) or _is_output_sensitive_i2v_error(err):
+        return True
+    return any(token in s for token in ("sensitivecontent", "敏感"))
+
+
+def _format_i2v_fail_detail(detail: str) -> str:
+    """Human-facing Fail Loud text for HQ I2V failures."""
+    raw = str(detail or "").strip()
+    if not raw:
+        return ""
+    if _is_output_sensitive_i2v_error(raw):
+        return (
+            "供应商输出侧内容安全拦截（生成后的视频帧未过审；"
+            "输入图即使是动漫也可能中招——模型运镜过程中可能偏写实/误判人脸或情节）；"
+            "请改运镜与构图描述后重做运动，反复触发再考虑微调画面"
+            f"（禁止自动换供应商）。原始：{raw}"
+        )[:320]
+    if _is_privacy_i2v_error(raw):
+        return (
+            "供应商判定输入参考疑似真人肖像（输入侧隐私拦截）；"
+            "若原图已是二次元仍报此错，多半是分类器误判，可略加强插画感后由人重抽"
+            f"（禁止自动换供应商/重试）。原始：{raw}"
+        )[:280]
+    if _is_sensitive_i2v_error(raw):
+        return (
+            "供应商内容安全拦截；请调整分镜描述或参考图后重试"
+            f"（禁止自动换供应商）。原始：{raw}"
+        )[:280]
+    return raw
 
 
 def _run_i2v_with_same_tier_alt(
@@ -612,11 +673,39 @@ def try_generate_i2v(
         except (TypeError, ValueError):
             shot_dur = 0.0
         if shot_dur > run_sec:
-            run_sec = min(max(shot_dur, SEEDANCE_FLOOR), 12.0)
+            run_sec = min(max(shot_dur, SEEDANCE_FLOOR), 15.0)
+        # 对白镜：时长对齐 TTS，便于 Seedance reference_audio 口型锁语音
+        try:
+            from tools.providers.ark_providers import _seedance_want_ref_audio, _shot_voice_path
+            from tools.drama_video import _probe_duration
+
+            if _seedance_want_ref_audio(shot):
+                vp = _shot_voice_path(shot)
+                if vp is not None:
+                    vd = float(_probe_duration(vp) or 0)
+                    if vd > 0.5:
+                        run_sec = min(max(vd, SEEDANCE_FLOOR), 15.0)
+                        ken_sec = max(ken_sec, min(vd, KEN_BURNS_MAX_SECONDS))
+        except Exception:
+            pass
 
     def _finish(source: str) -> str:
         if source in ("ai", "keys", "fallback") and dest.is_file():
-            ensure_motion_seconds(dest, ken_sec)
+            target = ken_sec
+            # Seedance+TTS 口型：成片时钟跟 VO，勿被脚本 duration 拉长/压短破坏口型
+            if isinstance(shot, dict) and shot.get("seedance_lip"):
+                try:
+                    from tools.providers.ark_providers import _shot_voice_path
+                    from tools.drama_video import _probe_duration
+
+                    vp = _shot_voice_path(shot)
+                    if vp is not None:
+                        vd = float(_probe_duration(vp) or 0)
+                        if vd > 0.5:
+                            target = max(MIN_SECONDS, min(vd, KEN_BURNS_MAX_SECONDS))
+                except Exception:
+                    pass
+            ensure_motion_seconds(dest, target)
         return source
 
     if planned == "L4":
@@ -745,12 +834,7 @@ def generate_shot_i2v(
         if kind not in HQ_I2V_OPTIONAL_KINDS:
             detail = str(shot.get("i2v_error") or "").strip()
             provider = str(shot.get("i2v_provider") or "").strip()
-            if _is_privacy_i2v_error(detail):
-                detail = (
-                    "供应商判定画面疑似真人肖像（隐私拦截）；"
-                    "请换更明显的二次元/插画风画面后由人重抽（禁止自动换供应商/重试）。"
-                    f" 原始：{detail}"
-                )[:280]
+            detail = _format_i2v_fail_detail(detail)
             shot.pop("_slug", None)
             shot.pop("_episode", None)
             raise RuntimeError(

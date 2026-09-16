@@ -16,8 +16,8 @@ from tools.drama_parallel import (
 
 
 def test_shot_concurrency_default():
-    assert shot_concurrency() == 8
-    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 8
+    assert shot_concurrency() == 1
+    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 1
 
 
 def test_provider_lanes():

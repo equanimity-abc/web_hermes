@@ -1,4 +1,4 @@
-"""HQ TTS + lip contract: commercial TTS only, no mock lip, motion base required."""
+"""HQ TTS + lip contract: Seed Audio TTS; Seedance-baked lip (no PixVerse)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from tools.providers.lip_providers import lip_source_is_real
 
 def test_lip_source_mock_not_real():
     assert lip_source_is_real("mock") is False
+    assert lip_source_is_real("seedance") is True
     assert lip_source_is_real("pixverse") is True
     assert lip_source_is_real("pixverse+per_turn") is True
 
@@ -61,7 +62,7 @@ def test_lip_cascade_studio_no_mock(monkeypatch):
 def test_lip_cascade_studio_single_provider(monkeypatch):
     monkeypatch.setattr(
         "tools.drama_lip._provider_ready",
-        lambda pid: pid in ("pixverse", "latentsync"),
+        lambda pid: pid == "seedance",
     )
     monkeypatch.setattr(
         "tools.drama_hq_contract.is_hq_no_fallback",
@@ -71,15 +72,16 @@ def test_lip_cascade_studio_single_provider(monkeypatch):
         "tools.drama_profiles.resolve_quality_profile",
         lambda slug=None, models=None: "studio",
     )
-    assert lip_provider_cascade("pixverse", slug="demo") == ["pixverse"]
-    assert lip_provider_cascade("latentsync", slug="demo") == ["latentsync"]
+    assert lip_provider_cascade("seedance", slug="demo") == ["seedance"]
+    assert lip_provider_cascade("pixverse", slug="demo") == []
     assert lip_provider_cascade("missing", slug="demo") == []
 
 
 def test_assert_hq_lip_requires_motion(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("tools.drama_qc.qc_gates_enabled", lambda: True)
     monkeypatch.setattr(
         "tools.drama_models.models_with_overrides",
-        lambda slug, shot=None, **k: {"lip": {"provider": "pixverse"}},
+        lambda slug, shot=None, **k: {"lip": {"provider": "seedance"}},
     )
     monkeypatch.setattr(
         "tools.drama_lip.lip_eligible",
@@ -87,7 +89,7 @@ def test_assert_hq_lip_requires_motion(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr(
         "tools.drama_lip.lip_provider_cascade",
-        lambda wanted=None, slug="": ["pixverse"],
+        lambda wanted=None, slug="": ["seedance"],
     )
     with pytest.raises(ValueError, match="真 I2V"):
         assert_hq_lip_ready(
@@ -105,9 +107,10 @@ def test_assert_hq_lip_requires_motion(monkeypatch, tmp_path: Path):
 def test_assert_hq_lip_multi_speaker(monkeypatch, tmp_path: Path):
     motion = tmp_path / "m.mp4"
     motion.write_bytes(b"x" * 2000)
+    monkeypatch.setattr("tools.drama_qc.qc_gates_enabled", lambda: True)
     monkeypatch.setattr(
         "tools.drama_models.models_with_overrides",
-        lambda slug, shot=None, **k: {"lip": {"provider": "pixverse"}},
+        lambda slug, shot=None, **k: {"lip": {"provider": "seedance"}},
     )
     monkeypatch.setattr(
         "tools.drama_lip.lip_eligible",
@@ -115,7 +118,7 @@ def test_assert_hq_lip_multi_speaker(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr(
         "tools.drama_lip.lip_provider_cascade",
-        lambda wanted=None, slug="": ["pixverse"],
+        lambda wanted=None, slug="": ["seedance"],
     )
     monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: motion)
     with pytest.raises(ValueError, match="auto_split"):

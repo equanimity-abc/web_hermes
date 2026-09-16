@@ -76,6 +76,33 @@ def test_produce_blockers_include_kpi(monkeypatch):
         lambda slug: {"episodes": [{"n": 1, "path": "x.md"}]},
     )
     monkeypatch.setattr("tools.drama_studio._read_text", lambda rel: "剧本")
+    monkeypatch.setattr(
+        "tools.drama_qc.identity_blocks_pipeline",
+        lambda slug="", models=None: True,
+    )
     blockers = produce_blockers("demo", 1, doc=doc, force=False)
     assert any("身份 KPI" in b for b in blockers)
     assert produce_blockers("demo", 1, doc=doc, force=True) == []
+
+
+def test_produce_blockers_skip_kpi_when_advisory(monkeypatch):
+    doc = _doc_with_identity(
+        [("ok", True), ("ok", False), ("ok", True), ("ok", False), ("ok", True)]
+    )
+    monkeypatch.setattr("tools.drama_shots.load_doc", lambda *a, **k: doc)
+    monkeypatch.setattr(
+        "tools.drama_audio.load_mix",
+        lambda *a, **k: {"bgm_intent": "悬疑", "tracks": [{"role": "bgm"}]},
+    )
+    monkeypatch.setattr("tools.drama_audio.has_bgm", lambda mix: True)
+    monkeypatch.setattr(
+        "tools.drama_studio.load_project_file",
+        lambda slug: {"episodes": [{"n": 1, "path": "x.md"}]},
+    )
+    monkeypatch.setattr("tools.drama_studio._read_text", lambda rel: "剧本")
+    monkeypatch.setattr(
+        "tools.drama_qc.identity_blocks_pipeline",
+        lambda slug="", models=None: False,
+    )
+    blockers = produce_blockers("demo", 1, doc=doc, force=False)
+    assert not any("身份 KPI" in b for b in blockers)

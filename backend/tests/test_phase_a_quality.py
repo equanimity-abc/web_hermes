@@ -12,22 +12,19 @@ from tools.drama_quality import assert_shots_qc_for_export, assert_studio_provid
 
 
 def test_phase_a_defaults():
-    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 8
+    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 1
     assert DEFAULT_IDENTITY_MIN == 0.75
     assert default_models()["qc"]["identity_min"] == 0.75
     assert DEFAULT_PRESET == "ark"
-    assert QUALITY_CASCADE[0] in ("pixverse", "pixverse-lipsync")
-    assert "latentsync" in QUALITY_CASCADE
+    assert QUALITY_CASCADE[0] == "seedance"
+    assert default_models()["lip"]["provider"] == "seedance"
 
 
-def test_lip_cascade_pixverse_first(monkeypatch: pytest.MonkeyPatch):
+def test_lip_cascade_seedance_only(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "LIP_QUALITY", "max")
     monkeypatch.setattr(config, "LIP_ALLOW_MOCK", "0")
-    monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "ds")
-    monkeypatch.setattr(config, "DASHSCOPE_MAAS_BASE_URL", "https://example.maas")
-    monkeypatch.setattr(config, "REPLICATE_API_TOKEN", "r")
-    monkeypatch.setattr(config, "LIP_PROVIDER", "pixverse")
-    # 非 studio 草稿档才允许 cascade；studio 默认单供应商
+    monkeypatch.setattr(config, "ARK_API_KEY", "ark-test")
+    monkeypatch.setattr(config, "LIP_PROVIDER", "seedance")
     monkeypatch.setattr(
         "tools.drama_profiles.resolve_quality_profile",
         lambda slug=None, models=None: "draft",
@@ -36,8 +33,8 @@ def test_lip_cascade_pixverse_first(monkeypatch: pytest.MonkeyPatch):
         "tools.drama_hq_contract.is_hq_no_fallback",
         lambda slug="", models=None: False,
     )
-    cascade = lip_provider_cascade("pixverse")
-    assert cascade[0] in ("pixverse", "pixverse-lipsync")
+    cascade = lip_provider_cascade("seedance")
+    assert cascade == ["seedance"]
 
 
 def test_assert_studio_providers_fail_loud(monkeypatch: pytest.MonkeyPatch):
@@ -78,7 +75,9 @@ def test_export_qc_force_bypass(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr("tools.drama_qc.shot_can_pass", lambda bundle: False)
 
-    with pytest.raises(ValueError, match="QC 硬闸"):
-        assert_shots_qc_for_export("s", 1, doc, force=False)
-    ok = assert_shots_qc_for_export("s", 1, doc, force=True)
-    assert ok["forced"] is True
+    # QC 永久关闭：即使未 force 也不再硬拦
+    ok = assert_shots_qc_for_export("s", 1, doc, force=False)
+    assert ok["ok"] is True
+    assert ok.get("qc_disabled") is True
+    ok2 = assert_shots_qc_for_export("s", 1, doc, force=True)
+    assert ok2["forced"] is True

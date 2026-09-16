@@ -29,6 +29,17 @@ def test_classify_i2v_sensitive_needs_scene():
     assert "scene" in c["dirty"]
 
 
+def test_classify_output_video_sensitive_resumes_motion():
+    c = classify_failure(
+        "Shot 1 需要真 I2V，但得到 none（provider=seedance；"
+        "HTTP 400: OutputVideoSensitiveContentDetected）"
+    )
+    assert c["stage"] == "i2v"
+    assert c["dirty"] == ["motion", "clip"]
+    assert c["resume_from"] == "motion"
+    assert "scene" not in c["dirty"]
+
+
 def test_classify_lip_failure():
     c = classify_failure("第1镜专业档口型失败（lip_source=fallback）：pixverse: FAILED")
     assert c["stage"] == "lip"

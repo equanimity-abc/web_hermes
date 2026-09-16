@@ -77,11 +77,19 @@ function jobStatus(j) {
 }
 
 function jobMessage(j) {
-  const line = j?.line || ''
-  if (j?.state === 'error' && j.shot != null) {
-    return `${line}${line ? ' · ' : ''}问题镜头：第 ${j.shot} 镜`
+  const line = String(j?.line || j?.error || '')
+  if (j?.state === 'error') {
+    const root = line.match(/【Shot\s*(\d+)】/)
+    const side = line.match(/【Shot\s*\d+】([^\n]+)/)
+    if (root) {
+      const sideBit = side ? side[1].trim() : ''
+      return `根因镜 Shot ${root[1]}${sideBit ? ` · ${sideBit}` : ''}（详见下方全文与 curl）`
+    }
+    if (j.shot != null) return `问题镜头：第 ${j.shot} 镜（详见下方）`
   }
-  return line || '就绪'
+  // progress bar is single-line; keep short
+  const one = line.split('\n').find((x) => x.trim()) || '就绪'
+  return one.length > 80 ? `${one.slice(0, 80)}…` : one
 }
 
 function canRefreshJob(j) {

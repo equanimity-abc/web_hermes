@@ -60,9 +60,10 @@ from tools.workspace import resolve_safe
 WIDTH = 1080
 HEIGHT = 1920
 FPS = 25
-# Oversized still so pan/zoom has travel — Ken Burns needs extra pixels.
-ZOOM_W = 1620
-ZOOM_H = 2880
+# 分镜主画布 = Seedream 5.0 lite 官方 2K 9:16；成片再缩到 WIDTH×HEIGHT。
+# Ken Burns / 推镜仍有相对 1080p 的像素余量（约 1.48×）。
+ZOOM_W = 1600
+ZOOM_H = 2848
 XFADE_SEC = 0.32
 
 _SHOT_HEAD = re.compile(
@@ -975,11 +976,13 @@ def _generate_scene_image(
     real adapter lands) degrade to the global default instead of failing.
     """
     provider = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
+    route_model = ""
     if slug:
         from tools.drama_styles import image_route
 
         route = image_route(slug, shot or {}, episode=episode)
         route_provider = str(route.get("provider") or "").strip().lower()
+        route_model = str(route.get("model") or "").strip()
         if route_provider:
             provider = route_provider
     if provider in ("", "none", "off"):
@@ -987,19 +990,27 @@ def _generate_scene_image(
             shot["_image_error"] = "出图 provider 已关闭"
         return False
 
+    # Propagate routed model into shot so adapters (Seedream) don't fall back to a stale env id
+    work_shot = shot
+    if route_model:
+        work_shot = dict(shot or {})
+        work_shot["_image_model"] = route_model
+        if str(work_shot.get("kind") or "").strip().lower() == "character_ref":
+            work_shot["ref_image_model"] = route_model
+
     from tools.providers import registry
 
     gen_w = int(width or ZOOM_W)
     gen_h = int(height or ZOOM_H)
-    chain = _image_provider_chain(provider, shot, refs=refs, slug=slug)
+    chain = _image_provider_chain(provider, work_shot, refs=refs, slug=slug)
     if not chain:
         if isinstance(shot, dict):
             shot["_image_error"] = "无可用图像模型适配器"
         return False
     errors: list[str] = []
     for pid in chain:
-        if isinstance(shot, dict):
-            shot.pop("_image_error", None)
+        if isinstance(work_shot, dict):
+            work_shot.pop("_image_error", None)
         ok = registry.dispatch(
             "image",
             pid,
@@ -1010,15 +1021,21 @@ def _generate_scene_image(
             height=gen_h,
             refs=tuple(refs),
             slug=slug,
-            shot=shot,
+            shot=work_shot,
         )
         if ok:
             if isinstance(shot, dict):
                 shot.pop("_image_error", None)
+                if isinstance(work_shot, dict) and work_shot is not shot:
+                    err = work_shot.get("_image_error")
+                    if err:
+                        shot["_image_error"] = err
             return True
         detail = ""
-        if isinstance(shot, dict):
-            detail = str(shot.get("_image_error") or "").strip()
+        if isinstance(work_shot, dict):
+            detail = str(work_shot.get("_image_error") or "").strip()
+            if isinstance(shot, dict) and detail:
+                shot["_image_error"] = detail
         errors.append(f"{pid}" + (f"（{detail}）" if detail else ""))
     if isinstance(shot, dict):
         shot["_image_error"] = "；".join(errors) if errors else "全部出图后端失败"
@@ -1417,19 +1434,18 @@ def generate_shot_candidates(
             source = "ai" if ai_ok else "fallback"
         if not ai_ok:
             if hq:
+                detail = str(shot.get("_image_error") or "").strip()
                 raise RuntimeError(
-                    f"第{n}镜专业档出图失败（provider 未产出可用图），禁止静图/免费链兜底"
+                    f"第{n}镜专业档出图失败"
+                    + (f"：{detail}" if detail else "（provider 未产出可用图）")
+                    + "；禁止静图/免费链兜底"
                 )
             _draw_fallback_scene(shot, dest, cast, seed=seed)
             source = "fallback"
         return {"id": cid, "path": rel, "source": source, "seed": seed, "ai": ai_ok or source == "layered"}
 
-    # S4: 候选墙并发出图，受 DRAMA_MAX_WORKERS 约束（保留 ids 顺序）。
-    from concurrent.futures import ThreadPoolExecutor
-
-    workers = max(1, min(int(getattr(config, "DRAMA_MAX_WORKERS", 2) or 2), count))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        rendered = list(executor.map(_render_one, range(len(ids)), ids))
+    # S4: 候选墙也串行出图（一份完成再下一份）
+    rendered = [_render_one(i, cid) for i, cid in enumerate(ids)]
     for rec in rendered:
         created.append({"id": rec["id"], "path": rec["path"], "source": rec["source"], "seed": rec["seed"]})
         used_ai = used_ai or rec["ai"]
@@ -1468,9 +1484,29 @@ def generate_shot_candidates(
                 except OSError:
                     pass
         except (ValueError, OSError, FileNotFoundError):
-            apply_candidate_to_scene(shot, created[0])
-            if used_ai:
-                shot["scene_source"] = str(created[0].get("source") or "ai")
+            # 直写失败时再走 apply；若临时 cand 已不在但 scene 已落盘，视为成功。
+            cand_path = str(created[0].get("path") or "")
+            scene_dest = _path_for(shot, "scene")
+            try:
+                src = resolve_safe(cand_path)
+            except ValueError:
+                src = None
+            if src is not None and src.is_file():
+                apply_candidate_to_scene(shot, created[0])
+                if used_ai:
+                    shot["scene_source"] = str(created[0].get("source") or "ai")
+            elif scene_dest.is_file() and scene_dest.stat().st_size > 1000:
+                if used_ai:
+                    shot["scene_source"] = str(created[0].get("source") or "ai")
+                dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+                if "clip" not in dirty and "clip" not in locked:
+                    dirty.append("clip")
+                shot["dirty"] = dirty
+                shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
+            else:
+                apply_candidate_to_scene(shot, created[0])
+                if used_ai:
+                    shot["scene_source"] = str(created[0].get("source") or "ai")
     return created
 
 
@@ -1982,6 +2018,38 @@ def _probe_media_seconds(path: Path, *, minimum: float = 0.0) -> float:
         return 0.0
 
 
+def _probe_has_audio_stream(path: Path) -> bool:
+    """True when media has at least one audio stream (e.g. Seedance native audio)."""
+    if not path or not path.is_file():
+        return False
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=creationflags,
+        )
+        return bool((proc.stdout or "").strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def av_timing_window(*, voice_seconds: float, play_seconds: float) -> tuple[float, float]:
     """Shared clock for voice onset + mouth-active window + clip play length.
 
@@ -2177,9 +2245,20 @@ def _encode_clip_from_motion(
 
     See ``av_timing_window``: mouth-active window == VO length from the same t=0;
     shot may be longer with freeze + silence after speech ends.
+
+    Audio priority:
+    1) 手动 TTS 文件 → 替换音轨
+    2) 运动片自带声（Seedance generate_audio）→ 保留
+    3) 否则静音垫底
     """
     look = _look_filters(shot, remux_clean=remux_clean)
-    voice_sec = _probe_media_seconds(audio) if audio is not None and audio.is_file() else 0.0
+    keep_motion_audio = audio is None and _probe_has_audio_stream(motion)
+    if audio is not None and audio.is_file():
+        voice_sec = _probe_media_seconds(audio)
+    elif keep_motion_audio:
+        voice_sec = _probe_media_seconds(motion)
+    else:
+        voice_sec = 0.0
     active, target = av_timing_window(voice_seconds=voice_sec, play_seconds=float(duration or 0))
     if isinstance(shot, dict):
         shot["av_active"] = round(active, 3)
@@ -2195,6 +2274,12 @@ def _encode_clip_from_motion(
         args += ["-i", str(audio)]
         af = (
             f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"asetpts=PTS-STARTPTS,apad=whole_dur={target:.3f},atrim=0:{target:.3f},"
+            f"asetpts=PTS-STARTPTS[aout]"
+        )
+    elif keep_motion_audio:
+        af = (
+            f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
             f"asetpts=PTS-STARTPTS,apad=whole_dur={target:.3f},atrim=0:{target:.3f},"
             f"asetpts=PTS-STARTPTS[aout]"
         )
@@ -2457,6 +2542,12 @@ def render_shot_layers(
     # Karaoke / model routing reads shot._slug
     shot["_slug"] = slug
     shot["_episode"] = episode
+    try:
+        from tools.drama_studio import project_manual_voice
+
+        shot["manual_voice"] = bool(project_manual_voice(slug))
+    except Exception:
+        shot.setdefault("manual_voice", False)
 
     rebuilt: list[str] = []
     degrades: list[dict[str, Any]] = []
@@ -2472,25 +2563,27 @@ def render_shot_layers(
         used_ai = any(item.get("source") == "ai" for item in generated)
         if not used_ai:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})
-        # Autopilot (count=1): always stamp the single plate onto scene unless locked.
-        # Fine-tune wall (count>1): only seed scene.png when missing（手工候选墙）。
-        if generated and "scene" not in locked:
-            if wall_n <= 1 or not _path_for(shot, "scene").is_file():
+        # Autopilot (count=1)：generate_shot_candidates 已直写 scene.png，并可能删掉临时 cand；
+        # 禁止再 apply_candidate（否则必报「候选图不存在」）。
+        # 手工候选墙 (count>1)：仅当 scene 缺失时用首候选补种。
+        if generated and "scene" not in locked and wall_n > 1:
+            if not _path_for(shot, "scene").is_file():
                 apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
-        # 身份闸：不过则标脏，由工作台手工重抽；产线不会自动换种子再出。
+        # 身份闸：校验开启时才打分标脏；关闭时跳过
         if used_ai:
-            from tools.drama_qc import qc_shot_identity
+            from tools.drama_qc import qc_gates_enabled, qc_shot_identity
 
-            identity = qc_shot_identity(slug, episode, shot, apply=True)
-            if str(identity.get("status") or "") == "ok" and not identity.get("pass"):
-                degrades.append(
-                    {
-                        "shot": int(shot.get("n") or 0),
-                        "layer": "identity",
-                        "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏（请手工重抽）",
-                    }
-                )
+            if qc_gates_enabled():
+                identity = qc_shot_identity(slug, episode, shot, apply=True)
+                if str(identity.get("status") or "") == "ok" and not identity.get("pass"):
+                    degrades.append(
+                        {
+                            "shot": int(shot.get("n") or 0),
+                            "layer": "identity",
+                            "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏（请手工重抽）",
+                        }
+                    )
 
     if "overlay" in wanted:
         _draw_subtitle_overlay(shot, overlay)
@@ -2558,7 +2651,24 @@ def render_shot_layers(
         if "overlay" not in rebuilt:
             rebuilt.append("overlay")
         shot["camera"] = shot.get("camera") or _camera_style(shot)
-        audio = voice if voice.is_file() and voice.stat().st_size > 0 else None
+        # 仅「手动配音」用 TTS 盖音轨；默认保留 Seedance 自带声
+        use_tts_mux = False
+        if "manual_voice" in shot:
+            use_tts_mux = bool(shot.get("manual_voice"))
+        else:
+            slug_mv = str(shot.get("_slug") or "").strip()
+            if slug_mv:
+                try:
+                    from tools.drama_studio import project_manual_voice
+
+                    use_tts_mux = bool(project_manual_voice(slug_mv))
+                except Exception:
+                    use_tts_mux = False
+        audio = (
+            voice
+            if use_tts_mux and voice.is_file() and voice.stat().st_size > 0
+            else None
+        )
         if audio is not None:
             voice_dur = _probe_media_seconds(audio)
             # 配音更长时拉长本镜；口型活跃窗始终跟 VO（见 av_timing_window）

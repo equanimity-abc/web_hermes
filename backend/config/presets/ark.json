@@ -6,30 +6,30 @@
   "models": {
     "script": {
       "provider": "ark",
-      "model": "doubao-seed-character-260628",
-      "refine_model": "doubao-seed-character-260628",
+      "model": "glm-5-2-260617",
+      "refine_model": "glm-5-2-260617",
       "alternatives": ["ark", "deepseek", "kimi"]
     },
     "image": {
-      "establishing": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
-      "insert": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
-      "dialogue": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
-      "reaction": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
-      "action": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
-      "crowd": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
-      "title": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.3 },
-      "character_ref": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 }
+      "establishing": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
+      "insert": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
+      "dialogue": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
+      "reaction": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
+      "action": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
+      "crowd": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
+      "title": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.3 },
+      "character_ref": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 }
     },
     "motion": {
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
-      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
-      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
-      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L3" },
+      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L1" },
+      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L3" },
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },
-    "lip": { "provider": "pixverse", "enabled": true },
+    "lip": { "provider": "seedance", "enabled": true },
     "tts": {
       "provider": "seed-audio",
       "model": "doubao-seed-audio-1-0",

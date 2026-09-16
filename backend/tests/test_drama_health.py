@@ -148,14 +148,17 @@ def test_normalize_ref_image_route():
 def test_ref_canvas_size_by_category():
     from tools.drama_characters import normalize_ref_size, ref_canvas_size
 
-    assert normalize_ref_size(1980, "character") == 1024
+    assert normalize_ref_size(1980, "character") == 2048  # legacy → 角色默认
     assert normalize_ref_size(640, "scene") == 1440
     assert normalize_ref_size(1024, "scene") == 1440  # 旧角色边长在场景档无效
     assert normalize_ref_size(1536, "character") == 1536
+    assert normalize_ref_size(1024, "prop") == 2048  # 旧道具方图 → 现默认 2048
+    assert normalize_ref_size(1080, "prop") == 2048  # 旧竖屏键已移除
     assert ref_canvas_size({"category": "character", "ref_size": 1024}) == (1024, 1024)
     assert ref_canvas_size({"category": "character", "ref_size": 2048}) == (2048, 2048)
-    assert ref_canvas_size({"category": "prop", "ref_size": 1024}) == (1024, 1024)
-    assert ref_canvas_size({"category": "prop", "ref_size": 1080}) == (1080, 1920)
+    assert ref_canvas_size({"category": "prop", "ref_size": 2048}) == (2048, 2048)
+    assert ref_canvas_size({"category": "prop", "ref_size": 1440}) == (1440, 2560)
+    assert ref_canvas_size({"category": "prop", "ref_size": 1024}) == (2048, 2048)
     assert ref_canvas_size({"category": "scene", "ref_size": 1440}) == (1440, 2560)
     assert ref_canvas_size({"category": "scene", "ref_size": 1600}) == (1600, 2848)
     assert ref_canvas_size({"category": "scene", "ref_size": 1980}) == (1440, 2560)

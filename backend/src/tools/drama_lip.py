@@ -1,10 +1,11 @@
-"""Dialogue lip sync — quality-first (LatentSync / PixVerse / self-host).
+"""Dialogue lip sync — quality-first (Seedance TTS ref / LatentSync / PixVerse / self-host).
 
 Pipeline:
   1. Gate: dialogue|reaction CU/MCU/ECU with speaker + dialogue VO
   2. Ensure face **video** base (motion I2V → still-to-video)
-  3. Cascade providers for best fidelity (never prefer mock unless allowed)
-  4. Score with LSE proxy; clip encode burns subtitles afterwards
+  3. Prefer Seedance motion already lip-synced via TTS reference_audio (soft-skip)
+  4. Else cascade providers (PixVerse / LatentSync…); never prefer mock unless allowed
+  5. Score with LSE proxy; clip encode burns subtitles afterwards
 
 Multi-speaker (DialogueTrack mode=multi / lip_strategy=per_turn):
   Production path (locks speaker, avoids rectangular seams):
@@ -36,15 +37,8 @@ BLOCKED_KINDS = frozenset({"establishing", "crowd", "action", "title", "insert"}
 # chain invertible (no aspect-ratio squash → no mouth drift / seams / flicker).
 LIP_CROP_SIZE = 512
 
-# PixVerse first (product decision 2026-09); LatentSync remains high-quality fallback.
-QUALITY_CASCADE = (
-    "pixverse",
-    "pixverse-lipsync",
-    "latentsync",
-    "musetalk",
-    "wav2lip",
-    "http",
-)
+# 火山方舟单轨：口型由 Seedance + TTS reference_audio 内生，不再级联 PixVerse。
+QUALITY_CASCADE = ("seedance",)
 
 
 def lip_rel(slug: str, episode: int, n: int) -> str:
@@ -133,16 +127,8 @@ def _provider() -> str:
 
 
 def _default_provider() -> str:
-    # Product decision: PixVerse first; LatentSync when only Replicate is configured.
-    if (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip() and (
-        getattr(config, "DASHSCOPE_API_KEY", "") or ""
-    ).strip():
-        return "pixverse"
-    if (getattr(config, "REPLICATE_API_TOKEN", "") or os.getenv("REPLICATE_API_TOKEN") or "").strip():
-        return "latentsync"
-    if (getattr(config, "LIP_API_URL", "") or "").strip():
-        return "musetalk"
-    return "pixverse"
+    # 火山单轨：口型 = Seedance(+TTS)，不再默认 PixVerse
+    return "seedance"
 
 
 def _quality_max() -> bool:
@@ -176,15 +162,16 @@ def _set_layout_source(shot: dict[str, Any] | None, source: str) -> None:
 
 def _provider_ready(pid: str) -> bool:
     pid = str(pid or "").strip().lower()
+    if pid == "seedance":
+        # 口型内生于 Seedance I2V；有方舟 Key 即可（与视频同轨）
+        return bool((getattr(config, "ARK_API_KEY", "") or os.getenv("ARK_API_KEY") or "").strip())
     if pid in ("latentsync", "latent-sync", "replicate-lip"):
         return bool((getattr(config, "REPLICATE_API_TOKEN", "") or os.getenv("REPLICATE_API_TOKEN") or "").strip())
     if pid in ("pixverse", "pixverse-lipsync"):
-        return bool(
-            (getattr(config, "DASHSCOPE_API_KEY", "") or "").strip()
-            and (getattr(config, "DASHSCOPE_MAAS_BASE_URL", "") or "").strip()
-        )
+        # 火山单轨：旧名视为未就绪，迫使改写到 seedance
+        return False
     if pid in ("musetalk", "wav2lip", "http", "api"):
-        return bool((getattr(config, "LIP_API_URL", "") or os.getenv("LIP_API_URL") or "").strip())
+        return False
     if pid == "mock":
         return _allow_mock() or not _quality_max()
     return False
@@ -332,8 +319,10 @@ def ensure_lip_video_base(
         from tools.drama_hq_contract import is_hq_no_fallback
 
         if is_hq_no_fallback(slug):
+            from tools.drama_qc import qc_gates_enabled
+
             src = str(shot.get("i2v_source") or "").strip().lower()
-            if src not in ("ai", "keys"):
+            if src not in ("ai", "keys") and qc_gates_enabled():
                 raise RuntimeError(
                     f"第{n}镜专业档口型要求真 I2V 底片（i2v_source=ai|keys），"
                     f"当前 i2v_source={src or '空'}，禁止 Ken Burns/静图对嘴"
@@ -344,10 +333,13 @@ def ensure_lip_video_base(
     from tools.drama_hq_contract import is_hq_no_fallback
 
     if is_hq_no_fallback(slug):
-        raise RuntimeError(
-            f"第{n}镜专业档口型缺少真运动片，禁止用静图 lip_base 顶替。"
-            "请先完成 Seedance/Kling I2V。"
-        )
+        from tools.drama_qc import qc_gates_enabled
+
+        if qc_gates_enabled():
+            raise RuntimeError(
+                f"第{n}镜专业档口型缺少真运动片，禁止用静图 lip_base 顶替。"
+                "请先完成 Seedance/Kling I2V。"
+            )
 
     if not scene.is_file():
         return None
@@ -2039,6 +2031,44 @@ def generate_shot_lip(
     scene = resolve_safe(str(assets.get("scene") or ""))
     voice = resolve_safe(str(assets.get("voice") or ""))
     dest = resolve_safe(rel)
+
+    # 生产线：Seedance 已用 TTS reference_audio 做口型 → 跳过 PixVerse，直接用 motion。
+    if bool(shot.get("seedance_lip")) and not force:
+        motion = resolve_safe(str(assets.get("motion") or ""))
+        if motion.is_file() and motion.stat().st_size > 500:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if motion.resolve() != dest.resolve():
+                shutil.copy2(motion, dest)
+            shot["lip_source"] = "seedance"
+            duration = float(shot.get("duration") or 3)
+            voice_dur = 0.0
+            if voice.is_file():
+                try:
+                    from tools.drama_video import _probe_duration
+
+                    voice_dur = float(_probe_duration(voice) or 0)
+                    if voice_dur > 0.35:
+                        duration = voice_dur
+                except Exception:
+                    pass
+            score = score_lip(dest, voice if voice.is_file() else None)
+            shot["lip_score"] = score
+            if voice_dur > 0.35:
+                shot["av_active"] = round(float(duration), 3)
+            return {
+                "tried": True,
+                "lip_source": "seedance",
+                "lip": rel,
+                "video_base": str(assets.get("motion") or ""),
+                "provider": "seedance",
+                "score": score,
+                "reason": "seedance_ref_audio",
+                "lip_strategy": "seedance",
+                "lip_layout_source": str(shot.get("lip_layout_source") or ""),
+                "lip_warnings": list(shot.get("lip_warnings") or []),
+                "lip_degraded": bool(shot.get("lip_degraded")),
+            }
+
     duration = float(shot.get("duration") or 3)
     voice_dur = 0.0
     # Lip must track VO length. Long script beats with short dialogue desync if we
@@ -2158,10 +2188,15 @@ def generate_shot_lip(
             " 或 LIP_API_URL（自建）"
         )
     if hq:
-        raise RuntimeError(
-            f"第{int(shot.get('n') or 0)}镜专业档口型失败（lip_source={source or '空'}）：{reason}"
-        )
+        from tools.drama_qc import qc_gates_enabled
+
+        # 校验总闸关闭：允许 fallback 继续成片，不 Fail Loud
+        if qc_gates_enabled():
+            raise RuntimeError(
+                f"第{int(shot.get('n') or 0)}镜专业档口型失败（lip_source={source or '空'}）：{reason}"
+            )
     _lip_warn(shot, reason)
+    shot["lip_source"] = "fallback"
     shot["lip_score"] = {"status": "skipped", "reason": "fallback", "method": "proxy"}
     return {
         "tried": True,

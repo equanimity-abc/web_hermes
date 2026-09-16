@@ -11,7 +11,7 @@ from tools.workspace import resolve_safe
 _ASSET_FIELD_RE = re.compile(r"^-\s*\*{0,2}([^\*{：:]+)(?:\*{0,2})\s*[:：]\s*(.*)$")
 
 _META_KEYS = ("时长", "钩子", "悬念", "配乐")
-_CAST_FIELDS = ("外形", "性格", "音色倾向", "口头禅", "别名")
+_CAST_FIELDS = ("外形", "性格", "音色倾向", "口头禅", "别名", "关系")
 _LOC_FIELDS = ("描述", "光影色调", "标志物")
 _PROP_FIELDS = ("描述", "材质外形", "剧情作用")
 
@@ -93,13 +93,22 @@ def build_episode_script_system(
         "- 悬念: 结尾反转或未解悬念\n"
         "- 配乐: 情绪/风格/乐器/节奏起伏（成片 BGM 依据，勿写具体版权曲名）\n\n"
         "## 角色设定\n"
-        "### 角色名\n"
-        "- 外形: 年龄感、五官、发型发色、服饰、配色、标志性细节（可画定妆；只写人物本体，禁止手持道具）\n"
+        "### 角色名（短名，如「小石」「愚公」「智叟」；禁止「愚公的小孙女」这类关系称呼当姓名）\n"
+        "- 外形: 年龄感、性别、脸型五官、瞳色、发型发色与造型、身高体态、服装剪裁与主色/辅色、"
+        "至少 1 个独占视觉锚点（疤痕/花钿/配饰/鞋履等）；只写人物本体，禁止手持道具\n"
         "- 性格: 2–4 词或短句\n"
         "- 音色倾向: 如女声温柔 / 男声低沉（供配音选型）\n"
         "- 口头禅: 可选\n"
-        "硬性：每位具名角色外形须在年龄段/性别/发型发色/服装配色中至少 3 项与其他角色明显不同；"
-        "村民/路人等群演不得与主角或具名配角撞脸。\n\n"
+        "- 别名: 可选（旧称/昵称，勿把关系称呼写进主名）\n"
+        "硬性（人物画像识别度）：\n"
+        "1) 每位具名角色必须在「年龄段、性别、发型发色造型、服装主色、独占锚点」中至少 4 项与其他角色明显不同；\n"
+        "2) 禁止两名角色同色主服+同发型；禁止村民/路人与具名角色撞脸撞衣；\n"
+        "3) 角色主名只用独立短名；亲属/邻里关系写在「角色关系」图谱，不要写进###标题。\n\n"
+        "## 角色关系\n"
+        "用图谱约束关系，格式固定一行一条：\n"
+        "- 小石 → 愚公：孙女\n"
+        "- 智叟 → 愚公：邻居\n"
+        "（左侧右侧都必须是「角色设定」中的短名；禁止再用关系称呼当角色名）\n\n"
         "## 场景设定\n"
         "单集只用 1–3 个主场景；名称短而稳定（如「广寒宫前殿」），跨镜必须同一写法。\n"
         "每条场景必须写到「能生成无人物竖屏主底板」的粒度，禁止「气氛压抑」「华美宫殿」这类空话。\n"
@@ -130,6 +139,8 @@ def build_episode_script_system(
         f"镜头数 {shot_lo}–{shot_hi} 个；"
         "时间轴必须从 0s 连续排到目标时长；"
         "角色/场景/道具名称全局统一，禁止同人异名、同地异名；"
+        "角色主名必须是短名（如小石），亲属关系只写在「角色关系」；"
+        "每位角色外形须高识别度（年龄/性别/发型/服色/独占锚点互不撞车）；"
         "每镜必填地点；同地点跨镜保持同一建筑轮廓、主光方向与地面材质；"
         "画面负责人物与动作，场景细节以「场景设定」为准，勿在画面里另起炉灶；"
         "关键道具写入道具字段且与道具设定同名；"
@@ -151,9 +162,11 @@ def build_episode_user_prompt(
     if outline:
         parts.append("故事大纲（按本集节拍展开，勿越界写其它集正文）：\n" + truncate_context(outline))
     parts.append(
-        "请先写齐角色设定、场景设定、道具设定与配乐，再写分镜。\n"
-        "角色外形彼此必须可一眼区分（年龄/性别/发型/服装拉开差距），禁止村民与具名角色长得像；"
-        "外形只写人物，锄头等工具写进道具设定。\n"
+        "请先写齐角色设定、角色关系、场景设定、道具设定与配乐，再写分镜。\n"
+        "角色命名规范：主名用短名（愚公/小石/智叟），禁止「愚公的小孙女」这类关系称呼当###标题；"
+        "关系一律写入「## 角色关系」图谱（A → B：关系）。\n"
+        "人物画像识别度：每位角色外形须在年龄段、性别、发型发色造型、服装主色、独占锚点上与他人拉开差距，"
+        "禁止撞脸撞衣；外形只写人物，锄头等工具写进道具设定。\n"
         "场景设定必须具体到可生成「无人物竖屏主底板」；道具设定必须具体到可画设定图。\n"
         "分镜中的角色/地点/道具必须与设定块逐字同名；"
         "同一地点跨镜复用同一场景名，不要在画面散文里发明新地名。"
@@ -261,6 +274,12 @@ def format_asset_sections(parsed: dict[str, Any]) -> list[str]:
 def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -> dict[str, Any]:
     """Upsert cast/scene/prop cards from structured script + bind shot ids; store BGM intent."""
     from tools.drama_audio import load_mix, save_mix
+    from tools.drama_cast_graph import (
+        bind_relationship_ids,
+        parse_relationship_section,
+        preferred_character_name,
+        upsert_relationship_edges,
+    )
     from tools.drama_characters import (
         load_characters,
         match_character_token,
@@ -272,15 +291,45 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
     from tools.drama_produce import ensure_characters_from_shots
     from tools.drama_shots import load_doc, save_doc
 
-    created = {"characters": [], "scenes": [], "props": []}
+    created = {"characters": [], "scenes": [], "props": [], "relationships": []}
     cards = load_characters(slug)
+
+    # Relationship graph from episode markdown (independent of cast loop)
+    raw_md = ""
+    try:
+        from tools.drama_shots import script_rel
+
+        p = resolve_safe(script_rel(slug, episode))
+        if p.is_file():
+            raw_md = p.read_text(encoding="utf-8")
+    except Exception:
+        raw_md = ""
+    if not raw_md and isinstance(parsed.get("_raw"), str):
+        raw_md = str(parsed.get("_raw") or "")
+    rel_edges = parse_relationship_section(raw_md)
+    # Also absorb per-cast「关系」fields like「愚公的孙女」into edges when possible
+    for rec in parsed.get("cast") or []:
+        if not isinstance(rec, dict):
+            continue
+        rel_txt = str(rec.get("关系") or "").strip()
+        name_raw = str(rec.get("name") or "").strip()
+        display, _ = preferred_character_name(name_raw)
+        if rel_txt and display:
+            # 「愚公的孙女」→ 小石 → 愚公：孙女
+            m = re.match(r"^(.+?)的(.+)$", rel_txt)
+            if m:
+                rel_edges.append({"from": display, "to": m.group(1).strip(), "rel": m.group(2).strip()})
+    if rel_edges:
+        upsert_relationship_edges(slug, rel_edges)
+        created["relationships"] = rel_edges
 
     for rec in parsed.get("cast") or []:
         if not isinstance(rec, dict):
             continue
-        name = str(rec.get("name") or "").strip()
-        if not name:
+        name_raw = str(rec.get("name") or "").strip()
+        if not name_raw:
             continue
+        name, extra_aliases = preferred_character_name(name_raw)
         look_parts = [
             str(rec.get("外形") or "").strip(),
             (f"性格：{str(rec.get('性格')).strip()}" if str(rec.get("性格") or "").strip() else ""),
@@ -295,6 +344,9 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
             for a in str(rec.get("别名") or "").replace("，", "、").split("、")
             if a.strip()
         ]
+        for a in extra_aliases:
+            if a and a not in aliases and a != name:
+                aliases.append(a)
         hint_gender = voice_hint_to_gender(str(rec.get("音色倾向") or ""))
         payload: dict[str, Any] = {
             "name": name,
@@ -308,6 +360,10 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
         existing = match_character_token(
             name, [c for c in cards if str(c.get("category") or "character") == "character"]
         )
+        if existing is None and name_raw != name:
+            existing = match_character_token(
+                name_raw, [c for c in cards if str(c.get("category") or "character") == "character"]
+            )
         if existing and existing.get("ref_locked"):
             # Keep locked looks; only fill empty look / voice / gender.
             patch: dict[str, Any] = {"id": existing["id"]}
@@ -317,6 +373,14 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
                 patch["gender"] = hint_gender
             if hint_gender and not str(existing.get("voice") or "").strip():
                 patch["voice"] = pick_default_voice(slug, hint_gender, cards)
+            if aliases:
+                old_aliases = [str(x) for x in (existing.get("aliases") or []) if str(x).strip()]
+                merged = list(dict.fromkeys([*old_aliases, *aliases]))
+                if merged != old_aliases:
+                    patch["aliases"] = merged
+            # Fix kinship compound primary names even when locked ref
+            if str(existing.get("name") or "") != name and name:
+                patch["name"] = name
             if len(patch) == 1:
                 continue
             payload = patch
@@ -401,4 +465,8 @@ def materialize_script_assets(slug: str, episode: int, parsed: dict[str, Any]) -
             save_mix(slug, episode, mix)
 
     created["character_cards"] = len(load_characters(slug))
+    try:
+        bind_relationship_ids(slug, load_characters(slug))
+    except Exception:
+        pass
     return created

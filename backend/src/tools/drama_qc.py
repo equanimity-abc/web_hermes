@@ -29,7 +29,7 @@ from tools.drama_shots import load_doc, ordered_shots_from_doc
 from tools.workspace import resolve_safe
 
 DEFAULT_IDENTITY_MIN = 0.75
-DEFAULT_SSIM_MIN = 0.85
+DEFAULT_SSIM_MIN = 0.84
 DEFAULT_LUFS_TARGET = -14.0
 DEFAULT_LUFS_MIN = -16.0
 DEFAULT_LUFS_MAX = -12.0
@@ -41,6 +41,22 @@ HINT_SKIPPED = "脚本未能出分，不得记为通过"
 LUFS_I_RE = re.compile(r"I:\s*(-?[\d.]+)\s*LUFS", re.I)
 LUFS_PEAK_RE = re.compile(r"(?:True peak|Peak):\s*(-?[\d.]+)\s*dBTP", re.I)
 FLICKER_FRAMES = 8
+
+
+def _emit_identity_result(
+    shot: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    mode: str,
+    apply: bool,
+) -> dict[str, Any]:
+    """Stamp enforcement metadata; advisory/off never required for export gates."""
+    result["enforcement"] = mode
+    result.setdefault("identity_anchor", "body")
+    if mode != "enforce":
+        result["required"] = False
+    shot["identity"] = result
+    return result
 
 
 def fail_hint(threshold: float) -> str:
@@ -69,6 +85,39 @@ def qc_thresholds(slug: str, models: dict[str, Any] | None = None) -> dict[str, 
     }
 
 
+def identity_enforcement(slug: str = "", models: dict[str, Any] | None = None) -> str:
+    """身份硬闸模式：``enforce`` | ``advisory`` | ``off``。
+
+    - enforce：不过关 Fail Loud（历史专业档）
+    - advisory：旁路仍打分，写入 shot.identity / degrade，不阻断产线（当前默认）
+    - off：尽量不跑 ArcFace（省时；无对照分）
+    """
+    models = models or load_models(slug)
+    qc = models.get("qc") if isinstance(models.get("qc"), dict) else {}
+    raw = str(qc.get("identity_enforcement") or "advisory").strip().lower()
+    if raw in ("enforce", "strict", "hard"):
+        return "enforce"
+    if raw in ("off", "none", "disable", "disabled"):
+        return "off"
+    return "advisory"
+
+
+def qc_gates_enabled() -> bool:
+    """QC hard gates permanently removed — never Fail Loud on identity/flicker/lip/loudness/KPI.
+
+    Env ``DRAMA_QC_ENABLED`` is ignored. Scoring helpers may still exist for diagnostics,
+    but produce/export must never block on them.
+    """
+    return False
+
+
+def identity_blocks_pipeline(slug: str = "", models: dict[str, Any] | None = None) -> bool:
+    """True 仅当身份结果应 Fail Loud / dirty / KPI 硬拦。"""
+    if not qc_gates_enabled():
+        return False
+    return identity_enforcement(slug, models) == "enforce"
+
+
 def identity_threshold(slug: str, models: dict[str, Any] | None = None) -> float:
     return qc_thresholds(slug, models)["identity_min"]
 
@@ -83,11 +132,20 @@ def qc_passed(result: dict[str, Any] | None) -> bool:
 
 
 def check_allows_pass(result: dict[str, Any] | None) -> bool:
-    """Required checks must be ok+pass. n/a is ignored. skipped never allows pass."""
+    """Required checks must be ok+pass. n/a is ignored. skipped never allows pass.
+
+    身份旁路（``enforcement`` 为 advisory/off）永不阻断导出/清单。
+    总闸 ``qc_gates_enabled()`` 关闭时一律放行。
+    """
+    if not qc_gates_enabled():
+        return True
     if not isinstance(result, dict):
         return False
     status = str(result.get("status") or "")
     if status == "n/a" or result.get("required") is False:
+        return True
+    enf = str(result.get("enforcement") or "").strip().lower()
+    if enf in ("advisory", "off"):
         return True
     return qc_passed(result)
 
@@ -127,7 +185,7 @@ def _hist_embedding(path: Path) -> list[float] | None:
 
 _arcface_app: Any = None
 _arcface_lock = threading.RLock()
-# 竖屏漫剧常用 1080×1920 / 1620×2880；det=640 易漏检二次元小脸。
+# 竖屏漫剧常用 1080×1920 / 1600×2848；det=640 易漏检二次元小脸。
 _ARCFACE_DET_SIZE = (960, 960)
 _ARCFACE_DET_SIZE_FALLBACK = (1280, 1280)
 _ARCFACE_DET_SIZE_LARGE = (1600, 1600)
@@ -280,6 +338,33 @@ def _arcface_faces(path: Path) -> tuple[list[dict[str, Any]], str]:
                     except TypeError:
                         app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE_FALLBACK)
                     rows = _scale_boxes(_collect(app.get(big)), scale, scale)
+                if not rows:
+                    # 二次元正脸特写常见：脸贴边/大眼平涂。加边距再以更低阈值检一次。
+                    try:
+                        pad = max(32, int(round(0.12 * max(h, w))))
+                        canvas = np.full((h + 2 * pad, w + 2 * pad, 3), 245, dtype=rgb.dtype)
+                        canvas[pad : pad + h, pad : pad + w] = rgb
+                        padded = np.ascontiguousarray(canvas[:, :, ::-1])
+                        try:
+                            app.prepare(
+                                ctx_id=-1,
+                                det_size=_ARCFACE_DET_SIZE_LARGE,
+                                det_thresh=0.15,
+                            )
+                        except TypeError:
+                            app.prepare(ctx_id=-1, det_size=_ARCFACE_DET_SIZE_LARGE)
+                        padded_rows = _collect(app.get(padded))
+                        if padded_rows:
+                            rows = []
+                            for row in padded_rows:
+                                box = list(row.get("bbox") or [])
+                                if len(box) != 4:
+                                    continue
+                                nb = [box[0] - pad, box[1] - pad, box[2] - pad, box[3] - pad]
+                                area = max(0.0, (nb[2] - nb[0]) * (nb[3] - nb[1]))
+                                rows.append({**row, "bbox": nb, "area": area, "img_w": w, "img_h": h})
+                    except Exception:
+                        pass
                 try:
                     app.prepare(
                         ctx_id=-1,
@@ -400,44 +485,74 @@ def _arcface_embedding(
 def validate_character_ref(ref_path: Path | None) -> dict[str, Any]:
     """锁定定妆前的身份就绪校验（纯函数、不改任何状态）。
 
-    用来在「生成定妆 → 锁定」之间把关：刚生成的定妆必须有可检测的人脸 + 可计算的
-    ArcFace 嵌入，才允许锁定；否则锁定的定妆在后续抽检时会命中 ``no_face`` /
-    ``no_embedding``，而且此时已无法回改（定妆一旦锁定即不可变）。
-
-    区分两类完全不同的失败：
-      - 可手工重生成：图本身没人脸/嵌入不出来（no_face / no_embedding）。
-      - 依赖缺失（no_insightface / arcface_error）→ 重生成无用，需先修环境。
-    ``retryable`` 仅作提示，产线不会据此自动换种子重抽。
+    返回字段含诊断信息：``path`` / ``size_bytes`` / ``width`` / ``height`` /
+    ``face_count`` / ``method`` / ``reason`` / ``hint``。
     """
+    meta: dict[str, Any] = {
+        "path": str(ref_path) if ref_path is not None else "",
+        "size_bytes": 0,
+        "width": 0,
+        "height": 0,
+        "face_count": 0,
+    }
     if ref_path is None or not ref_path.is_file() or ref_path.stat().st_size < 32:
         return {
             "ok": False,
             "reason": "missing_ref",
             "retryable": False,
             "method": "",
-            "hint": "定妆图文件缺失或过小，需重新生成",
+            "hint": "定妆图文件缺失或过小",
+            **meta,
         }
+    try:
+        meta["size_bytes"] = int(ref_path.stat().st_size)
+        meta["path"] = str(ref_path)
+        from PIL import Image
+
+        with Image.open(ref_path) as im:
+            meta["width"], meta["height"] = int(im.size[0]), int(im.size[1])
+    except Exception:
+        pass
     if not _arcface_ready():
         return {
             "ok": False,
             "reason": "no_insightface",
             "retryable": False,
             "method": "",
-            "hint": "身份模型 ArcFace 未就绪（insightface 未安装或 buffalo_l 未缓存）",
+            "hint": (
+                f"InsightFace/ArcFace 未就绪（buffalo_l 未安装或未缓存）；"
+                f"文件={ref_path.name} {meta['width']}x{meta['height']} {meta['size_bytes']}B"
+            ),
+            **meta,
         }
-    emb, method = _arcface_embedding(ref_path)
-    if emb is None:
-        retryable = method in ("no_face", "no_embedding")
+    faces, method = _arcface_faces(ref_path)
+    meta["face_count"] = len(faces)
+    if not faces:
         return {
             "ok": False,
-            "reason": method or "arcface_error",
-            "retryable": retryable,
+            "reason": method or "no_face",
+            "retryable": method in ("no_face", "no_embedding"),
             "method": method or "",
             "hint": (
-                "定妆图未检测到可用人脸，需重新生成"
-                if retryable
-                else "身份嵌入依赖缺失或调用失败，专业档不得记为通过"
+                f"InsightFace 在定妆图上检出 0 张脸（method={method or 'no_face'}；"
+                f"文件={ref_path.name}；尺寸={meta['width']}x{meta['height']}；"
+                f"大小={meta['size_bytes']}B）。"
+                f"检测器 buffalo_l 偏真人照片，二次元/平涂特写常见漏检，不代表肉眼无脸。"
             ),
+            **meta,
+        }
+    emb = faces[0].get("emb")
+    if emb is None:
+        return {
+            "ok": False,
+            "reason": "no_embedding",
+            "retryable": True,
+            "method": method or "no_embedding",
+            "hint": (
+                f"InsightFace 检出 {len(faces)} 张脸但无法提取嵌入（文件={ref_path.name}；"
+                f"尺寸={meta['width']}x{meta['height']}）"
+            ),
+            **meta,
         }
     return {
         "ok": True,
@@ -446,6 +561,183 @@ def validate_character_ref(ref_path: Path | None) -> dict[str, Any]:
         "method": method,
         "dims": len(emb),
         "hint": "",
+        **meta,
+    }
+
+
+def format_ref_check_line(label: str, check: dict[str, Any], *, rel: str = "") -> str:
+    """One-line diagnostic for logs / Fail Loud messages."""
+    name = rel or str(check.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    ok = "通过" if check.get("ok") else "失败"
+    return (
+        f"{label}[{ok}] file={name} reason={check.get('reason') or '-'} "
+        f"method={check.get('method') or '-'} faces={check.get('face_count', 0)} "
+        f"size={check.get('width', 0)}x{check.get('height', 0)} "
+        f"bytes={check.get('size_bytes', 0)}"
+    )
+
+
+def validate_character_cast_ready(slug: str, char: dict[str, Any]) -> dict[str, Any]:
+    """定妆身份就绪：一致性锚只用全身；正脸仅诊断、不参与身份通过判定。
+
+    ``identity_enforcement``：
+      - enforce：全身须 ArcFace 可检
+      - advisory：有全身文件即可进产线；仍跑全身打分写入 detail
+      - off：有全身文件即可，尽量不跑检脸
+
+    总闸 ``qc_gates_enabled()`` 关闭时：只要有全身定妆文件即放行。
+    """
+    from tools.drama_characters import ref_face_rel, ref_rel
+    from tools.workspace import resolve_safe
+
+    cid = str(char.get("id") or "").strip()
+    name = str(char.get("name") or cid)
+    body_rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    face_rel = str(char.get("ref_face") or ref_face_rel(slug, cid)).replace("\\", "/")
+
+    if not qc_gates_enabled():
+        body_path = None
+        try:
+            body_path = resolve_safe(body_rel) if body_rel else None
+        except ValueError:
+            body_path = None
+        body_exists = bool(body_path is not None and body_path.is_file() and body_path.stat().st_size >= 32)
+        if body_exists:
+            return {
+                "ok": True,
+                "identity_anchor": "body",
+                "reason": "qc_disabled",
+                "hint": "校验已关闭，有全身定妆即放行",
+                "character_id": cid,
+                "character_name": name,
+            }
+        return {
+            "ok": False,
+            "identity_anchor": "body",
+            "reason": "no_body_ref",
+            "hint": f"角色「{name}」缺少全身定妆图",
+            "character_id": cid,
+            "character_name": name,
+        }
+
+    mode = identity_enforcement(slug)
+
+    body_path = face_path = None
+    try:
+        body_path = resolve_safe(body_rel) if body_rel else None
+    except ValueError:
+        body_path = None
+    try:
+        face_path = resolve_safe(face_rel) if face_rel else None
+    except ValueError:
+        face_path = None
+
+    body_exists = bool(body_path is not None and body_path.is_file() and body_path.stat().st_size >= 32)
+    face_exists = bool(face_path is not None and face_path.is_file() and face_path.stat().st_size >= 32)
+
+    if not body_exists:
+        return {
+            "ok": False,
+            "identity_anchor": "body",
+            "reason": "missing_body",
+            "hint": f"角色「{name}」缺少全身定妆文件（身份锚必需）",
+            "detail": f"全身定妆[失败] file={body_rel} reason=missing_body",
+            "face": {"ok": False, "reason": "skipped_for_identity", "face_count": 0},
+            "body": {"ok": False, "reason": "missing_body", "face_count": 0, "path": body_rel},
+            "character": name,
+            "enforcement": mode,
+        }
+
+    if mode == "off":
+        face_note = "正脸[出图用·不参与身份]" + (" 有文件" if face_exists else " 缺文件")
+        return {
+            "ok": True,
+            "identity_anchor": "body",
+            "reason": "enforcement_off",
+            "hint": f"身份旁路关闭：仅确认全身文件存在。{face_note}",
+            "detail": f"全身定妆[文件就绪] file={body_rel}；{face_note}",
+            "face": {
+                "ok": face_exists,
+                "reason": "generation_only",
+                "hint": "正脸仅用于图生图，不参与身份校验",
+                "face_count": 0,
+                "path": face_rel,
+            },
+            "body": {
+                "ok": True,
+                "reason": "file_only",
+                "hint": "enforcement=off，未跑 ArcFace",
+                "face_count": 0,
+                "path": body_rel,
+            },
+            "character": name,
+            "enforcement": mode,
+        }
+
+    body_check = validate_character_ref(body_path)
+    face_meta = {
+        "ok": face_exists,
+        "reason": "generation_only",
+        "method": "",
+        "hint": (
+            "正脸仅用于图生图，不参与身份校验"
+            + ("" if face_exists else "（文件缺失，近景可能漂）")
+        ),
+        "face_count": 0,
+        "path": face_rel if face_exists else "",
+        "width": 0,
+        "height": 0,
+        "size_bytes": int(face_path.stat().st_size) if face_exists and face_path else 0,
+    }
+    detail = (
+        f"{format_ref_check_line('全身定妆(身份锚)', body_check, rel=body_rel)}；"
+        f"正脸特写(仅出图)[{'有' if face_exists else '缺'}] file={face_rel}"
+    )
+
+    if body_check.get("ok"):
+        return {
+            "ok": True,
+            "identity_anchor": "body",
+            "reason": "",
+            "hint": "",
+            "detail": detail,
+            "face": face_meta,
+            "body": body_check,
+            "character": name,
+            "enforcement": mode,
+        }
+
+    # 全身 ArcFace 未过：advisory 仍放行进产线，enforce 阻断
+    if mode == "advisory":
+        return {
+            "ok": True,
+            "identity_anchor": "body",
+            "reason": "body_score_advisory",
+            "hint": (
+                f"旁路放行：全身身份分未过（{body_check.get('reason')}），"
+                f"仍锁定定妆继续产片。诊断：{detail}"
+            ),
+            "detail": detail,
+            "face": face_meta,
+            "body": body_check,
+            "character": name,
+            "enforcement": mode,
+            "advisory_pass": True,
+        }
+
+    return {
+        "ok": False,
+        "identity_anchor": "body",
+        "reason": str(body_check.get("reason") or "no_face"),
+        "hint": (
+            f"角色「{name}」全身定妆身份校验失败（InsightFace）。{detail}。"
+            f"{body_check.get('hint') or body_check.get('reason')}"
+        ),
+        "detail": detail,
+        "face": face_meta,
+        "body": body_check,
+        "character": name,
+        "enforcement": mode,
     }
 
 
@@ -545,8 +837,11 @@ def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
 
 
 def locked_face_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
-    """本镜锁定角色脸/定妆路径（身份主体优先）。"""
-    from tools.drama_characters import character_requires_face_identity
+    """本镜出图用的角色参考路径（优先正脸特写；身份主体优先排序）。
+
+    注意：这是图生图参考，不是身份校验锚；校验请用 ``identity_ref_rel``（全身）。
+    """
+    from tools.drama_characters import character_requires_face_identity, generation_face_ref_rel
 
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
@@ -564,9 +859,17 @@ def locked_face_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
 
     refs: list[str] = []
     for char in ordered:
-        path = _char_ref_path(slug, char)
-        if path and path not in refs:
-            refs.append(path)
+        if not char.get("ref_locked") or not ref_exists(slug, char):
+            continue
+        rel = generation_face_ref_rel(slug, char)
+        if not rel:
+            continue
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
+        if path.is_file() and rel not in refs:
+            refs.append(rel)
     return refs
 
 
@@ -731,6 +1034,7 @@ def qc_shot_identity(
     apply: bool = True,
 ) -> dict[str, Any]:
     threshold = identity_threshold(slug)
+    mode = identity_enforcement(slug)
     scene = _scene_path(shot)
     prev = previous_same_character(slug, episode, shot)
     prev_scene = _scene_path(prev) if prev else None
@@ -739,6 +1043,27 @@ def qc_shot_identity(
     kind = infer_kind(shot)
     from tools.drama_characters import character_requires_face_identity, load_characters, resolve_shot_characters
     from tools.drama_spatial import MATCH_FLOOR, face_center_in_slot, slot_for_character
+
+    if mode == "off":
+        result = {
+            "status": "skipped",
+            "pass": False,
+            "required": False,
+            "reason": "enforcement_off",
+            "method": "",
+            "cosine": None,
+            "threshold": threshold,
+            "hint": "身份旁路关闭（identity_enforcement=off），未打分",
+            "character_id": (char or {}).get("id") or "",
+            "character_name": char_name,
+            "checks": [],
+            "matches": [],
+            "kind": kind,
+            "enforcement": mode,
+        }
+        if apply:
+            shot["identity_hint"] = str(result.get("hint") or "")
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     if char is not None and not character_requires_face_identity(char):
         result = {
@@ -758,8 +1083,7 @@ def qc_shot_identity(
         }
         if apply:
             shot["identity_hint"] = ""
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     if char is None and not infer_speaker(shot) and kind in ("establishing", "crowd", "title", "insert"):
         result = {
@@ -779,8 +1103,7 @@ def qc_shot_identity(
         }
         if apply:
             shot["identity_hint"] = ""
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     if scene is None:
         result = {
@@ -800,8 +1123,7 @@ def qc_shot_identity(
         }
         if apply:
             shot["identity_hint"] = str(result.get("hint") or "")
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     # 组装本镜需验角色：仅限本镜 cast；禁止用全项目卡补齐槽位（否则脏 plan 会把玉兔验进嫦娥镜）
     cards = load_characters(slug)
@@ -847,8 +1169,7 @@ def qc_shot_identity(
         }
         if apply:
             shot["identity_hint"] = str(result.get("hint") or "")
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     # 取定妆嵌入
     ref_items: list[dict[str, Any]] = []
@@ -907,8 +1228,7 @@ def qc_shot_identity(
         }
         if apply:
             shot["identity_hint"] = str(result.get("hint") or "")
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     if not scene_faces:
         result = {
@@ -929,8 +1249,7 @@ def qc_shot_identity(
         if apply:
             shot["identity_hint"] = str(result.get("hint") or "")
             _mark_identity_fail(shot, threshold)
-        shot["identity"] = result
-        return result
+        return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
     matches = match_faces_to_refs(
         ref_items,
@@ -1057,7 +1376,7 @@ def qc_shot_identity(
     result = {
         "status": "ok" if (subject_row and subject_row.get("matched")) or passed else "skipped",
         "pass": passed,
-        "required": True,
+        "required": mode == "enforce",
         "reason": reason if not passed else "",
         "method": "arcface",
         "cosine": round(float(primary_cosine), 4) if primary_cosine is not None else None,
@@ -1071,6 +1390,8 @@ def qc_shot_identity(
         "dirtied": [],
         "failures": failures,
         "warnings": warnings,
+        "enforcement": mode,
+        "identity_anchor": "body",
     }
     # 主体完全没匹配时 status 用 skipped 更贴切
     if subject_id and (subject_row is None or not subject_row.get("matched")):
@@ -1080,13 +1401,19 @@ def qc_shot_identity(
         result["status"] = "ok"
 
     if apply and not passed:
-        result["dirtied"] = _mark_identity_fail(shot, threshold)
-        shot["identity_hint"] = hint or fail_hint(threshold)
-        result["hint"] = shot.get("identity_hint") or hint
+        if mode == "enforce":
+            result["dirtied"] = _mark_identity_fail(shot, threshold)
+            shot["identity_hint"] = hint or fail_hint(threshold)
+        else:
+            # advisory：旁路打分，不 dirty，提示标明不阻断
+            advisory_hint = hint or fail_hint(threshold)
+            shot["identity_hint"] = f"[旁路] {advisory_hint}"
+            result["hint"] = shot["identity_hint"]
+            result["dirtied"] = []
+        result["hint"] = shot.get("identity_hint") or result.get("hint") or hint
     elif apply:
         shot["identity_hint"] = ""
-    shot["identity"] = result
-    return result
+    return _emit_identity_result(shot, result, mode=mode, apply=apply)
 
 
 def public_identity(shot: dict[str, Any]) -> dict[str, Any] | None:
@@ -1367,7 +1694,7 @@ def qc_shot_flicker(slug: str, shot: dict[str, Any], *, apply: bool = True) -> d
         "pass": passed,
         "required": True,
         "reason": "" if passed else "below_threshold",
-        "hint": "" if passed else f"闪烁 SSIM {ssim} < {thresholds['ssim_min']}，请重做运动（不重配音）",
+        "hint": "" if passed else f"相邻帧相似度 {ssim} < {thresholds['ssim_min']}，生成视频画面抖动过大，请重做本镜视频（不重配音）",
         "method": "ssim",
         "ssim": ssim,
         "ssim_mean": scored.get("ssim_mean"),

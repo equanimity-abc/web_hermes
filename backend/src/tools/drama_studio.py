@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -336,6 +337,15 @@ def get_project(slug: str) -> dict[str, Any]:
     }
 
 
+def project_manual_voice(slug: str) -> bool:
+    """项目级开关：手动配音（默认关 → Seedance generate_audio）。"""
+    try:
+        project = load_project(slug)
+    except Exception:
+        return False
+    return bool(project.get("manual_voice"))
+
+
 def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
     project = load_project(slug)
     if "title" in patch and patch["title"] is not None:
@@ -345,6 +355,8 @@ def patch_project(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         project["title"] = title
     if "logline" in patch and patch["logline"] is not None:
         project["logline"] = str(patch["logline"]).strip()
+    if "manual_voice" in patch and patch["manual_voice"] is not None:
+        project["manual_voice"] = bool(patch["manual_voice"])
     save_project(slug, project)
     return get_project(slug)
 
@@ -382,6 +394,8 @@ def create_project(
         "title": given_title,
         "logline": logline_text,
         "aspect": "9:16",
+        # 默认关：图生视频用 Seedance 自带声；打开后才走手动 TTS
+        "manual_voice": False,
         "created_at": now,
         "updated_at": now,
         "episodes": [],
@@ -402,47 +416,125 @@ def create_project(
     return get_project(sid)
 
 
-def remove_project(slug: str, *, purge_same_title: bool = True) -> dict[str, Any]:
-    """Delete a whole drama project directory and its queue records (fail closed).
+def _force_rmtree(path: Path, *, retries: int = 6) -> str:
+    """Delete a directory tree; on Windows lock failures quarantine under ``_trash/``.
 
-    侧栏按标题去重后只显示一份；若磁盘上还有同名副本，删除时一并清掉，
-    否则会出现「删了嫦娥奔月又冒出来一个」的错觉。
+    Returns ``deleted`` | ``quarantined`` | ``missing``.
+    """
+    import os
+    import stat
+    import time
+    from pathlib import Path as _P
+
+    path = _P(path)
+    if not path.exists():
+        return "missing"
+
+    def _unlock(func, p, _exc_info) -> None:
+        try:
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            func(p)
+        except Exception:
+            pass
+
+    last_err: Exception | None = None
+    for i in range(max(1, int(retries))):
+        if not path.exists():
+            return "deleted"
+        try:
+            shutil.rmtree(path, onerror=_unlock)
+            if not path.exists():
+                return "deleted"
+        except OSError as e:
+            last_err = e
+        time.sleep(0.15 * (i + 1))
+
+    # Still there: rename aside so slug is free for recreate.
+    trash_root = path.parent / "_trash"
+    try:
+        trash_root.mkdir(parents=True, exist_ok=True)
+        dest = trash_root / f"{path.name}__{int(time.time())}"
+        # Avoid collision
+        n = 0
+        while dest.exists():
+            n += 1
+            dest = trash_root / f"{path.name}__{int(time.time())}_{n}"
+        path.rename(dest)
+        return "quarantined"
+    except OSError as e:
+        detail = f"{last_err or e}"
+        raise OSError(f"无法删除项目目录 {path.name}：{detail}") from e
+
+
+def remove_project(slug: str, *, purge_same_title: bool = True) -> dict[str, Any]:
+    """彻底删除漫剧项目：队列任务 + 磁盘目录（含同名/同梗概副本）。
+
+    Windows 下若文件被占用：重试 → 仍失败则隔离到 ``dramas/_trash/``，
+    保证原 slug / 标题可立刻重新立项，不会再报「项目已存在」。
     """
     slug = parse_slug(slug)
-    project = load_project(slug)
-    title = str((project or {}).get("title") or "").strip()
+    # 软读：目录在但 project.json 损坏/缺失时也要能清掉孤儿树
+    project = load_project_file(slug) or {}
+    title = str(project.get("title") or "").strip()
+    logline = str(project.get("logline") or "").strip()
     title_key = normalize_project_title(title)
     from tools.drama_queue import drama_jobs
 
-    targets = [slug]
+    targets: list[str] = [slug]
+    root = resolve_safe(_ROOT)
+    if root.is_dir() and purge_same_title:
+        for child in root.iterdir():
+            if not child.is_dir() or child.name.startswith("_"):
+                continue
+            other_slug = child.name
+            if other_slug in targets:
+                continue
+            data = load_project_file(other_slug)
+            if not data:
+                # 无 project.json 的孤儿目录：slug 前缀撞车也清（如 yugong-yishan-2）
+                continue
+            other_title = normalize_project_title(str(data.get("title") or ""))
+            other_log = str(data.get("logline") or "").strip()
+            same_title = bool(title_key) and other_title == title_key
+            same_log = bool(logline) and len(logline) >= 8 and other_log == logline
+            if same_title or same_log:
+                targets.append(other_slug)
+
+    # 标题/梗概索引再补一轮（防侧栏去重漏掉的副本）
     if purge_same_title and title_key:
-        root = resolve_safe(_ROOT)
-        if root.is_dir():
-            for child in root.iterdir():
-                if not child.is_dir() or child.name.startswith("_"):
-                    continue
-                other_slug = child.name
-                if other_slug == slug:
-                    continue
-                data = load_project_file(other_slug)
-                if not data:
-                    continue
-                if normalize_project_title(str(data.get("title") or "")) == title_key:
-                    targets.append(other_slug)
+        hit = find_project_slug_by_title(title)
+        if hit and hit not in targets:
+            targets.append(hit)
+    if purge_same_title and logline and len(logline) >= 8:
+        hit = find_project_slug_by_logline(logline)
+        if hit and hit not in targets:
+            targets.append(hit)
 
     removed: list[str] = []
+    quarantined: list[str] = []
     jobs_removed = 0
     errors: list[str] = []
+
     for sid in targets:
         try:
-            jobs_removed += int(drama_jobs.remove_slug(sid) or 0)
+            jobs_removed += int(drama_jobs.remove_slug(sid, wait_s=2.5) or 0)
+        except Exception as e:
+            errors.append(f"{sid}:queue {e}")
+        try:
             target = resolve_safe(_rel(sid))
-            root = resolve_safe(_ROOT)
-            if target == root or root not in target.parents:
+            root_path = resolve_safe(_ROOT)
+            if target == root_path or root_path not in target.parents:
                 raise DramaBadRequest("非法项目路径，拒绝删除")
-            if target.exists():
-                shutil.rmtree(target)
+            if not target.exists():
+                removed.append(sid)
+                continue
+            mode = _force_rmtree(target)
+            if mode == "quarantined":
+                quarantined.append(sid)
             removed.append(sid)
+            # 双检：原路径不得再有 project.json
+            if (target / "project.json").is_file():
+                raise OSError("删除后 project.json 仍在")
         except DramaBadRequest:
             raise
         except OSError as e:
@@ -456,17 +548,17 @@ def remove_project(slug: str, *, purge_same_title: bool = True) -> dict[str, Any
     try:
         from agent.memory_store import scrub_memory_terms
 
-        for sid in removed:
-            scrub_memory_terms(sid, title)
+        terms = [title, logline, *removed]
+        scrub_memory_terms(*[t for t in terms if t])
         memory_scrubbed = True
     except Exception:
-        # Deleting disk project must succeed even if MEMORY.md is locked/corrupt.
         memory_scrubbed = False
 
     return {
         "ok": True,
         "slug": slug,
         "removed": removed,
+        "quarantined": quarantined,
         "path": _rel(slug),
         "jobs_removed": jobs_removed,
         "memory_scrubbed": memory_scrubbed,

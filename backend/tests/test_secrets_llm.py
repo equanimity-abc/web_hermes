@@ -71,6 +71,8 @@ def test_script_chain_prefers_ark(secrets_tmp: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(config, "ARK_API_KEY", "ark-key")
     monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "ds-key")
     monkeypatch.setattr(config, "KIMI_API_KEY", "")
+    monkeypatch.setattr(config, "ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+    monkeypatch.setattr(config, "ARK_TEXT_MODEL", "doubao-seed-character-260628")
     chain = script_provider_chain("ark", ["ark", "deepseek", "kimi"])
     assert chain[0]["provider"] == "ark"
     assert chain[0]["model"] == "doubao-seed-character-260628"
@@ -80,11 +82,22 @@ def test_script_chain_prefers_ark(secrets_tmp: Path, monkeypatch: pytest.MonkeyP
 
 def test_ark_endpoint_models(secrets_tmp: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "ARK_API_KEY", "ark")
+    monkeypatch.setattr(config, "ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+    monkeypatch.setattr(config, "ARK_TEXT_MODEL", "doubao-seed-character-260628")
     ep = llm_endpoint("ark")
     assert ep["provider"] == "ark"
     assert "ark.cn-beijing" in ep["base_url"]
     assert ep["model"] == "doubao-seed-character-260628"
     assert ep["chat_path"] == "/chat/completions"
+
+
+def test_ark_agent_plan_remaps_seed_character(secrets_tmp: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(config, "ARK_API_KEY", "ark")
+    monkeypatch.setattr(config, "ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3")
+    monkeypatch.setattr(config, "ARK_TEXT_MODEL", "doubao-seed-character-260628")
+    monkeypatch.setattr(config, "ARK_TEXT_MODEL_ALT", "glm-5-2-260617")
+    ep = llm_endpoint("ark")
+    assert ep["model"] == "glm-5-2-260617"
 
 
 def test_ark_providers_register():

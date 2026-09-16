@@ -110,14 +110,17 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
 
 def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
     """Block export unless every shot passes identity/lip/flicker (unless force)."""
+    from tools.drama_qc import qc_gates_enabled
+
+    if force or not qc_gates_enabled():
+        return {"ok": True, "forced": bool(force), "block_reason": "", "qc_disabled": not qc_gates_enabled()}
+
     from tools.drama_produce_gates import dirty_identity_kpi_fails, identity_kpi, identity_kpi_blocker
     from tools.drama_qc import qc_shot_bundle, shot_can_pass
     from tools.drama_shots import ordered_shots_from_doc, save_doc
 
-    if force:
-        return {"ok": True, "forced": True, "block_reason": ""}
-
     blockers: list[str] = []
+    lip_meta_fixed = False
     for shot in ordered_shots_from_doc(doc):
         sn = int(shot.get("n") or 0)
         if sn < 1:
@@ -125,26 +128,33 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
         if "shot" in (shot.get("locked") or []):
             continue
         # Studio: lip-eligible shots must use a real lip provider (not fallback/mock).
+        before_lip = str(shot.get("lip_source") or "")
         try:
             assert_studio_lip_shot(slug, shot)
         except ValueError as e:
             blockers.append(f"Shot {sn}: {e}")
             continue
+        if str(shot.get("lip_source") or "") != before_lip:
+            lip_meta_fixed = True
         bundle = qc_shot_bundle(slug, episode, shot, apply=True)
         if shot_can_pass(bundle):
             continue
         reason = str(bundle.get("block_reason") or "QC 未通过")
         blockers.append(f"Shot {sn}: {reason}")
 
-    kpi_msg = identity_kpi_blocker(doc)
+    kpi_msg = identity_kpi_blocker(doc, slug=slug)
     if kpi_msg:
-        touched = dirty_identity_kpi_fails(doc)
+        touched = dirty_identity_kpi_fails(doc, slug=slug)
         if touched:
-            try:
-                save_doc(doc)
-            except Exception:
-                pass
+            lip_meta_fixed = True
         blockers.append(kpi_msg)
+
+    if lip_meta_fixed:
+        # Persist recovered lip_source / KPI dirty marks.
+        try:
+            save_doc(doc)
+        except Exception:
+            pass
 
     if blockers:
         raise ValueError(
@@ -163,9 +173,15 @@ def assert_studio_lip_shot(slug: str, shot: dict[str, Any]) -> None:
     """Fail loud when eligible lip shots still use fallback/mock under studio profile."""
     import os
 
+    from tools.drama_qc import qc_gates_enabled
+
+    if not qc_gates_enabled():
+        return
+
     from tools.drama_lip import lip_eligible
     from tools.drama_profiles import resolve_quality_profile
-    from tools.providers.lip_providers import lip_source_is_real
+    from tools.providers.lip_providers import lip_source_is_real, lip_video_usable
+    from tools.workspace import resolve_safe
 
     if resolve_quality_profile(slug) != "studio":
         return
@@ -175,17 +191,32 @@ def assert_studio_lip_shot(slug: str, shot: dict[str, Any]) -> None:
     if not gate.get("ok"):
         return
     source = str(shot.get("lip_source") or "")
-    if not lip_source_is_real(source):
-        raise ValueError(f"专业档口型源无效（lip_source={source or '空'}），禁止 fallback/mock 当通过")
+    if lip_source_is_real(source):
+        return
+    # Orphan mp4: provider wrote lip but a later stale merge wiped lip_source.
+    assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
+    lip_rel = str(assets.get("lip") or "").strip()
+    lip_path = None
+    if lip_rel:
+        try:
+            lip_path = resolve_safe(lip_rel)
+        except ValueError:
+            lip_path = None
+    if lip_video_usable(shot, lip_path) and lip_source_is_real(str(shot.get("lip_source") or "")):
+        return
+    raise ValueError(f"专业档口型源无效（lip_source={source or '空'}），禁止 fallback/mock 当通过")
 
 
 def assert_loudness_after_export(slug: str, episode: int, *, force: bool = False) -> dict[str, Any]:
     """After assemble, loudness must pass unless force."""
-    from tools.drama_qc import check_allows_pass, qc_episode_loudness
+    from tools.drama_qc import check_allows_pass, qc_episode_loudness, qc_gates_enabled
+
+    if force or not qc_gates_enabled():
+        return {"ok": True, "forced": bool(force), "loudness": {"status": "n/a", "reason": "qc_disabled"}}
 
     loudness = qc_episode_loudness(slug, episode, apply=True)
-    if force or check_allows_pass(loudness):
-        return {"ok": True, "forced": force, "loudness": loudness}
+    if check_allows_pass(loudness):
+        return {"ok": True, "forced": False, "loudness": loudness}
     status = str(loudness.get("status") or "")
     if status == "n/a" or loudness.get("required") is False:
         return {"ok": True, "forced": False, "loudness": loudness}

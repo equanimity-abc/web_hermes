@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
+
+// defineConfig是vs code 自动补全的一个辅助函数
 export default defineConfig({
   plugins: [vue()],
   resolve: {

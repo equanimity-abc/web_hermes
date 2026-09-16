@@ -89,6 +89,7 @@ const {
   generateAllScenes,
   generateAllVideo,
   generateAllVoice,
+  setManualVoice,
   generateShotCandidates,
   chooseShotCandidate,
   deleteCandidate,
@@ -451,6 +452,9 @@ async function deleteDramaProject(slug) {
         ? `已删除 ${removed.length} 个同名项目（${removed.join('、')}）`
         : `已删除项目 ${slug}`,
     )
+    if (Array.isArray(result?.quarantined) && result.quarantined.length) {
+      showToast('部分文件被占用，已移入回收隔离区，可立即重新立项')
+    }
   } catch (e) {
     console.error('删除漫剧项目失败:', e)
     showToast(e.message || '删除项目失败')
@@ -648,6 +652,7 @@ async function onResumeDramaJob(payload) {
       @generate-all-scenes="generateAllScenes"
       @generate-all-video="generateAllVideo"
       @generate-all-voice="generateAllVoice"
+      @set-manual-voice="setManualVoice"
       @toggle-role="toggleShotRole"
       @generate-candidates="generateShotCandidates"
       @choose-candidate="chooseShotCandidate"

@@ -2,20 +2,41 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PIL import Image
 
 
-def test_seedance_duration_floors_pipeline_default():
-    from tools.providers.ark_providers import _seedance_duration
+def test_resolve_seedance_model_aliases():
+    from tools.providers import ark_providers as ap
 
-    # 管线默认 i2v_seconds=2.5 → round 2；旧逻辑会 400。
-    assert _seedance_duration(2.5) == 4
-    assert _seedance_duration(2) == 4
-    assert _seedance_duration(3.2) == 4
-    assert _seedance_duration(4) == 4
-    assert _seedance_duration(5) == 5
-    assert _seedance_duration(20) == 12
-    assert _seedance_duration(None) == 5
+    assert ap._resolve_seedance_model("doubao-seedance-2.0") == (
+        "doubao-seedance-2-0-260128"
+    )
+    assert ap._resolve_seedance_model("doubao-seedance-2.0-fast") == (
+        "doubao-seedance-2-0-fast-260128"
+    )
+    assert ap._resolve_seedance_model("doubao-seedance-2-0-260128") == (
+        "doubao-seedance-2-0-260128"
+    )
+    assert ap._resolve_seedance_model("doubao-seedance-1.5-pro") == (
+        "doubao-seedance-1-5-pro-251215"
+    )
+
+
+def test_resolve_seedance_model_agent_plan_keeps_2_0(monkeypatch):
+    """Large/Max 可用 2.0；解析层不得因 /api/plan/ 强行降级。"""
+    from tools.providers import ark_providers as ap
+
+    monkeypatch.setattr(
+        ap, "_ark_base", lambda: "https://ark.cn-beijing.volces.com/api/plan/v3"
+    )
+    assert ap._resolve_seedance_model("doubao-seedance-2-0-260128") == (
+        "doubao-seedance-2-0-260128"
+    )
+    assert ap._resolve_seedance_model("doubao-seedance-2.0") == (
+        "doubao-seedance-2-0-260128"
+    )
 
 
 def test_ark_i2v_payload_uses_first_frame_and_min_duration(tmp_path, monkeypatch):
@@ -74,12 +95,162 @@ def test_ark_i2v_payload_uses_first_frame_and_min_duration(tmp_path, monkeypatch
     body = captured["body"]
     assert body["duration"] == 4
     assert body["ratio"] == "adaptive"
-    assert body["generate_audio"] is False
+    assert body["generate_audio"] is True
     assert "watermark" not in body
     img = body["content"][1]
     assert img["role"] == "first_frame"
     assert img["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert not any(c.get("role") == "reference_audio" for c in body["content"])
     assert "i2v_error" in shot
+    assert shot.get("i2v_generate_audio") is True
+    assert shot.get("i2v_audio_ref") is False
+
+
+def test_ark_i2v_attaches_tts_as_reference_audio(tmp_path, monkeypatch):
+    """手动配音：TTS 作为 Seedance reference_audio，generate_audio=False。"""
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (540, 960), (40, 40, 80)).save(scene)
+    voice = tmp_path / "voice.mp3"
+    # Minimal valid-sized mp3-ish blob (not decoded by Seedance in this unit test)
+    voice.write_bytes(b"ID3" + b"\x00" * 200)
+    dest = tmp_path / "out.mp4"
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "task-1"}
+
+    class _Poll:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "failed", "error": "stop_after_submit"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["body"] = json
+            return _Resp()
+
+        def get(self, url, headers=None):
+            return _Poll()
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "idle talk")
+    monkeypatch.setattr(ap, "_probe_voice_seconds", lambda path: 4.2)
+    monkeypatch.setattr(
+        ap,
+        "_shot_voice_path",
+        lambda shot: voice if isinstance(shot, dict) else None,
+    )
+    monkeypatch.setattr(ap, "_seedance_want_ref_audio", lambda shot: True)
+
+    shot: dict = {"对白": "你好", "assets": {"voice": "voice.mp3"}, "manual_voice": True}
+    assert ap._ark_i2v(scene, dest, shot, 3.0) == "none"
+    body = captured["body"]
+    assert body["generate_audio"] is False
+    assert body["duration"] == 4
+    roles = [c.get("role") for c in body["content"] if isinstance(c, dict)]
+    assert "first_frame" in roles
+    assert "reference_audio" in roles
+    audio = next(c for c in body["content"] if c.get("role") == "reference_audio")
+    assert audio["type"] == "audio_url"
+    assert audio["audio_url"]["url"].startswith("data:audio/mpeg;base64,")
+    assert "口型" in body["content"][0]["text"]
+    assert shot.get("i2v_audio_ref") is True
+    assert shot.get("i2v_generate_audio") is False
+    assert shot.get("i2v_audio_ref") is True
+
+
+def test_ark_i2v_marks_seedance_lip_on_success(tmp_path, monkeypatch):
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (540, 960), (10, 10, 10)).save(scene)
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"ID3" + b"\x00" * 200)
+    dest = tmp_path / "out.mp4"
+    video_bytes = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "task-ok"}
+
+    class _Poll:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": "succeeded",
+                "content": {"video_url": "https://example.com/v.mp4"},
+            }
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            return _Resp()
+
+        def get(self, url, headers=None):
+            return _Poll()
+
+    def _fake_download(url, path):
+        Path(path).write_bytes(video_bytes)
+        return True
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "talk")
+    monkeypatch.setattr(ap, "_download", _fake_download)
+    monkeypatch.setattr(ap, "_probe_voice_seconds", lambda path: 5.0)
+    monkeypatch.setattr(ap, "_shot_voice_path", lambda shot: voice)
+    monkeypatch.setattr(ap, "_seedance_want_ref_audio", lambda shot: True)
+
+    shot: dict = {"对白": "在吗", "assets": {"voice": "voice.mp3"}}
+    assert ap._ark_i2v(scene, dest, shot, 5) == "ai"
+    assert shot.get("seedance_lip") is True
+    assert shot.get("i2v_audio_ref") is True
+    assert dest.is_file()
 
 
 def test_ark_i2v_keeps_api_error_body(tmp_path, monkeypatch):
@@ -118,3 +289,57 @@ def test_ark_i2v_keeps_api_error_body(tmp_path, monkeypatch):
     assert ap._ark_i2v(scene, dest, shot, 4) == "none"
     assert "InvalidParameter" in shot.get("i2v_error", "")
     assert "adaptive" in shot.get("i2v_error", "")
+
+
+def test_generate_shot_lip_soft_skips_when_seedance_lip(tmp_path, monkeypatch):
+    """Seedance 已口型时跳过 PixVerse，直接复制 motion → lip。"""
+    from tools import drama_lip as dl
+
+    motion = tmp_path / "motion.mp4"
+    motion.write_bytes(b"m" * 2000)
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"v" * 500)
+    lip_dest = tmp_path / "lip.mp4"
+
+    shot = {
+        "n": 1,
+        "seedance_lip": True,
+        "对白": "你好",
+        "assets": {
+            "motion": str(motion),
+            "voice": str(voice),
+            "scene": str(tmp_path / "scene.png"),
+        },
+    }
+
+    monkeypatch.setattr(
+        dl,
+        "lip_eligible",
+        lambda shot, models=None: {"ok": True, "reason": ""},
+    )
+    monkeypatch.setattr(
+        "tools.drama_models.models_with_overrides",
+        lambda *a, **k: {"lip": {"provider": "pixverse"}},
+    )
+    monkeypatch.setattr(dl, "lip_rel", lambda slug, ep, n: str(lip_dest))
+    monkeypatch.setattr(dl, "resolve_safe", lambda p: __import__("pathlib").Path(p))
+    monkeypatch.setattr(dl, "score_lip", lambda *a, **k: {"status": "ok", "method": "proxy"})
+    monkeypatch.setattr(
+        "tools.drama_video._probe_duration",
+        lambda path: 3.5,
+    )
+
+    called = {"lip": False}
+
+    def _no_pixverse(*a, **k):
+        called["lip"] = True
+        return "pixverse"
+
+    monkeypatch.setattr(dl, "try_generate_lip", _no_pixverse)
+
+    info = dl.generate_shot_lip("demo", 1, shot)
+    assert info["lip_source"] == "seedance"
+    assert shot["lip_source"] == "seedance"
+    assert called["lip"] is False
+    assert lip_dest.is_file()
+    assert lip_dest.read_bytes() == motion.read_bytes()

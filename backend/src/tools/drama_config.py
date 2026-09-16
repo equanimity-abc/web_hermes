@@ -59,8 +59,8 @@ MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
     "image": [
         {
             "provider": "seedream",
-            "model": "doubao-seedream-5-0-pro-260628",
-            "label": "方舟 · Seedream 5.0 Pro",
+            "model": "",  # filled from Config.ARK_IMAGE_MODEL at runtime
+            "label": "方舟 · Seedream",
         },
         {"provider": "wanx", "model": "qwen-image-plus", "label": "百炼 · Qwen-Image-Plus"},
         {
@@ -73,8 +73,8 @@ MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
     "motion": [
         {
             "provider": "seedance",
-            "model": "doubao-seedance-2-5-260628",
-            "label": "方舟 · Seedance 2.5",
+            "model": "doubao-seedance-2-0-260128",
+            "label": "方舟 · Seedance 2.0（Agent Plan Large+）",
         },
         {"provider": "wanx-video", "model": "wanx2.1-i2v-turbo", "label": "百炼 · 万相 I2V"},
         {
@@ -107,7 +107,15 @@ MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
 
 
 def model_catalog() -> dict[str, list[dict[str, str]]]:
-    return {k: [dict(x) for x in v] for k, v in MODEL_CATALOG.items()}
+    from config import config
+
+    out = {k: [dict(x) for x in v] for k, v in MODEL_CATALOG.items()}
+    ark_img = str(getattr(config, "ARK_IMAGE_MODEL", "") or "").strip()
+    for row in out.get("image") or []:
+        if str(row.get("provider") or "") == "seedream" and ark_img:
+            row["model"] = ark_img
+            row["label"] = "方舟 · Seedream"
+    return out
 
 
 def _preset_path(preset_id: str) -> Path:

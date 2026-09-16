@@ -42,7 +42,7 @@ def append_cost_log(
         "shot": shot,
         "episode": episode,
         "ok": bool(ok),
-        "detail": str(detail or "")[:200],
+        "detail": str(detail or "")[:400],
     }
     path = resolve_safe(_cost_rel(slug))
     path.parent.mkdir(parents=True, exist_ok=True)

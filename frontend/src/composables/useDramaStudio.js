@@ -47,7 +47,7 @@ export function useDramaStudio() {
     { id: 'script', label: '脚本' },
     { id: 'image', label: '出图' },
     { id: 'motion', label: '运动' },
-    { id: 'lip', label: '口型' },
+    { id: 'lip', label: '口型(Seedance)' },
     { id: 'tts', label: '配音' },
     { id: 'subtitle', label: '字幕' },
     { id: 'bgm', label: 'BGM' },
@@ -2045,6 +2045,10 @@ export function useDramaStudio() {
 
   async function generateShotLip() {
     if (!slug.value || !episodeN.value || !selectedN.value) return
+    if (!Boolean(project.value?.project?.manual_voice)) {
+      notice.value = '请先在「视频」页打开「手动配音」'
+      return
+    }
     const shotN = selectedN.value
     if (dirty.value) {
       await saveShot()
@@ -2055,22 +2059,41 @@ export function useDramaStudio() {
     error.value = ''
     notice.value = ''
     try {
-      // 声音页：配音 + 旁白叠层 + 口型一起重建（与批量一致）
+      // 手动配音：只重生 TTS；口型随 Seedance 视频
       const result = await dramaApi.rerenderShot(slug.value, episodeN.value, shotN, [
         'overlay',
         'voice',
-        'lip',
       ])
       if (result.job_id) {
         await waitForJob(result, slug.value)
       }
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      notice.value = `Shot ${shotN} 配音与口型已完成`
+      notice.value = `Shot ${shotN} 配音已完成（生成视频时将作为 Seedance 参考音频）`
     } catch (e) {
       error.value = e.message || String(e)
     } finally {
       markShotIdle(shotN)
+    }
+  }
+
+  async function setManualVoice(enabled) {
+    if (!slug.value) return
+    error.value = ''
+    notice.value = ''
+    saving.value = true
+    try {
+      const data = await dramaApi.patchProject(slug.value, {
+        manual_voice: Boolean(enabled),
+      })
+      project.value = data
+      notice.value = enabled
+        ? '已开启手动配音（生成视频前会先合成 TTS）'
+        : '已关闭手动配音（Seedance 默认自带声）'
+    } catch (e) {
+      error.value = e.message || String(e)
+    } finally {
+      saving.value = false
     }
   }
 
@@ -2885,6 +2908,10 @@ export function useDramaStudio() {
   async function generateAllVoice() {
     const ep = episodeN.value
     if (!slug.value || !ep) return
+    if (!Boolean(project.value?.project?.manual_voice)) {
+      notice.value = '请先在「视频」页打开「手动配音」'
+      return
+    }
     const targets = shots.value.filter((s) => {
       if ((s.locked || []).includes('shot')) return false
       return Boolean(String(s.字幕 || '').trim())
@@ -2913,7 +2940,7 @@ export function useDramaStudio() {
         async (s) => {
           markShotBusy(s.n)
           try {
-            await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice', 'lip'])
+            await dramaApi.rerenderShot(slug.value, ep, s.n, ['overlay', 'voice'])
             return s
           } finally {
             markShotIdle(s.n)
@@ -2941,7 +2968,7 @@ export function useDramaStudio() {
       notice.value = done
         ? failed
           ? `已为 ${done} 镜生成配音，${failed} 镜失败`
-          : `已为 ${done} 镜生成配音与口型`
+          : `已为 ${done} 镜生成配音`
         : '没有可配音的镜头'
       setBatchProgress({
         status: done ? 'done' : 'error',
@@ -3103,6 +3130,7 @@ export function useDramaStudio() {
     generateAllScenes,
     generateAllVideo,
     generateAllVoice,
+    setManualVoice,
     generateShotCandidates,
     chooseShotCandidate,
     deleteCandidate,

@@ -208,7 +208,29 @@ def _action_init(args: dict) -> str:
 
     existing = _load_project(slug)
     if existing and not overwrite:
-        return _err("项目已存在", slug=slug, path=_rel(slug), hint="传入 overwrite=true 可重建元数据")
+        return _err(
+            "项目已存在",
+            slug=slug,
+            path=_rel(slug),
+            hint="请先在工作台删除该项目，或传入 overwrite=true 整目录重建",
+        )
+
+    if overwrite:
+        # 整树清掉再立项，避免旧定妆/分镜残留导致「删了又在」
+        try:
+            from tools.drama_studio import remove_project
+
+            remove_project(slug, purge_same_title=False)
+        except Exception:
+            # 目录本就不存在也没关系
+            target = resolve_safe(_rel(slug))
+            if target.is_dir():
+                try:
+                    from tools.drama_studio import _force_rmtree
+
+                    _force_rmtree(target)
+                except Exception:
+                    pass
 
     now = _utc_now()
     project = {
@@ -216,9 +238,9 @@ def _action_init(args: dict) -> str:
         "title": title,
         "logline": logline,
         "aspect": "9:16",
-        "created_at": existing.get("created_at") if existing else now,
+        "created_at": now if overwrite or not existing else (existing.get("created_at") or now),
         "updated_at": now,
-        "episodes": existing.get("episodes") if existing else [],
+        "episodes": [],
     }
     _save_project(slug, project)
     files = [_project_rel(slug)]
@@ -233,6 +255,23 @@ def _action_init(args: dict) -> str:
         files.append(_write_text(_rel(slug, "README.md"), readme))
     resolve_safe(_rel(slug, "episodes")).mkdir(parents=True, exist_ok=True)
     return _ok(action="init", slug=slug, path=_rel(slug), files=files, project=project)
+
+
+def _action_delete_project(args: dict) -> str:
+    """彻底删除项目目录与队列（同名/同梗概副本一并清）。"""
+    from tools.drama_studio import remove_project
+
+    slug = _slug(str(args.get("slug") or ""))
+    if not slug:
+        return _err("slug 须为 1–40 位字母数字、下划线或短横线，且以字母或数字开头")
+    purge_same = args.get("purge_same_title")
+    if purge_same is None:
+        purge_same = True
+    try:
+        result = remove_project(slug, purge_same_title=bool(purge_same))
+    except Exception as e:
+        return _err(str(e), slug=slug)
+    return _ok(action="delete_project", **result)
 
 
 def _action_list(_args: dict) -> str:
@@ -722,7 +761,7 @@ def _action_generate_character_ref(args: dict) -> str:
         ok = False
     if not ok or not tmp_img.is_file() or tmp_img.stat().st_size <= 1000:
         return _err(
-            "出图失败。要专业级出图：在工作台把项目切到 pro 预设，并在 backend/.env 配置 "
+            "出图失败。要专业级出图：在工作台把项目切到 pro 预设，并在 backend/config/.env 配置 "
             "CONSISTENT_IMAGE_URL（角色一致性模型）；未配置时按当前预设降级。也可稍后手动上传定妆图。",
             slug=slug, character_id=cid,
         )
@@ -1334,6 +1373,7 @@ def _tiktok_drama(args: dict) -> str:
     handlers = {
         "guide": _action_guide,
         "init": _action_init,
+        "delete_project": _action_delete_project,
         "list": _action_list,
         "get": _action_get,
         "save_bible": lambda a: _action_save_md(a, filename="bible.md", label="bible"),
@@ -1389,6 +1429,7 @@ def register_tiktok_drama() -> None:
             "guide（规范与剧本格式）、init（建项目）、list、get、"
             "save_bible（人设）、save_outline（大纲）、save_episode（分集剧本）、refine_script（按项目 script 节点精修剧本草稿）、"
             "parse_shots（解析并落盘 shots.json）、create_from_premise（一句话梗概→立项+人设+大纲+剧本+HQ 成片，默认推荐）、"
+            "delete_project（彻底删除项目目录与同名副本）、"
             "produce_episode（已有剧本时 HQ 全自动：角色/定妆/逐镜 scene+配音+口型+I2V+BGM+导出 mp4）、"
             "render_episode（按镜出 clip，不含 I2V/口型/导出）、"
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
@@ -1402,10 +1443,11 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | resume_produce | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | delete_project | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | resume_produce | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
+                        "delete_project",
                         "list",
                         "get",
                         "save_bible",
@@ -1459,7 +1501,7 @@ def register_tiktok_drama() -> None:
                 },
                 "overwrite": {
                     "type": "boolean",
-                    "description": "init / create_from_premise 时是否覆盖已有 project.json",
+                    "description": "init / create_from_premise：true=整目录清掉后重建（非仅改 project.json）",
                 },
                 "episode": {
                     "type": "integer",

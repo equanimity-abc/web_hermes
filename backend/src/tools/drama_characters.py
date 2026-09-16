@@ -24,7 +24,7 @@ ANIME_STYLE_GUARD = (
     "禁止写实摄影、真人照片、超写实皮肤毛孔、镜头景深与照片颗粒"
 )
 
-# 多角色并行定妆时，characters.json 读写改必须串行，否则后写覆盖先写。
+# 多角色定妆串行写 characters.json，避免后写覆盖先写。
 _slug_file_locks: dict[str, threading.RLock] = {}
 _slug_file_locks_guard = threading.Lock()
 
@@ -227,42 +227,68 @@ def default_tts_voices() -> list[dict[str, str]]:
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
 CHAR_CANDIDATE_MAX = 4
 
-# 定妆画布：按资产类型分档（ref_size 存预设键，不是「边长万能码」）
-# 角色 1:1；道具默认方图、可选竖屏；场景 9:16 对齐成片 / 出图画布。
+# ---------------------------------------------------------------------------
+# 火山 Seedream 5.0 lite 尺寸契约（Agent Plan 全链路）
+#
+# API（lite）：总像素 ∈ [3_686_400, ~10_404_496]，宽高比 ∈ [1/16, 16]
+#   官方 2K 推荐：1:1=2048²；9:16=1600×2848；下限竖屏恰为 1440×2560
+#
+# 落盘 / 请求默认（避免「请求抬升再压回」的质量损失）：
+#   角色全身   2048×2048
+#   角色正脸   磁盘 1024×1024（ArcFace 够用；请求侧由 _seedream_gen_size 抬到 2048²）
+#   道具方图   2048×2048
+#   道具竖屏   1440×2560
+#   场景底板   1440×2560（可选 1600×2848）
+#   分镜画面   1600×2848（= Seedream 2K 9:16；成片再缩到 1080×1920）
+#   成片视频   1080×1920
+#   Seedance首帧编码 max_side=1536（仅提交压缩，不改主资产）
+# ---------------------------------------------------------------------------
 FACE_REF_SIZE = 1024
 REF_SIZE_PRESETS: dict[str, dict[int, tuple[int, int]]] = {
     "character": {
-        1024: (1024, 1024),
-        1536: (1536, 1536),
         2048: (2048, 2048),
+        # 以下为可选较小档：请求 Seedream 时仍会抬到 ≥3686400，落盘再压回该尺寸
+        1536: (1536, 1536),
+        1024: (1024, 1024),
     },
     "prop": {
-        1024: (1024, 1024),
-        1080: (1080, 1920),
+        2048: (2048, 2048),  # 方图默认（满足 lite 下限）
+        1440: (1440, 2560),  # 竖屏道具 / 与场景同档
     },
     "scene": {
-        1440: (1440, 2560),
-        1080: (1080, 1920),
-        1600: (1600, 2848),
+        1440: (1440, 2560),  # = 3686400，lite 竖屏下限
+        1600: (1600, 2848),  # 官方 2K 9:16
     },
 }
 DEFAULT_REF_SIZE_BY_CATEGORY: dict[str, int] = {
-    "character": 1024,
-    "prop": 1024,
+    "character": 2048,
+    "prop": 2048,
     "scene": 1440,
 }
-# 兼容旧字段：曾用边长 640/1024/1980；1024 在角色/道具仍合法，场景 1024 会落到默认。
-_LEGACY_REF_SIZES = frozenset({640, 1980})
 
 # 兼容旧常量名（部分调用方 / 测试）
-REF_SIZE_OPTIONS = (1024, 1536, 2048, 1080, 1440, 1600)
+REF_SIZE_OPTIONS = (1024, 1536, 2048, 1440, 1600)
 DEFAULT_REF_SIZE = DEFAULT_REF_SIZE_BY_CATEGORY["character"]
 
-REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = (
-    {"provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "label": "方舟 · Seedream 5.0 Pro"},
-    {"provider": "kling-image", "model": "kling/kling-v3-omni-image-generation", "label": "可灵 · Kling V3 Omni"},
-    {"provider": "wanx", "model": "qwen-image-plus", "label": "百炼 · Qwen-Image-Plus"},
-)
+REF_IMAGE_OPTIONS: tuple[dict[str, str], ...] = ()
+
+
+def _ref_image_options() -> tuple[dict[str, str], ...]:
+    """Catalog options; Seedream model id comes from Config.ARK_IMAGE_MODEL only."""
+    global REF_IMAGE_OPTIONS
+    if REF_IMAGE_OPTIONS:
+        return REF_IMAGE_OPTIONS
+    from config import config
+
+    seedream_model = str(getattr(config, "ARK_IMAGE_MODEL", "") or "").strip()
+    kling_model = str(getattr(config, "KLING_IMAGE_MODEL", "") or "").strip()
+    wanx_model = str(getattr(config, "DASHSCOPE_IMAGE_MODEL", "") or "").strip()
+    REF_IMAGE_OPTIONS = (
+        {"provider": "seedream", "model": seedream_model, "label": "方舟 · Seedream"},
+        {"provider": "kling-image", "model": kling_model, "label": "可灵 · Kling V3 Omni"},
+        {"provider": "wanx", "model": wanx_model, "label": "百炼 · Qwen-Image"},
+    )
+    return REF_IMAGE_OPTIONS
 
 
 def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, str]:
@@ -270,17 +296,26 @@ def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, s
     from tools.drama_styles import default_character_ref_image_route
 
     default = default_character_ref_image_route()
+    options = _ref_image_options()
     provider = str(raw_provider or default.get("provider") or "seedream").strip().lower()
-    model = str(raw_model or default.get("model") or "doubao-seedream-5-0-pro-260628").strip()
-    for opt in REF_IMAGE_OPTIONS:
+    model = str(raw_model or default.get("model") or "").strip()
+    # 营销名 / 旧 ID → 官方 Image API Model ID（Agent Plan 对错误 ID 会 UnsupportedModel）
+    if model in (
+        "doubao-seedream-5-0-260128",
+        "doubao-seedream-5.0",
+        "seedream-5.0",
+        "doubao-seedream-5.0-lite",
+        "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5.0-pro",
+    ):
+        model = str(default.get("model") or "doubao-seedream-5-0-lite-260128").strip()
+    for opt in options:
         if provider == opt["provider"] and model == opt["model"]:
             return provider, model
-    for opt in REF_IMAGE_OPTIONS:
+    for opt in options:
         if provider == opt["provider"]:
             return opt["provider"], opt["model"]
-    return str(default.get("provider") or "seedream"), str(
-        default.get("model") or "doubao-seedream-5-0-pro-260628"
-    )
+    return str(default.get("provider") or "seedream"), str(default.get("model") or model)
 
 
 def character_ref_shot(char: dict[str, Any], *, face_from_body: bool = False) -> dict[str, Any]:
@@ -312,15 +347,15 @@ def normalize_ref_size(raw: Any, category: Any = "character") -> int:
     cat = normalize_category(category)
     presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
     default = default_ref_size_for(cat)
+    if default not in presets:
+        default = next(iter(presets.keys()), 1024)
     try:
         n = int(raw)
     except (TypeError, ValueError):
         return default
     if n in presets:
         return n
-    # 旧拍脑袋边长 → 落到该类型默认
-    if n in _LEGACY_REF_SIZES:
-        return default
+    # 旧拍脑袋边长 / 跨类型误存（如 prop 上的 2048）→ 该类型默认
     return default
 
 
@@ -329,7 +364,13 @@ def ref_canvas_size(char: dict[str, Any]) -> tuple[int, int]:
     cat = normalize_category(char.get("category"))
     key = normalize_ref_size(char.get("ref_size"), cat)
     presets = REF_SIZE_PRESETS.get(cat) or REF_SIZE_PRESETS["character"]
-    return presets.get(key) or presets[default_ref_size_for(cat)]
+    wh = presets.get(key)
+    if wh:
+        return wh
+    fallback_key = default_ref_size_for(cat)
+    if fallback_key in presets:
+        return presets[fallback_key]
+    return next(iter(presets.values()), (1024, 1024))
 
 
 def ref_size_label(category: Any, size_key: int) -> str:
@@ -395,10 +436,26 @@ def enriched_look(char: dict[str, Any] | None) -> str:
 
 
 def identity_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
-    """身份锚相对路径：有正脸特写用特写，否则全身定妆。"""
+    """角色一致性校验用的定妆锚：固定全身图。
+
+    正脸特写只用于图生图参考，不参与 ArcFace / 身份闸。
+    """
     if not isinstance(char, dict):
         return ""
     cid = str(char.get("id") or "").strip()
+    body = str(char.get("ref") or (ref_rel(slug, cid) if cid else "")).replace("\\", "/")
+    return body
+
+
+def generation_face_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
+    """出图参考：优先正脸特写，缺失则退回全身。
+
+    与 ``identity_ref_rel`` 职责分离——校验只用全身，出图要脸部细节。
+    """
+    if not isinstance(char, dict):
+        return ""
+    cid = str(char.get("id") or "").strip()
+    body = str(char.get("ref") or (ref_rel(slug, cid) if cid else "")).replace("\\", "/")
     face = str(char.get("ref_face") or (ref_face_rel(slug, cid) if cid else "")).replace("\\", "/").strip()
     if face:
         try:
@@ -407,7 +464,7 @@ def identity_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
                 return face
         except ValueError:
             pass
-    return str(char.get("ref") or (ref_rel(slug, cid) if cid else "")).replace("\\", "/")
+    return body
 
 
 def ref_face_exists(slug: str, char: dict[str, Any] | None) -> bool:
@@ -811,16 +868,17 @@ def expand_character_look(
         bible_bit = f"\n人设摘录（可参考）：\n{bib[:800]}\n"
     system = (
         "你是竖屏漫剧角色造型设计师。只输出一段简体中文外形描述，不要标题、不要列表、不要引号。"
-        "描述必须可直接喂给文生图：具体到脸型五官、瞳色、发型发色、服装剪裁与配饰、体态气质、题材风格。"
+        "描述必须可直接喂给文生图：具体到脸型五官、瞳色、发型发色与造型、服装剪裁与主色辅色、体态气质、题材风格。"
+        "必须写出至少 1 个独占视觉锚点（疤痕/花钿/特殊配饰/鞋履纹样等），便于与同剧其他角色一眼区分。"
         "只写人物本体，禁止写手持锄头/工具/武器等道具（道具另有条目）。"
-        "若给出性别，必须严格遵守，禁止改写性别或年龄段（如把青年男写成老翁或女生）。"
+        "若给出性别，必须严格遵守，禁止改写性别或年龄段（如把女童写成老翁，或把青年男写成女生）。"
         "禁止空话（如「五官清晰」「气质独特」「高质量二次元」）。字数 80–160。"
     )
     user = (
         f"角色名：{name}。{gender_hint}\n"
         f"现有描述：{raw or '（无）'}\n"
         f"{bible_bit}"
-        "请扩写为可复现的定妆外形描述（仅人物，无手持道具）。"
+        "请扩写为可复现、高辨识度的定妆外形描述（仅人物，无手持道具；与同剧其他角色拉开差距）。"
     )
     try:
         out = str(draft_text_sync(slug, user, system=system) or "").strip()
@@ -990,17 +1048,11 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
 
     if not pending:
         return updated
-    try:
-        from tools.drama_parallel import parallel_map, shot_concurrency
-
-        for cid in parallel_map(pending, _one, max_workers=min(4, shot_concurrency()), fail_fast=False):
-            if cid:
-                updated.append(cid)
-    except Exception:
-        for rec in pending:
-            cid = _one(rec)
-            if cid:
-                updated.append(cid)
+    # look 扩写串行，避免并发 LLM / 写 characters.json
+    for rec in pending:
+        cid = _one(rec)
+        if cid:
+            updated.append(cid)
     return updated
 
 
@@ -1121,6 +1173,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "chosen_ref": chosen_ref,
         "candidates": candidates,
         "anchor_prompt": str(raw.get("anchor_prompt") or "").strip(),
+        "identity_anchor": str(raw.get("identity_anchor") or "").strip().lower(),
     }
 
 
@@ -1366,10 +1419,12 @@ def match_character_token(token: str, characters: list[dict[str, Any]]) -> dict[
                     break
     if best is not None:
         return best
+    from tools.drama_cast_graph import loose_name_compatible
+
     for cand in candidates:
         for char in characters:
             for name in _names_of(char):
-                if cand in name or name in cand:
+                if loose_name_compatible(cand, name):
                     best = _prefer(best, char)
                     break
     return best

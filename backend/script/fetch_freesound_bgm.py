@@ -36,8 +36,6 @@ def main() -> int:
     if not os.getenv("FREESOUND_API_KEY", "").strip():
         # Load .env if present
         env_path = ROOT / "config" / ".env"
-        if not env_path.is_file():
-            env_path = ROOT / ".env"
         if env_path.is_file():
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()

@@ -1745,6 +1745,18 @@
   justify-content: flex-end;
   gap: 8px;
 }
+.drama-manual-voice-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  user-select: none;
+  white-space: nowrap;
+}
+.drama-manual-voice-toggle input {
+  margin: 0;
+}
 .drama-step {
   flex: 0 0 auto;
   display: flex;

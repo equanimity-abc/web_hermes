@@ -153,99 +153,40 @@ export function formatDramaJobProgress(job) {
 }
 
 /**
- * Turn raw job.error into an actionable chat message.
+ * Turn raw job.error into a clean chat message.
+ * Prefer backend structured text (集 / 步骤 / 细分 / 原因); never add「下一步」tips.
  */
 export function humanizeDramaJobError(error, { episode, progress, slug } = {}) {
   const raw = String(error || '成片任务失败').trim()
   const ep = episode != null && episode !== '' ? Number(episode) : null
-  const shot = progress?.shot
-  const pct = progress?.pct
-  const current = progress?.current
-  const total = progress?.total
-  const finished = progress?.finished
-  const failed = progress?.failed
 
-  // 前台超时文案（历史消息兼容）：实际已改为一直等到后台终态
   if (/超过\s*\d+\s*分钟|停止轮询|等待超时|已停止前台等待/i.test(raw)) {
-    return [
-      ep != null ? `⏳ 第 ${ep} 集：后台任务仍在处理或已结束` : '⏳ 后台任务仍在处理或已结束',
-      '下一步：打开漫剧工作台看任务条；失败可点「继续渲染」，进行中请稍候刷新。',
-      slug ? `项目：${slug}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n')
+    return ep != null
+      ? `第${ep}集：后台任务仍在处理或已结束`
+      : '后台任务仍在处理或已结束'
   }
 
-  const progressBits = []
-  if (pct != null) progressBits.push(`${pct}%`)
-  if (total > 0) {
-    const ok = current ?? progress?.ok ?? 0
-    const failN = failed ?? 0
-    const doneN = finished ?? (ok + failN > 0 ? ok + failN : 0)
-    if (doneN > 0 || failN > 0) {
-      progressBits.push(`已结束 ${Math.max(doneN, failN)}/${total} 镜`)
-      if (ok > 0) progressBits.push(`成功 ${ok}`)
-      if (failN > 0) progressBits.push(`失败 ${failN}`)
-    } else {
-      progressBits.push(`进行中 0/${total} 镜`)
-    }
-  }
-  // 整集汇总「HQ 有 N 镜失败」前常被挂上「第X镜：」——那是汇报镜号，不是唯一根因
-  const multiShotFail = /HQ 有\s*\d+\s*镜失败|成功镜已落盘/i.test(raw)
-  const exportGate = /QC 硬闸|导出被|响度验收/i.test(raw)
-  const shotFromReason = raw.match(/第\s*(\d+)\s*镜/) || raw.match(/Shot\s*(\d+)/i)
-  const failN = Number(failed) || 0
-  if (multiShotFail && (failN > 1 || /Shot\s*\d+.*Shot\s*\d+/i.test(raw))) {
-    progressBits.push(`多镜失败（见下方明细）`)
-  } else if (shotFromReason && !multiShotFail) {
-    progressBits.push(`失败于第 ${shotFromReason[1]} 镜`)
-  } else if (shot != null && !exportGate && failed > 0 && !multiShotFail) {
-    progressBits.push(`最近失败镜 ${shot}`)
+  // 后端已按「集 → 步骤 → 细分 → 原因」排版时直接展示
+  if (/^第\s*\d+\s*集/.test(raw) || /^步骤：/m.test(raw) || /^第\d+集\s*·/.test(raw)) {
+    return raw
   }
 
-  let tip = ''
-  if (/缺少本镜画面/.test(raw)) {
-    tip =
-      '打开漫剧工作台 →「画面」页对该镜单次重渲画面并锁定，再点「继续渲染」（resume_produce）。禁止刷候选墙。'
-  } else if (/Sensitive|real person|真人|隐私|PrivacyInformation/i.test(raw)) {
-    tip =
-      '部分镜画面被 I2V 判为真人敏感。到工作台改该镜画面描述后单次重渲 scene，再点「继续渲染」；已通过镜会自动跳过。'
-  } else if (/口型|pixverse|lip_source|not activated|未开通|未激活/i.test(raw)) {
-    tip =
-      '口型服务未开通或失败。可先在设置开通 PixVerse/口型产品；或暂时跳过口型依赖后点「继续渲染」（会从口型/成片步骤续跑）。'
-  } else if (/闪烁|SSIM/i.test(raw)) {
-    tip =
-      '多为运动层抖动。点「继续渲染」会从运动步骤续跑；仍失败再到工作台「视频」页单独重生成运动。'
-  } else if (/未达阈值|cosine=|身份相似度|身份验收|未检测到人脸|脸面积不足/i.test(raw)) {
-    tip =
-      '根因是身份锁：先到「角色」页确认愚公长子/智叟全身+正脸定妆是同一人且清晰，再对未过身份的镜单次重渲「画面」，最后点「继续渲染」。明细里「加速收尾/cancelled」是连带跳过，不是新故障。'
-  } else if (/缺少可用模型 Key|ARK_API_KEY|专业档缺少/i.test(raw)) {
-    tip = '请在设置里配置对应模型 API Key 后点「继续渲染」。'
-  } else if (/QC 硬闸|响度/i.test(raw)) {
-    tip = '可在工作台查看 QC 详情；点「继续渲染」会按脏层续跑。工作台允许强制导出，对话 Agent 不会强制放行。'
-  } else if (/真 I2V|Ken Burns|mock|seedance/i.test(raw) && !/加速收尾|cancelled/i.test(raw)) {
-    tip =
-      'I2V 失败。若含敏感/真人提示先换画面；确认 Seedance 可用后点「继续渲染」，从运动步骤续跑已通过镜。'
-  } else if (/HQ 有 .+ 镜失败|成功镜已落盘/i.test(raw)) {
-    tip =
-      '部分镜已落盘。直接点「继续渲染」：会跳过已通过镜，从失败步骤续跑。若明细含身份 cosine，先改定妆/画面再续跑。'
+  const shotFromReason =
+    raw.match(/第\s*(\d+)\s*镜/) ||
+    raw.match(/Shot\s*(\d+)/i) ||
+    (progress?.shot != null ? [null, String(progress.shot)] : null)
+  const shotN = shotFromReason ? shotFromReason[1] : null
+
+  const lines = []
+  if (ep != null && shotN != null) {
+    lines.push(`第${ep}集 · Shot ${shotN}`)
+  } else if (ep != null) {
+    lines.push(`第${ep}集渲染失败`)
+  } else {
+    lines.push('成片渲染失败')
   }
-
-  const parallelNote =
-    total > 1
-      ? '说明：镜头并行渲染；失败后可「继续渲染」智能续跑，不必整集重开。也可到工作台逐镜查看资产/状态。'
-      : null
-
-  return [
-    ep != null ? `❌ 第 ${ep} 集渲染失败` : '❌ 成片渲染失败',
-    progressBits.length ? `进度：${progressBits.join(' · ')}` : null,
-    `原因：${raw}`,
-    tip ? `下一步：${tip}` : null,
-    parallelNote,
-    slug ? `项目：${slug}` : null,
-  ]
-    .filter(Boolean)
-    .join('\n')
+  lines.push(`原因：${raw}`)
+  return lines.join('\n')
 }
 
 /**
@@ -324,6 +265,22 @@ export function attachDramaMedia(message, media) {
   if (!message.media) message.media = []
   if (message.media.some((m) => m.url === media.url)) return
   message.media.push(media)
+}
+
+/** Attach failed scene/video previews from job.progress.failure_media */
+export function attachDramaFailureMedia(message, jobOrProgress) {
+  const progress = jobOrProgress?.progress || jobOrProgress || {}
+  const rows = progress.failure_media || progress.media || jobOrProgress?.failure_media || []
+  if (!Array.isArray(rows)) return
+  for (const row of rows) {
+    if (!row?.url) continue
+    attachDramaMedia(message, {
+      ...row,
+      type: row.type || 'video',
+      failPreview: true,
+      title: row.title || '失败预览',
+    })
+  }
 }
 
 export function enrichMessageWithDramaMedia(message) {
@@ -598,7 +555,9 @@ async function pollOneDramaTool(
               error: job.error || terminalError,
               status: job.status,
               progress: job.progress || {},
+              failure_media: job.progress?.failure_media || [],
             })
+            attachDramaFailureMedia(message, job)
             setMessageDramaJob(message, {
               state: 'error',
               jobId: pollJobId,
@@ -665,7 +624,9 @@ async function pollOneDramaTool(
                 error: job.error || terminalError,
                 status: job.status,
                 progress: job.progress || {},
+                failure_media: job.progress?.failure_media || [],
               })
+              attachDramaFailureMedia(message, job)
               setMessageDramaJob(message, {
                 state: 'error',
                 jobId,
@@ -915,7 +876,9 @@ export async function hydrateDramaTerminalFromQueue(messages, { sessionId } = {}
             status,
             error: job.error || line,
             progress: job.progress || {},
+            failure_media: job.progress?.failure_media || [],
           })
+          attachDramaFailureMedia(message, job)
           setMessageDramaJob(message, {
             state: 'error',
             jobId: String(data.job_id),

@@ -46,8 +46,19 @@ def identity_kpi_min_scored() -> int:
     return 3
 
 
-def identity_kpi_blocker(doc: dict[str, Any] | None) -> str:
-    """Human-readable blocker when episode identity KPI fails studio bar; else empty."""
+def identity_kpi_blocker(doc: dict[str, Any] | None, *, slug: str = "") -> str:
+    """Human-readable blocker when episode identity KPI fails studio bar; else empty.
+
+    advisory/off 旁路：只统计、不硬拦。
+    """
+    if slug:
+        try:
+            from tools.drama_qc import identity_blocks_pipeline
+
+            if not identity_blocks_pipeline(slug):
+                return ""
+        except Exception:
+            pass
     kpi = identity_kpi(doc)
     scored = int(kpi.get("scored") or 0)
     if scored < identity_kpi_min_scored():
@@ -64,8 +75,19 @@ def identity_kpi_blocker(doc: dict[str, Any] | None) -> str:
     )
 
 
-def dirty_identity_kpi_fails(doc: dict[str, Any] | None) -> list[int]:
-    """Mark identity-failed shots dirty for scene/motion/clip requeue; return shot numbers."""
+def dirty_identity_kpi_fails(doc: dict[str, Any] | None, *, slug: str = "") -> list[int]:
+    """Mark identity-failed shots dirty for scene/motion/clip requeue; return shot numbers.
+
+    advisory/off：不因身份 KPI dirty 已出画面。
+    """
+    if slug:
+        try:
+            from tools.drama_qc import identity_blocks_pipeline
+
+            if not identity_blocks_pipeline(slug):
+                return []
+        except Exception:
+            pass
     kpi = identity_kpi(doc)
     fails = [int(x) for x in (kpi.get("failed") or []) if int(x) > 0]
     if not fails or not isinstance(doc, dict):
@@ -143,8 +165,8 @@ def produce_blockers(
         if cards and not any(c.get("ref_locked") for c in cards):
             blockers.append("系列连续性：尚无锁定定妆，EP>1 前请先锁角色参考图")
 
-    # Resume / re-export: when enough identity scores exist, KPI must pass.
-    kpi_msg = identity_kpi_blocker(doc)
+    # Resume / re-export: when enough identity scores exist, KPI must pass (enforce only).
+    kpi_msg = identity_kpi_blocker(doc, slug=slug)
     if kpi_msg:
         blockers.append(kpi_msg)
 

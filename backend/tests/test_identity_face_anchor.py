@@ -34,7 +34,10 @@ def test_traits_phrase_and_enriched_look():
     assert traits_incomplete({"look": "x", "hair": "a"}) is True
 
 
-def test_identity_ref_prefers_face(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_identity_ref_uses_body_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """一致性锚固定全身；正脸只做出图参考。"""
+    from tools.drama_characters import generation_face_ref_rel
+
     slug = "test-face-anchor"
     cid = "hero1"
     face_rel = ref_face_rel(slug, cid)
@@ -55,10 +58,12 @@ def test_identity_ref_prefers_face(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "ref": body_rel,
         "ref_face": face_rel,
     }
-    assert identity_ref_rel(slug, char) == face_rel
+    assert identity_ref_rel(slug, char) == body_rel
+    assert generation_face_ref_rel(slug, char) == face_rel
 
     face_path.unlink()
     assert identity_ref_rel(slug, char) == body_rel
+    assert generation_face_ref_rel(slug, char) == body_rel
 
 
 def test_normalize_keeps_trait_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

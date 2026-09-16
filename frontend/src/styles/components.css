@@ -486,6 +486,23 @@
   background: #111;
 }
 
+.drama-video-card-image {
+  object-fit: contain;
+  background: #f3f4f6;
+  max-height: 420px;
+}
+
+.drama-video-card-audio {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.drama-video-card.is-fail-preview {
+  border-color: #f0a8a8;
+  background: #fff8f8;
+}
+
 .drama-video-card-actions {
   display: flex;
   align-items: center;

@@ -99,7 +99,10 @@ def assert_hq_image_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
             "专业档出图需要至少 1 张锁定定妆参考图传入模型，当前 refs 为空"
         )
 
-    if not _arcface_ready():
+    # 身份旁路模式不因 ArcFace 未就绪挡出图；enforce 才要求 buffalo_l
+    from tools.drama_qc import identity_blocks_pipeline
+
+    if identity_blocks_pipeline(slug) and not _arcface_ready():
         raise ValueError(
             "专业档身份依赖未就绪（insightface/buffalo_l）。"
             "请先运行 backend/scripts/fetch_arcface_model.py。"
@@ -183,15 +186,7 @@ HQ_TTS_FORBIDDEN = frozenset({"edge-tts", "edge", "mock", "none", "off", ""})
 
 HQ_LIP_OK = frozenset(
     {
-        "pixverse",
-        "pixverse-lipsync",
-        "latentsync",
-        "latent-sync",
-        "replicate-lip",
-        "musetalk",
-        "wav2lip",
-        "http",
-        "api",
+        "seedance",
     }
 )
 
@@ -215,7 +210,15 @@ def assert_hq_tts_ready(slug: str, shot: dict[str, Any] | None = None) -> dict[s
 
 
 def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
-    """Fail loud before lip: real provider + real motion base; multi-speaker → split shots."""
+    """Fail loud before lip: real provider + real motion base; multi-speaker → split shots.
+
+    校验总闸关闭时跳过硬拦，允许口型失败后 fallback 成片。
+    """
+    from tools.drama_qc import qc_gates_enabled
+
+    if not qc_gates_enabled():
+        return {"ok": True, "skipped": "qc_disabled"}
+
     from tools.drama_lip import lip_eligible, lip_provider_cascade
     from tools.drama_models import models_with_overrides
     from tools.workspace import resolve_safe
@@ -246,16 +249,16 @@ def assert_hq_lip_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
     lip_cfg = models.get("lip") if isinstance(models.get("lip"), dict) else {}
     wanted = str(lip_cfg.get("provider") or "").strip().lower()
     if wanted in ("mock", "none", "off", "l0", "fail"):
-        raise ValueError("专业档口型禁止 mock/关闭路由，请配置 PixVerse/LatentSync/LIP_API_URL")
+        raise ValueError("专业档口型禁止 mock/关闭；请使用 Seedance（火山单轨，口型随视频内生）")
     cascade = lip_provider_cascade(wanted or None, slug=slug)
     if not cascade:
         raise ValueError(
-            "专业档无可用口型模型：请配置 DASHSCOPE_MAAS_BASE_URL+DASHSCOPE_API_KEY（PixVerse）"
-            " 或 REPLICATE_API_TOKEN（LatentSync）或 LIP_API_URL"
+            "专业档口型未就绪：请配置 ARK_API_KEY；默认由 Seedance 自带声内生口型，"
+            "或开启手动配音后挂 TTS reference_audio"
         )
     head = cascade[0]
     if head not in HQ_LIP_OK:
-        raise ValueError(f"专业档口型 provider 无效：{head}")
+        raise ValueError(f"专业档口型 provider 无效：{head}（仅支持 seedance）")
 
     assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
     motion_ok = False

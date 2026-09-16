@@ -20,6 +20,13 @@ def motion_floor_for_kind(kind: str) -> str | None:
 
 def assert_motion_floor(shot: dict[str, Any], *, slug: str = "", models: dict[str, Any] | None = None) -> str:
     """Raise if planned ladder is below the professional floor for this kind."""
+    try:
+        from tools.drama_qc import qc_gates_enabled
+
+        if not qc_gates_enabled():
+            return effective_motion_ladder(shot, slug=slug or None, models=models)
+    except Exception:
+        pass
     kind = infer_kind(shot)
     floor = motion_floor_for_kind(kind)
     planned = effective_motion_ladder(shot, slug=slug or None, models=models)

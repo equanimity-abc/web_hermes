@@ -13,11 +13,9 @@ echo ============================================
 echo.
 
 if not exist "%ROOT%backend\config\.env" (
-    if not exist "%ROOT%backend\.env" (
-        echo [x] 未找到 backend\config\.env（或 backend\.env），请先配置 DEEPSEEK_API_KEY
-        pause
-        exit /b 1
-    )
+    echo [x] 未找到 backend\config\.env，请复制 backend\config\.env.example 为 .env 并填写密钥
+    pause
+    exit /b 1
 )
 
 where python >nul 2>&1

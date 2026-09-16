@@ -103,6 +103,8 @@ def _http(exc: Exception) -> HTTPException:
 class ProjectPatch(BaseModel):
     title: str | None = None
     logline: str | None = None
+    # False（默认）= Seedance 自带声；True = 手动 Seed Audio 配音 + reference_audio
+    manual_voice: bool | None = None
 
 
 class ProjectCreate(BaseModel):
@@ -827,7 +829,7 @@ def drama_fetch_freesound_bgm(body: FreesoundFetchBody | None = None):
 
         if not freesound_api_key():
             raise DramaBadRequest(
-                "缺少 FREESOUND_API_KEY。请到 https://freesound.org/apiv2/apply/ 申请后写入 backend/.env"
+                "缺少 FREESOUND_API_KEY。请到 https://freesound.org/apiv2/apply/ 申请后写入 backend/config/.env"
             )
         force = bool(body.force) if body else False
         cid = str(body.catalog_id or "").strip() if body else ""

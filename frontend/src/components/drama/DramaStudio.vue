@@ -110,6 +110,7 @@ const emit = defineEmits([
   'generate-all-video',
   'generate-lip',
   'generate-all-voice',
+  'set-manual-voice',
   'generate-keys',
   'choose-key',
   'upload-key',
@@ -169,13 +170,21 @@ const scriptFileViewMode = ref('summary')
 
 const hasLayer = (layer) => (props.shots || []).some((s) => s.files?.[layer]?.exists)
 
+const manualVoice = computed(() => Boolean(props.project?.project?.manual_voice))
+
 const stageList = computed(() => [
   { id: 'script', label: '剧本', title: '步骤一：结构化剧本（角色/场景/道具/配乐/分镜）', done: Boolean(props.episode?.script) },
-  { id: 'cast', label: '角色', title: '步骤二：定妆 / 道具设定图 / 场景主底板', done: (props.characters || []).some((c) => c.ref_exists) },
-  { id: 'scene', label: '画面', title: '步骤三：分镜文生图与候选墙锁图', done: hasLayer('scene') },
-  { id: 'video', label: '视频', title: '步骤四：图生视频（I2V 运动），时长取自剧本', done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)) },
-  { id: 'voice', label: '声音', title: '步骤五：配音与口型', done: hasLayer('voice') },
-  { id: 'assemble', label: '成片', title: '步骤六：拼接、BGM 与导出', done: Boolean(props.episode?.play_url) },
+  { id: 'cast', label: '角色', title: '步骤二：Seedream 定妆 / 道具 / 场景底板', done: (props.characters || []).some((c) => c.ref_exists) },
+  { id: 'scene', label: '画面', title: '步骤三：Seedream 分镜静帧', done: hasLayer('scene') },
+  {
+    id: 'video',
+    label: '视频',
+    title: manualVoice.value
+      ? '步骤四：Seedance 图生视频（手动配音开 → 先 TTS 再挂参考音频）'
+      : '步骤四：Seedance 图生视频（默认模型自带声）',
+    done: hasLayer('motion') || (props.shots || []).some((s) => ['ai', 'keys', 'fallback'].includes(s.i2v_source)),
+  },
+  { id: 'assemble', label: '成片', title: '步骤五：拼接、BGM 与导出', done: Boolean(props.episode?.play_url) },
 ])
 
 const scriptWorkspaceTabs = computed(() => {
@@ -485,7 +494,6 @@ const stageBoardMap = {
   cast: 'cast',
   scene: 'shots',
   video: 'shots',
-  voice: 'shots',
   assemble: 'timeline',
 }
 const stageIndex = computed(() => stageList.value.findIndex((s) => s.id === stage.value))
@@ -493,14 +501,20 @@ const currentStage = computed(() => stageList.value[stageIndex.value] || stageLi
 const nextStage = computed(() => stageList.value[stageIndex.value + 1] || null)
 
 function goStage(id) {
-  stage.value = id
-  emit('update:boardMode', stageBoardMap[id] || 'shots')
+  // 旧深链 stage=voice → 视频页（配音已并入）
+  const next = id === 'voice' ? 'video' : id
+  stage.value = next
+  emit('update:boardMode', stageBoardMap[next] || 'shots')
 }
 function goNext() {
   if (nextStage.value) goStage(nextStage.value.id)
 }
 
 const STAGE_IDS = new Set(['script', 'cast', 'scene', 'video', 'voice', 'assemble'])
+
+function onToggleManualVoice(ev) {
+  emit('set-manual-voice', Boolean(ev?.target?.checked))
+}
 
 function applyDeepLink(hash = window.location.hash || '') {
   const raw = String(hash || '').replace(/^#/, '')
@@ -1101,6 +1115,7 @@ function shotHasLip(shot) {
   const real = [
     'mock',
     'http',
+    'seedance',
     'ai',
     'pixverse',
     'pixverse-lipsync',
@@ -1470,6 +1485,7 @@ function lipStatusLabel(shot) {
       latentsync: 'LatentSync · 高清',
       pixverse: 'PixVerse · 已同步',
       'pixverse-lipsync': 'PixVerse · 已同步',
+      seedance: 'Seedance · 口型内生',
       musetalk: 'MuseTalk',
       wav2lip: 'Wav2Lip',
       http: '网关口型',
@@ -1645,17 +1661,11 @@ const statusBar = computed(() => {
     case 'video':
       base = {
         pct: videoProgressPct.value,
-        status: props.videoGenProgress?.status || 'idle',
+        status: props.videoGenProgress?.status || (props.rendering && manualVoice.value ? voiceStatusState.value : 'idle'),
         title: videoStatusTitle.value,
-        message: videoStatusLabel.value,
-      }
-      break
-    case 'voice':
-      base = {
-        pct: voiceStatusPct.value,
-        status: voiceStatusState.value,
-        title: voiceStatusTitle.value,
-        message: voiceStatusLabel.value,
+        message: manualVoice.value && voiceStatusState.value === 'running'
+          ? voiceStatusLabel.value
+          : videoStatusLabel.value,
       }
       break
     case 'assemble':
@@ -1738,13 +1748,21 @@ const statusBar = computed(() => {
           </button>
         </template>
         <template v-else-if="stage === 'video'">
+          <label class="drama-manual-voice-toggle" title="关闭：Seedance 自带声；打开：先手动配音再图生视频">
+            <input type="checkbox" :checked="manualVoice" :disabled="saving || rendering" @change="onToggleManualVoice" />
+            手动配音
+          </label>
+          <button
+            v-if="manualVoice"
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="rendering || !shots.length"
+            @click="onGenerateAllVoice"
+          >
+            {{ rendering ? '生成中…' : '批量配音' }}
+          </button>
           <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllVideo">
             {{ rendering ? '生成中…' : '批量生成视频' }}
-          </button>
-        </template>
-        <template v-else-if="stage === 'voice'">
-          <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllVoice">
-            {{ rendering ? '生成中…' : '批量生成配音' }}
           </button>
         </template>
         <template v-else-if="stage === 'assemble'">
@@ -2306,7 +2324,7 @@ const statusBar = computed(() => {
         </div>
       </section>
 
-      <!-- ============ 阶段 4：视频 ============ -->
+      <!-- ============ 阶段 5：视频（Seedance 含口型） ============ -->
       <section v-else-if="stage === 'video'" class="drama-stage-panel drama-video-stage">
         <div class="drama-panel-body drama-scene-layout">
           <div class="drama-scene-sidebar">
@@ -2351,6 +2369,15 @@ const statusBar = computed(() => {
                   {{ selectedShotBusy && dirty ? '保存中…' : dirty ? '保存' : '已保存' }}
                 </button>
                 <button
+                  v-if="manualVoice"
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="selectedShotBusy || !canGenerateVoice"
+                  @click="onGenerateVoice"
+                >
+                  {{ selectedShotBusy && !dirty ? '生成中…' : '生成配音' }}
+                </button>
+                <button
                   type="button"
                   class="btn-ghost btn-sm"
                   :disabled="selectedShotBusy || !selected?.files?.motion?.exists"
@@ -2383,6 +2410,33 @@ const statusBar = computed(() => {
                   placeholder="（剧本中尚未填写画面描述）"
                 />
               </label>
+              <div v-if="manualVoice" class="drama-voice-script-row">
+                <label class="drama-field">
+                  字幕
+                  <textarea
+                    v-model="draft.字幕"
+                    class="drama-scene-script-text"
+                    rows="2"
+                    placeholder="（本镜无台词字幕）"
+                  />
+                </label>
+                <label class="drama-field">
+                  旁白
+                  <textarea
+                    v-model="draft.旁白"
+                    class="drama-scene-script-text"
+                    rows="2"
+                    placeholder="（本镜无旁白）"
+                  />
+                </label>
+              </div>
+              <p class="drama-voice-lip-hint">
+                {{
+                  manualVoice
+                    ? '手动配音已开：生成视频前会先合成 TTS，并作为 Seedance 参考音频。'
+                    : '默认使用 Seedance 模型自带声。需要固定台词音色时，打开上方「手动配音」。'
+                }}
+              </p>
               <div class="drama-voice-meta-row drama-video-meta-row">
                 <label class="drama-voice-kv">
                   <strong>模型</strong>
@@ -2444,6 +2498,10 @@ const statusBar = computed(() => {
                     </option>
                   </select>
                 </label>
+                <div v-if="manualVoice" class="drama-voice-kv">
+                  <strong>配音</strong>
+                  <span class="drama-voice-readonly">{{ shotHasVoice(selected) ? '已就绪' : '未生成' }}</span>
+                </div>
               </div>
             </div>
               </div>
@@ -2459,8 +2517,6 @@ const statusBar = computed(() => {
                       :src="shotVideoPreviewUrl(selected)"
                       controls
                       autoplay
-                      muted
-                      loop
                       playsinline
                     />
                     <img
@@ -2483,215 +2539,7 @@ const statusBar = computed(() => {
         </div>
       </section>
 
-      <!-- ============ 阶段 5：声音 ============ -->
-      <section v-else-if="stage === 'voice'" class="drama-stage-panel drama-voice-stage">
-        <div class="drama-panel-body drama-scene-layout">
-          <div class="drama-scene-sidebar">
-            <div class="drama-scene-list">
-              <div class="drama-scene-rows">
-                <button
-                  v-for="shot in shots"
-                  :key="shot.n"
-                  type="button"
-                  class="drama-scene-row"
-                  :class="{ active: shot.n === selectedN, ready: shotHasVoice(shot) }"
-                  @click="emit('select-shot', shot.n)"
-                >
-                  <div class="drama-scene-thumb">
-                    <DramaThumbImg
-                      v-if="shotThumb(shot)"
-                      :key="shotThumbKey(shot)"
-                      :src="shotThumb(shot)"
-                      :alt="`Shot ${shot.n}`"
-                      :fetchpriority="shot.n === selectedN ? 'high' : 'low'"
-                    />
-                    <span v-else class="drama-scene-thumb-empty">{{ shot.n }}</span>
-                  </div>
-                  <div class="drama-scene-row-body">
-                    <span class="drama-scene-row-n">Shot {{ shot.n }}</span>
-                    <span class="drama-scene-row-desc">{{ shotVoiceRowDesc(shot) }}</span>
-                  </div>
-                  <span class="drama-status-dot" :class="shotVoiceStatusClass(shot)">{{ shotVoiceStatusLabel(shot) }}</span>
-                </button>
-              </div>
-              <p v-if="!shots.length" class="drama-empty-hint">暂无分镜，请先在「剧本」步骤生成分镜表。</p>
-            </div>
-          </div>
-
-          <div v-if="selected" class="drama-scene-detail">
-            <div class="drama-scene-detail-head">
-              <div class="drama-scene-detail-title">
-                <h3>Shot {{ selected.n }}</h3>
-              </div>
-              <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-ghost btn-sm" :disabled="selectedShotBusy || !dirty" @click="emit('save')">
-                  {{ selectedShotBusy && dirty ? '保存中…' : dirty ? '保存' : '已保存' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn-primary btn-sm"
-                  :disabled="selectedShotBusy || !canGenerateVoice"
-                  @click="onGenerateVoice"
-                >
-                  {{ selectedShotBusy && !dirty ? '生成中…' : '生成配音' }}
-                </button>
-              </div>
-            </div>
-
-            <div class="drama-scene-body">
-              <div class="drama-scene-left">
-                <div class="drama-scene-script">
-              <div class="drama-voice-script-row">
-                <label class="drama-field">
-                  字幕
-                  <textarea
-                    v-model="draft.字幕"
-                    class="drama-scene-script-text"
-                    rows="3"
-                    placeholder="（本镜无台词字幕）"
-                  />
-                </label>
-                <label class="drama-field">
-                  旁白
-                  <textarea
-                    v-model="draft.旁白"
-                    class="drama-scene-script-text"
-                    rows="3"
-                    placeholder="（本镜无旁白）"
-                  />
-                </label>
-              </div>
-              <div class="drama-voice-meta-row">
-                <label class="drama-voice-kv">
-                  <strong>说话人</strong>
-                  <select v-model="voiceInspectSpeaker" title="仅查看绑定音色，不会修改分镜">
-                    <option value="">（未指定）</option>
-                    <option v-for="name in voiceSpeakerOptions" :key="name" :value="name">
-                      {{ name }}
-                    </option>
-                  </select>
-                </label>
-                <div class="drama-voice-kv">
-                  <strong>音色</strong>
-                  <span class="drama-voice-readonly">{{ selectedSpeakerVoiceLabel }}</span>
-                </div>
-                <div class="drama-voice-kv">
-                  <strong>口型状态</strong>
-                  <span class="drama-voice-readonly">{{ lipStatusLabel(selected) }}</span>
-                </div>
-                <label class="drama-voice-kv">
-                  <strong>配音</strong>
-                  <select
-                    :value="currentModelKey('tts')"
-                    :disabled="saving"
-                    @change="onStageModelChange('tts', $event)"
-                  >
-                    <option
-                      v-for="opt in catalogOptions('tts')"
-                      :key="`${opt.provider}|${opt.model}`"
-                      :value="`${opt.provider}|${opt.model}`"
-                    >
-                      {{ opt.label }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>口型</strong>
-                  <select
-                    :value="currentModelKey('lip')"
-                    :disabled="saving"
-                    @change="onStageModelChange('lip', $event)"
-                  >
-                    <option
-                      v-for="opt in catalogOptions('lip')"
-                      :key="`${opt.provider}|${opt.model}`"
-                      :value="`${opt.provider}|${opt.model}`"
-                    >
-                      {{ opt.label }}
-                    </option>
-                  </select>
-                </label>
-                <div class="drama-voice-kv" :class="identityClass">
-                  <strong>身份</strong>
-                  <span class="drama-voice-readonly">{{ identityLabel }}</span>
-                </div>
-              </div>
-            </div>
-              </div>
-
-              <div class="drama-scene-right">
-                <div class="drama-av-preview-panel">
-                <div class="drama-av-preview-area">
-                  <div class="drama-av-frame drama-voice-frame">
-                    <video
-                      v-if="shotVoicePreviewKind(selected) === 'video'"
-                      :key="shotVoicePreviewUrl(selected)"
-                      ref="voiceVideoRef"
-                      class="drama-media"
-                      :src="shotVoicePreviewUrl(selected)"
-                      :muted="shotVoiceNeedsExternalAudio(selected)"
-                      controls
-                      playsinline
-                      @play="onVoiceVideoPlaySafe"
-                      @pause="onVoiceVideoPauseSafe"
-                      @seeked="onVoiceVideoSeekedSafe"
-                      @ended="onVoiceVideoEnded"
-                      @volumechange="onVoiceVideoVolumeChangeSafe"
-                    />
-                    <img
-                      v-else-if="shotVoicePreviewKind(selected) === 'image'"
-                      class="drama-media"
-                      :src="shotVoicePreviewUrl(selected)"
-                      alt="镜头画面"
-                    />
-                    <div v-else class="drama-stage-empty">本镜尚未出图；可先在「画面 / 视频」步骤生成</div>
-                    <p v-if="selected?.lip_base_mismatch" class="drama-voice-lip-hint">
-                      本镜旧口型曾脱离 motion。请重新「生成配音」（会按 motion 重做口型并重装 clip），否则前半段容易音画错位。
-                    </p>
-                    <div
-                      v-if="voiceNarrationText()"
-                      class="drama-voice-sub-layer drama-voice-sub-layer--narration"
-                      aria-hidden="true"
-                    >
-                      <p class="drama-voice-sub-text drama-voice-sub-text--narration">
-                        {{ voiceNarrationText() }}
-                      </p>
-                    </div>
-                    <div
-                      v-if="voiceDialogueCaption()"
-                      class="drama-voice-sub-layer drama-voice-sub-layer--dialogue"
-                      aria-hidden="true"
-                    >
-                      <p class="drama-voice-sub-text drama-voice-sub-text--dialogue">
-                        {{ voiceDialogueCaption() }}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <audio
-                  v-if="shotVoiceNeedsExternalAudio(selected)"
-                  :key="shotVoiceAudioUrl(selected)"
-                  ref="voiceAudioRef"
-                  class="drama-voice-audio-hidden"
-                  :src="shotVoiceAudioUrl(selected)"
-                  preload="auto"
-                  @loadeddata="syncVoiceVolumeFromVideo"
-                  @play="onVoiceAudioPlay"
-                  @pause="onVoiceAudioPause"
-                  @ended="onVoiceAudioEnded"
-                />
-              </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="drama-cast-empty">
-            <p>从左侧选择一镜，查看字幕台词并生成配音与口型。</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- ============ 阶段 6：成片 ============ -->
+      <!-- ============ 阶段：成片 ============ -->
       <section v-else-if="stage === 'assemble'" class="drama-stage-panel drama-assemble-stage">
         <div class="drama-panel-body drama-assemble-body">
           <div class="drama-assemble-main">
@@ -2800,13 +2648,13 @@ const statusBar = computed(() => {
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
         <li><strong>1. 新建空项目</strong> 点下方按钮创建空白漫剧，或从左侧打开已有项目</li>
-        <li><strong>2. 逐步制作</strong> 按步进器完成剧本 → 角色 → 画面 → 视频 → 声音 → 成片</li>
+        <li><strong>2. 逐步制作</strong> 按步进器完成剧本 → 角色 → 画面 → 视频 → 成片</li>
         <li><strong>3. 导出成片</strong> 到「成片」阶段拼接并导出</li>
       </ol>
       <button type="button" class="btn-primary drama-idle-cta" @click="emit('start-new-drama')">
         新建空漫剧
       </button>
-      <p class="drama-idle-hint">从零开始：剧本 → 角色 → 画面 → 视频 → 声音 → 成片</p>
+      <p class="drama-idle-hint">火山方舟单轨：剧本 → 角色 → 画面 → 视频（默认模型自带声）→ 成片</p>
     </div>
 
     <div v-if="project" class="drama-script-status">

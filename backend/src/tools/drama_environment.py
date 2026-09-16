@@ -422,7 +422,7 @@ def ensure_environment_refs(
 
     Scenes no longer get a separate「设定图」— the empty master plate is the only
     visual authority. Characters are handled by ``ensure_character_refs``.
-    地点底板与道具设定图并行生成（与角色定妆同档并发）。
+    地点底板与道具设定图串行生成（一份完成再下一份）。
     """
     from tools.drama_characters import (
         environment_anchor_prompt,
@@ -434,7 +434,6 @@ def ensure_environment_refs(
         upsert_character,
     )
     from tools.drama_common import parse_slug
-    from tools.drama_parallel import parallel_map, shot_concurrency
     from tools.drama_video import generate_character_portrait, generate_location_plate
 
     slug = parse_slug(slug)
@@ -500,7 +499,9 @@ def ensure_environment_refs(
         return cat, cid
 
     if pending:
-        for cat, cid in parallel_map(pending, _one, max_workers=shot_concurrency()):
+        # 环境资产串行：一地点/道具完成再下一个
+        for rec in pending:
+            cat, cid = _one(rec)
             if cat == "prop":
                 props_ok.append(cid)
             else:

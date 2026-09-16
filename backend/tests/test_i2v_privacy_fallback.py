@@ -17,12 +17,27 @@ def test_same_tier_alts_disabled():
 
 
 def test_privacy_error_detector():
-    from tools.drama_i2v import _is_privacy_i2v_error
+    from tools.drama_i2v import (
+        _format_i2v_fail_detail,
+        _is_output_sensitive_i2v_error,
+        _is_privacy_i2v_error,
+    )
 
     assert _is_privacy_i2v_error(
         "HTTP 400: InputImageSensitiveContentDetected.PrivacyInformation: real person"
     )
     assert not _is_privacy_i2v_error("HTTP 500: timeout")
+    assert _is_output_sensitive_i2v_error(
+        "HTTP 400: OutputVideoSensitiveContentDetected: blocked"
+    )
+    assert not _is_privacy_i2v_error(
+        "HTTP 400: OutputVideoSensitiveContentDetected: blocked"
+    )
+    msg = _format_i2v_fail_detail(
+        "model=x; HTTP 400: OutputVideoSensitiveContentDetected"
+    )
+    assert "输出侧" in msg
+    assert "动漫" in msg
 
 
 def test_run_i2v_with_same_tier_alt_primary_only(tmp_path, monkeypatch):

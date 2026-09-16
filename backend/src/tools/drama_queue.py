@@ -21,7 +21,7 @@ from tools.workspace import resolve_safe, workspace_root
 
 TERMINAL = frozenset({"done", "error", "cancelled"})
 KINDS = frozenset({"rerender_dirty", "rerender_shot", "export", "render_episode", "produce_episode", "i2v_shot", "lip_shot", "keys_shot"})
-# 镜头级任务可同集并行；整集级任务独占。
+# 镜头级任务默认串行（DRAMA_SHOT_CONCURRENCY=1）；整集级任务独占。
 SHOT_KINDS = frozenset({"i2v_shot", "lip_shot", "keys_shot", "rerender_shot"})
 EXCLUSIVE_KINDS = frozenset({"rerender_dirty", "export", "render_episode", "produce_episode"})
 
@@ -94,15 +94,15 @@ class DramaQueue:
         self._workers: list[threading.Thread] = []
         # slug:ep -> set of active job_ids (pending/running)
         self._slug_busy: dict[str, set[str]] = {}
-        # S4: worker 池。整集任务互斥；镜头级任务按 DRAMA_SHOT_CONCURRENCY 并行。
+        # worker 池。整集任务互斥；镜头级任务默认串行（DRAMA_SHOT_CONCURRENCY=1）。
         try:
             from config import config
 
-            default_workers = int(getattr(config, "DRAMA_MAX_WORKERS", 4) or 4)
-            shot_conc = int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 3) or 3)
+            default_workers = int(getattr(config, "DRAMA_MAX_WORKERS", 1) or 1)
+            shot_conc = int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 1) or 1)
         except Exception:
-            default_workers = 4
-            shot_conc = 3
+            default_workers = 1
+            shot_conc = 1
         self.max_workers = max(1, int(max_workers or default_workers))
         self.shot_concurrency = max(1, shot_conc)
         # 启动时从磁盘回载失败/中断任务，历史会话可「继续渲染」而无需再踩一次失败
@@ -426,12 +426,15 @@ class DramaQueue:
                 continue
         return out
 
-    def remove_slug(self, slug: str) -> int:
+    def remove_slug(self, slug: str, *, wait_s: float = 2.5) -> int:
         """Cancel and drop in-memory jobs for a slug and remove persisted records.
 
         Running workers keep a reference to their job; marking it discarded makes
         the worker skip the trailing _persist, so no orphan file is re-created.
+        Optionally waits briefly so file handles (ffmpeg / downloads) can release
+        before the caller deletes the project tree on Windows.
         """
+        slug = str(slug or "").strip()
         with self._lock:
             jobs = [j for j in self._jobs.values() if j.slug == slug]
             for j in jobs:
@@ -453,6 +456,14 @@ class DramaQueue:
                     path.unlink()
                 except OSError:
                     pass
+        # Wait until busy keys for this slug clear (best-effort).
+        deadline = time.monotonic() + max(0.0, float(wait_s or 0))
+        while time.monotonic() < deadline:
+            with self._lock:
+                busy = [k for k in self._slug_busy if k.startswith(f"{slug}:")]
+            if not busy:
+                break
+            time.sleep(0.15)
         return removed
 
     def _release_busy(self, job: DramaJob) -> None:
@@ -707,6 +718,7 @@ class DramaQueue:
     def _run_i2v_shot(self, job: DramaJob) -> dict[str, Any]:
         from tools.drama_i2v import generate_shot_i2v
         from tools.drama_shots import find_shot, load_doc, merge_save_shot
+        from tools.drama_studio import project_manual_voice
         from tools.drama_video import rerender_shot
 
         shot_n = int((job.params or {}).get("shot") or 0)
@@ -718,14 +730,48 @@ class DramaQueue:
         shot = find_shot(doc, shot_n)
         if shot is None:
             raise ValueError(f"找不到 Shot {shot_n}")
-        self._progress(job, message=f"I2V Shot {shot_n}", current=0, total=2, shot=shot_n)
+
+        use_manual = bool(project_manual_voice(job.slug))
+        shot["manual_voice"] = use_manual
+        total = 3 if use_manual else 2
+        step = 0
+        if use_manual and str(shot.get("字幕") or shot.get("对白") or "").strip():
+            self._progress(
+                job,
+                message=f"配音 Shot {shot_n}",
+                current=step,
+                total=total,
+                shot=shot_n,
+            )
+            job.check_cancel()
+            rerender_shot(job.slug, job.episode, shot_n, layers=["overlay", "voice"])
+            # reload shot after TTS
+            doc = load_doc(job.slug, job.episode) or doc
+            shot = find_shot(doc, shot_n) or shot
+            shot["manual_voice"] = True
+            step += 1
+
+        self._progress(
+            job,
+            message=f"I2V Shot {shot_n}",
+            current=step,
+            total=total,
+            shot=shot_n,
+        )
         job.check_cancel()
         info = generate_shot_i2v(job.slug, job.episode, shot, force=True, allow_locked=True)
         merge_save_shot(job.slug, job.episode, shot)
         job.check_cancel()
-        self._progress(job, message=f"合成 Shot {shot_n}", current=1, total=2, shot=shot_n)
+        self._progress(
+            job,
+            message=f"合成 Shot {shot_n}",
+            current=step + 1,
+            total=total,
+            shot=shot_n,
+        )
         result = rerender_shot(job.slug, job.episode, shot_n, layers=["clip"])
         info["assemble"] = result.get("assemble")
+        info["manual_voice"] = use_manual
         return info
 
     def _run_lip_shot(self, job: DramaJob) -> dict[str, Any]:

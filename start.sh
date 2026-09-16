@@ -35,7 +35,7 @@ echo "   Agent Chat - 通用智能体框架"
 echo "============================================"
 echo ""
 
-[[ -f backend/config/.env || -f backend/.env ]] || { print_err "未找到 backend/config/.env（或 backend/.env）"; exit 1; }
+[[ -f backend/config/.env ]] || { print_err "未找到 backend/config/.env，请复制 backend/config/.env.example 为 .env 并填写密钥"; exit 1; }
 
 if [[ "$FORCE_INSTALL" == 1 ]]; then
     rm -f backend/.deps_ok
