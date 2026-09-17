@@ -86,13 +86,14 @@ def _provider() -> str:
 
 
 def _motion_prompt(shot: dict[str, Any]) -> str:
-    scene = str(shot.get("画面") or "").strip()
-    camera = str(shot.get("camera") or "punch_in")
+    """Seedance I2V 提示词：官方公式「主体+运动+运镜(+声音)」。"""
+    from tools.drama_ark_prompts import build_seedance_i2v_prompt
+    from tools.drama_characters import ANIME_STYLE_GUARD
+
     slug = str(shot.get("_slug") or "")
     look = ""
     if slug:
         from tools.drama_characters import (
-            ANIME_STYLE_GUARD,
             character_prompt_clause,
             load_characters,
             resolve_shot_characters,
@@ -100,28 +101,28 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
 
         cast = resolve_shot_characters(shot, load_characters(slug))
         look = character_prompt_clause(cast, slug=slug)
-    else:
-        from tools.drama_characters import ANIME_STYLE_GUARD
 
-    bits = [
-        ANIME_STYLE_GUARD,
-        "虚构二次元角色，非真人非明星非公众人物",
-        "电影感细微运动",
-        camera,
-        "竖屏9:16",
-        scene or "风格化动漫角色半身",
-    ]
-    if look:
-        bits.append(look)
-    bits.extend(
-        [
-            "轻微动态",
-            "无文字无Logo无品牌标识",
-            "与锁定的角色参考图五官一致",
-            "禁止写实人脸特写与照片级皮肤",
-        ]
+    manual = bool(shot.get("manual_voice"))
+    if not manual and slug:
+        try:
+            from tools.drama_studio import project_manual_voice
+
+            manual = bool(project_manual_voice(slug))
+        except Exception:
+            manual = False
+    # 有参考音频或手动配音 → 不走模型自带声文案
+    gen_audio = bool(shot.get("i2v_generate_audio", not manual))
+    if shot.get("i2v_audio_ref"):
+        gen_audio = False
+        manual = True
+
+    return build_seedance_i2v_prompt(
+        shot,
+        look_clause=look,
+        style_guard=ANIME_STYLE_GUARD,
+        generate_audio=gen_audio,
+        manual_voice=manual,
     )
-    return ", ".join(bits)
 
 
 def _kenburns_motion_mp4(scene: Path, dest: Path, shot: dict[str, Any], seconds: float) -> None:

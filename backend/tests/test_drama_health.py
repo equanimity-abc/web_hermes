@@ -169,8 +169,10 @@ def test_prop_ref_prompt_square_vs_portrait():
 
     square = build_asset_ref_prompt({"category": "prop", "look": "玉瓶", "ref_size": 1024})
     assert "正方形" in square
-    tall = build_asset_ref_prompt({"category": "prop", "look": "玉瓶", "ref_size": 1080})
+    assert "道具设定图" in square
+    tall = build_asset_ref_prompt({"category": "prop", "look": "玉瓶", "ref_size": 1440})
     assert "9:16" in tall
+    assert "道具设定图" in tall
 
 
 def test_trim_letterbox_reads_pixels_with_pillow():

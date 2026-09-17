@@ -687,10 +687,9 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         if 1.8 <= voice_sec <= 15.5 or voice_sec <= 0:
             if voice_sec > 0:
                 duration = _seedance_duration(max(float(seconds or 0), voice_sec))
-            prompt = (
-                f"{prompt}。角色按参考音频说话，口型与语音节奏精准同步，自然张合，"
-                "不要额外旁白字幕。"
-            )
+            from tools.drama_ark_prompts import build_seedance_ref_audio_suffix
+
+            prompt = f"{prompt}。{build_seedance_ref_audio_suffix()}"
             used_ref_audio = True
         else:
             audio_url = None

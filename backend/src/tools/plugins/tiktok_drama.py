@@ -38,28 +38,34 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 3. save_outline 写入系列大纲 outline.md
 4. save_episode 按集写入 episodes/epNN.md
 5. parse_shots 解析分镜并写入 videos/epNN/shots.json（分镜真相源）
-6. **produce_episode** 已有剧本时一键 HQ：pro 预设 → 补角色/单张锁定妆 → 逐镜单图 scene+配音+口型+I2V → 曲库 BGM → **导出 epNN.mp4**
-7. render_episode 仅批量出 scene/overlay/voice/clip（不含 I2V/口型/导出），适合半成品迭代
+6. **produce_episode** 已有剧本时一键 HQ：ark 预设 → 资产（角色/道具/场景）→ Seedream 静帧 → Seedance 图生视频（**默认模型自带声**；项目开启 manual_voice 时先 Seed Audio 再挂 reference_audio）→ 曲库 BGM → **导出 epNN.mp4**
+7. render_episode 仅批量出 scene/overlay/voice/clip（不含 I2V/导出），适合半成品迭代
 8. 改某一镜用 rerender_shot；layers=scene|overlay|voice|clip|assemble 只重做指定层
 9. lock_shot 锁住 scene 后，改台词只换声和字幕，不会覆盖画面
 10. lock_shot 锁住 shot（整镜）后，save_episode 改剧本不会覆盖该镜
 11. get / list 回看进度；成片 videos/epNN.mp4
-12. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）；**失败后续跑优先 resume_produce**（分析失败点，从失败步骤继续到导出）
+12. 只重写脏镜用 rerender_dirty（跳过干净镜与锁层）；**失败后续跑优先 resume_produce**
 13. save_character 写角色卡（外形 look + 音色 voice）；produce_episode 会按分镜 `- 角色:` 自动补卡
 14. 分镜用 `- 角色: 悟空`；出图 prompt 吃角色外形，配音吃该角色音色
 15. 锁参考图后无法覆盖已锁定的定妆 png
 16. **禁止** generate_candidates / choose_candidate；所有步骤禁止使用候选项结果与重抽步骤（单次出图，失败 Fail Loud）
 17. export_timeline 导出整集：先重渲脏镜（旁白/字幕/时长/配音），再按时间线拼接+混音
 18. poll_job 查询后台任务（produce_episode / render_episode / rerender_dirty / resume_produce）
-19. generate_i2v 对已锁关键帧做真 I2V 运动（专业档失败 Fail Loud，禁止静图运镜顶替）
+19. generate_i2v 对已锁关键帧做 Seedance 图生视频（专业档失败 Fail Loud，禁止静图运镜顶替）
 20. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
-21. generate_lip 仅 dialogue CU/MCU 开口型（须有 speaker；专业档失败 Fail Loud，禁止闭口静图顶替）
+21. 口型：默认随 Seedance 自带声内生；手动配音模式下挂 TTS reference_audio
 22. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
-23. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁；人在工作台采纳/忽略/锁定
+23. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁
 24. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
-25. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过；响度不达标只重 mix；人在工作台点通过或退回单镜
-26. apply_style 为本集切换风格包（一集一个 style_id；古风对话后新镜走角色模型，定场仍便宜；不重渲已有 clip）
-27. **resume_produce** 分析上次失败点（身份/I2V/口型/导出），收窄脏层，跳过已通过镜，从失败步骤续跑直至导出
+25. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过
+26. apply_style 为本集切换风格包
+27. **resume_produce** 分析上次失败点，收窄脏层，从失败步骤续跑直至导出
+
+## 火山方舟提示词要点（编剧/出图/出视频）
+- Seedream 静帧：自然语言「主体+姿态+环境+光影」；写明「视频静帧 / Seedance 首帧」；9:16
+- Seedance 图生视频：「主体运动时序 + 运镜(推拉摇移跟升降环绕) + 景别」；强调与首帧主体一致
+- 默认自带声：字幕「角色名：台词」写清，模型对口型；手动配音则先 TTS 再挂参考音频
+- 画面禁止写切黑/转场；道具名走道具字段，勿塞进角色外形
 
 ## 单集剧本格式（save_episode 的 content）
 # EP01 标题
@@ -89,7 +95,7 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 
 ## 分镜
 ### Shot 1 (0-3s)
-- 画面: 景别+人物动作+镜头感；环境细节服从地点标志物，禁止每镜新背景
+- 画面: 景别+人物动作+镜头感；环境细节服从地点标志物，禁止每镜新背景；用「主体+动作时序+运镜」自然语言，禁止切黑转场
 - 地点: （必须逐字引用场景设定同名）
 - 道具: （顿号分隔，引用道具设定；可空）
 - 字幕: （角色名：台词）

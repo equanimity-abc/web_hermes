@@ -2178,7 +2178,7 @@
 /* —— 定妆资产页 —— */
 .drama-cast-layout {
   display: grid;
-  grid-template-columns: minmax(170px, 200px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
   gap: 12px;
   min-height: 420px;
   padding-top: 4px !important;
@@ -2194,10 +2194,64 @@
   overflow: hidden;
 }
 
-.drama-cast-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+.drama-cast-sections {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.drama-cast-section {
   border-bottom: 1px solid var(--color-border);
+}
+.drama-cast-section:last-child {
+  border-bottom: none;
+}
+
+.drama-cast-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+.drama-cast-section-head:hover {
+  background: var(--color-bg-muted, #f6f7f9);
+}
+.drama-cast-section.active > .drama-cast-section-head {
+  color: var(--color-primary);
+  font-weight: 600;
+  background: var(--color-primary-soft);
+}
+.drama-cast-section-chevron {
+  width: 1em;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.drama-cast-section-label {
+  flex: 1;
+  min-width: 0;
+}
+.drama-cast-section-count {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.drama-cast-section-body {
+  padding: 0 10px 10px;
+}
+
+.drama-cast-tabs {
+  display: none;
 }
 
 .drama-cast-tab {

@@ -174,7 +174,7 @@ const manualVoice = computed(() => Boolean(props.project?.project?.manual_voice)
 
 const stageList = computed(() => [
   { id: 'script', label: '剧本', title: '步骤一：结构化剧本（角色/场景/道具/配乐/分镜）', done: Boolean(props.episode?.script) },
-  { id: 'cast', label: '角色', title: '步骤二：Seedream 定妆 / 道具 / 场景底板', done: (props.characters || []).some((c) => c.ref_exists) },
+  { id: 'cast', label: '资产', title: '步骤二：资产管理（角色 / 道具 / 场景）', done: (props.characters || []).some((c) => c.ref_exists) },
   { id: 'scene', label: '画面', title: '步骤三：Seedream 分镜静帧', done: hasLayer('scene') },
   {
     id: 'video',
@@ -233,9 +233,15 @@ watch(
 const castCategory = ref('character')
 const CAST_TABS = [
   { id: 'character', label: '角色' },
-  { id: 'prop', label: '物品' },
+  { id: 'prop', label: '道具' },
   { id: 'scene', label: '场景' },
 ]
+/** 左侧竖排分组：默认展开「角色」，道具/场景可折叠 */
+const castSectionOpen = ref({
+  character: true,
+  prop: false,
+  scene: false,
+})
 const CAST_REF_MODELS = [
   { provider: 'seedream', model: 'doubao-seedream-5-0-pro-260628', label: '方舟 · Seedream 5.0 Pro' },
   { provider: 'kling-image', model: 'kling/kling-v3-omni-image-generation', label: '可灵 · Kling V3 Omni' },
@@ -343,8 +349,30 @@ const castAssets = computed(() =>
   (props.characters || []).filter((c) => (c.category || 'character') === castCategory.value),
 )
 
+function castAssetsOf(category) {
+  return (props.characters || []).filter((c) => (c.category || 'character') === category)
+}
+
+function toggleCastSection(category) {
+  const next = !castSectionOpen.value[category]
+  castSectionOpen.value = { ...castSectionOpen.value, [category]: next }
+  if (next) {
+    castCategory.value = category
+    const list = castAssetsOf(category)
+    const ids = new Set(list.map((c) => c.id))
+    if (!ids.has(props.selectedCharacterId)) {
+      emit('select-character', list[0]?.id || null)
+    }
+  }
+}
+
+function openCastSection(category) {
+  castCategory.value = category
+  castSectionOpen.value = { ...castSectionOpen.value, [category]: true }
+}
+
 const castAddLabel = computed(() => {
-  const map = { character: '添加角色', prop: '添加物品', scene: '添加场景' }
+  const map = { character: '添加角色', prop: '添加道具', scene: '添加场景' }
   return map[castCategory.value] || '添加'
 })
 
@@ -410,7 +438,7 @@ watch(
 )
 
 function onAddCastAsset() {
-  const names = { character: '新角色', prop: '新物品', scene: '新场景' }
+  const names = { character: '新角色', prop: '新道具', scene: '新场景' }
   emit('add-character', {
     category: castCategory.value,
     name: names[castCategory.value] || '新资产',
@@ -488,6 +516,18 @@ watch(castCategory, () => {
   if (props.selectedCharacterId && ids.has(props.selectedCharacterId)) return
   emit('select-character', castAssets.value[0]?.id || null)
 })
+
+watch(
+  () => props.selectedCharacter?.category || props.selectedCharacter?.id,
+  () => {
+    const cat = props.selectedCharacter?.category || 'character'
+    if (!CAST_TABS.some((t) => t.id === cat)) return
+    if (castCategory.value !== cat) castCategory.value = cat
+    if (!castSectionOpen.value[cat]) {
+      castSectionOpen.value = { ...castSectionOpen.value, [cat]: true }
+    }
+  },
+)
 
 const stageBoardMap = {
   script: 'script',
@@ -1643,8 +1683,8 @@ const statusBar = computed(() => {
       base = {
         pct: list.length ? Math.round((withRef / list.length) * 100) : 0,
         status: list.length && withRef === list.length ? 'done' : 'idle',
-        title: '角色',
-        message: list.length ? `定妆图 ${withRef}/${list.length}` : '暂无角色',
+        title: '资产',
+        message: list.length ? `资产图 ${withRef}/${list.length}` : '暂无资产',
       }
       break
     }
@@ -1939,72 +1979,79 @@ const statusBar = computed(() => {
       <section v-else-if="stage === 'cast'" class="drama-stage-panel drama-cast-stage">
         <div class="drama-panel-body drama-scene-layout drama-cast-layout">
           <div class="drama-cast-sidebar">
-            <div class="drama-cast-tabs">
-              <button
+            <div class="drama-cast-sections">
+              <div
                 v-for="tab in CAST_TABS"
                 :key="tab.id"
-                type="button"
-                class="drama-cast-tab"
-                :class="{ active: tab.id === castCategory }"
-                @click="castCategory = tab.id"
+                class="drama-cast-section"
+                :class="{ open: castSectionOpen[tab.id], active: castCategory === tab.id }"
               >
-                {{ tab.label }}
-              </button>
-            </div>
-            <div class="drama-cast-list">
-              <div v-if="castCategory === 'character'" class="drama-cast-rows">
-                <div
-                  v-for="item in castAssets"
-                  :key="item.id"
-                  class="drama-cast-row"
-                  :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked, busy: isCharacterBusy(item.id) }"
+                <button
+                  type="button"
+                  class="drama-cast-section-head"
+                  :aria-expanded="castSectionOpen[tab.id] ? 'true' : 'false'"
+                  @click="toggleCastSection(tab.id)"
                 >
-                  <button
-                    type="button"
-                    class="drama-cast-row-main"
-                    @click="emit('select-character', item.id)"
-                  >
-                    <div class="drama-cast-avatar">
-                      <img v-if="item.ref_url" :src="castAssetUrl(item.ref_url)" :alt="item.name" />
-                      <span v-else class="drama-cast-avatar-empty">{{ (item.name || item.id || '?').slice(0, 1) }}</span>
+                  <span class="drama-cast-section-chevron" aria-hidden="true">{{ castSectionOpen[tab.id] ? '▾' : '▸' }}</span>
+                  <span class="drama-cast-section-label">{{ tab.label }}</span>
+                  <span class="drama-cast-section-count">{{ castAssetsOf(tab.id).length }}</span>
+                </button>
+                <div v-show="castSectionOpen[tab.id]" class="drama-cast-section-body">
+                  <div v-if="tab.id === 'character'" class="drama-cast-rows">
+                    <div
+                      v-for="item in castAssetsOf(tab.id)"
+                      :key="item.id"
+                      class="drama-cast-row"
+                      :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked, busy: isCharacterBusy(item.id) }"
+                    >
+                      <button
+                        type="button"
+                        class="drama-cast-row-main"
+                        @click="openCastSection(tab.id); emit('select-character', item.id)"
+                      >
+                        <div class="drama-cast-avatar">
+                          <img v-if="item.ref_url" :src="castAssetUrl(item.ref_url)" :alt="item.name" />
+                          <span v-else class="drama-cast-avatar-empty">{{ (item.name || item.id || '?').slice(0, 1) }}</span>
+                        </div>
+                        <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
+                        <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
+                        <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-tiny drama-cast-row-gen"
+                        :disabled="isCharacterBusy(item.id) || item.ref_locked"
+                        :title="item.ref_locked ? '已锁定' : (isCharacterBusy(item.id) ? '生成中' : '生成定妆图')"
+                        @click.stop="openCastSection(tab.id); emit('generate-character-ref', item.id)"
+                      >
+                        {{ isCharacterBusy(item.id) ? '…' : '生成' }}
+                      </button>
                     </div>
-                    <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
-                    <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
-                    <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-tiny drama-cast-row-gen"
-                    :disabled="isCharacterBusy(item.id) || item.ref_locked"
-                    :title="item.ref_locked ? '已锁定' : (isCharacterBusy(item.id) ? '生成中' : '生成定妆图')"
-                    @click.stop="emit('generate-character-ref', item.id)"
-                  >
-                    {{ isCharacterBusy(item.id) ? '…' : '生成' }}
-                  </button>
+                  </div>
+                  <div v-else class="drama-cast-folder-grid">
+                    <button
+                      v-for="item in castAssetsOf(tab.id)"
+                      :key="item.id"
+                      type="button"
+                      class="drama-cast-card"
+                      :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked }"
+                      @click="openCastSection(tab.id); emit('select-character', item.id)"
+                    >
+                      <div class="drama-cast-thumb">
+                        <img
+                          v-if="item.ref_plate_url || item.ref_url"
+                          :src="castAssetUrl(item.ref_plate_url || item.ref_url)"
+                          :alt="item.name"
+                        />
+                        <span v-else class="drama-candidate-empty">无图</span>
+                      </div>
+                      <span class="drama-cast-name">{{ item.name || item.id }}</span>
+                      <span v-if="item.ref_locked" class="drama-cast-lock" title="已锁定">🔒</span>
+                    </button>
+                  </div>
+                  <p v-if="!castAssetsOf(tab.id).length" class="drama-empty-hint">暂无{{ tab.label }}，点上方「{{ { character: '添加角色', prop: '添加道具', scene: '添加场景' }[tab.id] }}」新建。</p>
                 </div>
               </div>
-              <div v-else class="drama-cast-folder-grid">
-                <button
-                  v-for="item in castAssets"
-                  :key="item.id"
-                  type="button"
-                  class="drama-cast-card"
-                  :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked }"
-                  @click="emit('select-character', item.id)"
-                >
-                  <div class="drama-cast-thumb">
-                    <img
-                      v-if="item.ref_plate_url || item.ref_url"
-                      :src="castAssetUrl(item.ref_plate_url || item.ref_url)"
-                      :alt="item.name"
-                    />
-                    <span v-else class="drama-candidate-empty">无图</span>
-                  </div>
-                  <span class="drama-cast-name">{{ item.name || item.id }}</span>
-                  <span v-if="item.ref_locked" class="drama-cast-lock" title="已锁定">🔒</span>
-                </button>
-              </div>
-              <p v-if="!castAssets.length" class="drama-empty-hint">暂无{{ CAST_TABS.find((t) => t.id === castCategory)?.label }}，点击上方添加。</p>
             </div>
           </div>
 
@@ -2028,7 +2075,11 @@ const statusBar = computed(() => {
                 <div class="drama-scene-script drama-cast-form">
                   <label class="drama-field">
                     名称
-                    <input v-model="charDraft.name" type="text" placeholder="角色名称" />
+                    <input
+                      v-model="charDraft.name"
+                      type="text"
+                      :placeholder="castCategory === 'scene' ? '场景名称' : castCategory === 'prop' ? '道具名称' : '角色名称'"
+                    />
                   </label>
                   <label v-if="castCategory === 'character'" class="drama-field">
                     别名
@@ -2648,13 +2699,13 @@ const statusBar = computed(() => {
       <h2>分镜台</h2>
       <ol class="drama-idle-steps">
         <li><strong>1. 新建空项目</strong> 点下方按钮创建空白漫剧，或从左侧打开已有项目</li>
-        <li><strong>2. 逐步制作</strong> 按步进器完成剧本 → 角色 → 画面 → 视频 → 成片</li>
+        <li><strong>2. 逐步制作</strong> 按步进器完成剧本 → 资产 → 画面 → 视频 → 成片</li>
         <li><strong>3. 导出成片</strong> 到「成片」阶段拼接并导出</li>
       </ol>
       <button type="button" class="btn-primary drama-idle-cta" @click="emit('start-new-drama')">
         新建空漫剧
       </button>
-      <p class="drama-idle-hint">火山方舟单轨：剧本 → 角色 → 画面 → 视频（默认模型自带声）→ 成片</p>
+      <p class="drama-idle-hint">火山方舟单轨：剧本 → 资产 → 画面 → 视频（默认模型自带声）→ 成片</p>
     </div>
 
     <div v-if="project" class="drama-script-status">

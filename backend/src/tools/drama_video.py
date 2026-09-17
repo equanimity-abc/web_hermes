@@ -694,30 +694,29 @@ def _scene_prompt(
         from tools.drama_frame_memory import memory_prompt_clause
 
         memory_clause = memory_prompt_clause(hits)
-    bits = [
-        "竖屏9:16竖屏短剧关键帧",
-        title or "短剧",
-        scene,
-        loc_clause,
-        prop_clause,
-        char_clause,
-        spatial_clause,
-        memory_clause,
-        kinetic,
-    ]
+
+    identity_lock = ""
     if needs_face and speaker:
-        bits.append(
+        identity_lock = (
             f"身份锁角色「{speaker}」必须清晰露脸并占本镜主要人脸位置，"
             f"禁止只画其他角色正脸而把「{speaker}」画成背影、过小剪影或看不清五官"
         )
-    if style_clause:
-        bits.append(style_clause)
-    bits.append(
-        f"竖屏漫剧条漫插画，{ANIME_STYLE_GUARD}，"
-        "戏剧性轮廓光，细节丰富，画面中人物清晰可见，非空镜非黑屏，"
-        "无文字、无字幕、无水印、无界面"
+
+    from tools.drama_ark_prompts import build_seedream_video_still_prompt
+
+    return build_seedream_video_still_prompt(
+        title=title or "短剧",
+        scene=scene,
+        character_clause=char_clause,
+        location_clause=loc_clause,
+        prop_clause=prop_clause,
+        kinetic=kinetic,
+        spatial_clause=spatial_clause,
+        memory_clause=memory_clause,
+        style_clause=style_clause,
+        identity_lock=identity_lock,
+        style_guard=ANIME_STYLE_GUARD,
     )
-    return ", ".join(b for b in bits if b)
 
 
 def _camera_style(shot: dict[str, Any]) -> str:

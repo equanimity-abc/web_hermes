@@ -1651,7 +1651,7 @@ export function useDramaStudio() {
     error.value = ''
     try {
       const category = payload.category || 'character'
-      const names = { character: '新角色', prop: '新物品', scene: '新场景' }
+      const names = { character: '新角色', prop: '新道具', scene: '新场景' }
       const rec = await dramaApi.createCharacter(slug.value, {
         name: payload.name || names[category] || '新资产',
         category,

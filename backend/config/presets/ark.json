@@ -34,10 +34,16 @@
       "provider": "seed-audio",
       "model": "doubao-seed-audio-1-0",
       "voices": [
-        { "id": "zh_female_vv_uranus_bigtts", "label": "方舟女声" },
-        { "id": "zh_male_M392_conversation_wvae_bigtts", "label": "方舟男声" },
-        { "id": "zh-CN-YunxiNeural", "label": "云希 · 男（Edge）" },
-        { "id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 女（Edge）" }
+        { "id": "zh_female_vv_uranus_bigtts", "label": "Vivi 2.0 · 女" },
+        { "id": "zh_female_xiaohe_uranus_bigtts", "label": "小何 2.0 · 女" },
+        { "id": "zh_female_sajiaoxuemei_uranus_bigtts", "label": "撒娇学妹 2.0 · 女" },
+        { "id": "zh_female_tianmeixiaoyuan_uranus_bigtts", "label": "甜美小源 2.0 · 女" },
+        { "id": "zh_female_cancan_uranus_bigtts", "label": "知性灿灿 2.0 · 女" },
+        { "id": "zh_female_shuangkuaisisi_uranus_bigtts", "label": "爽快思思 2.0 · 女" },
+        { "id": "zh_male_m191_uranus_bigtts", "label": "云舟 2.0 · 男" },
+        { "id": "zh_male_taocheng_uranus_bigtts", "label": "小天 2.0 · 男" },
+        { "id": "zh_male_shaonianzixin_uranus_bigtts", "label": "少年梓辛 2.0 · 男" },
+        { "id": "zh_male_liufei_uranus_bigtts", "label": "刘飞 2.0 · 男" }
       ]
     },
     "subtitle": { "style": "karaoke" }

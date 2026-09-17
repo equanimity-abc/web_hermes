@@ -148,15 +148,29 @@ _VOICE_GENDER: dict[str, str] = {
     "zh-CN-XiaohanNeural": GENDER_FEMALE,
     "zh-CN-XiaozhenNeural": GENDER_FEMALE,
     "zh_female_vv_uranus_bigtts": GENDER_FEMALE,
+    "zh_female_xiaohe_uranus_bigtts": GENDER_FEMALE,
+    "zh_female_sajiaoxuemei_uranus_bigtts": GENDER_FEMALE,
+    "zh_female_tianmeixiaoyuan_uranus_bigtts": GENDER_FEMALE,
+    "zh_female_cancan_uranus_bigtts": GENDER_FEMALE,
+    "zh_female_shuangkuaisisi_uranus_bigtts": GENDER_FEMALE,
+    "zh_male_m191_uranus_bigtts": GENDER_MALE,
+    "zh_male_taocheng_uranus_bigtts": GENDER_MALE,
+    "zh_male_shaonianzixin_uranus_bigtts": GENDER_MALE,
+    "zh_male_liufei_uranus_bigtts": GENDER_MALE,
     "zh_male_M392_conversation_wvae_bigtts": GENDER_MALE,
 }
 
 
 def voice_gender(voice_id: str, catalog: list[tuple[str, str]] | None = None) -> str:
-    """音色 id → 性别：先查覆盖表，再按 label 文本识别（男/女）。"""
+    """音色 id → 性别：先查覆盖表，再按 id 前缀 / label 文本识别（男/女）。"""
     vid = str(voice_id or "").strip()
     if vid in _VOICE_GENDER:
         return _VOICE_GENDER[vid]
+    low = vid.lower()
+    if "zh_female_" in low or low.startswith("female"):
+        return GENDER_FEMALE
+    if "zh_male_" in low or low.startswith("male"):
+        return GENDER_MALE
     label = ""
     for cid, clabel in (catalog or []):
         if str(cid) == vid:
@@ -702,62 +716,43 @@ def _gender_phrase(char: dict[str, Any]) -> str:
 
 def build_asset_ref_prompt(char: dict[str, Any]) -> str:
     """角色定妆：单张正面全身立绘；道具设定图。场景请用 ``build_location_plate_prompt``。"""
+    from tools.drama_ark_prompts import build_character_ref_prompt_zh, build_prop_ref_prompt_zh
+
     look = enriched_look(char) or str(char.get("look") or "").strip() or "原创设计"
     colors = str(char.get("colors") or "").strip()
     category = normalize_category(char.get("category"))
-    no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
     if category == "prop":
         w, h = ref_canvas_size(char)
-        frame = "正方形物品设定图" if w == h else "竖屏9:16物品设定图"
-        bits = [
-            frame,
-            f"外形：{look}",
-            f"配色：{colors}" if colors else "",
-            "纯白满幅背景占满画面，无黑边白边留白",
-            "产品展示风格，高清细节，标志性轮廓清晰可复现",
-            "禁止人物、禁止场景杂物抢戏",
-            no_text,
-        ]
-        return "，".join(b for b in bits if b)
+        return build_prop_ref_prompt_zh(
+            look=look,
+            colors=colors,
+            square=(w == h),
+            style_guard="",
+        )
     if category == "scene":
-        # Scenes no longer use a separate 设定图 — plate prompt is the authority.
         return build_location_plate_prompt(char)
     look = sanitize_character_look_for_portrait(look)
     gender = _gender_phrase(char)
-    bits = [
-        "一张正方形插画，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
-        "正面全身站立，居中构图，人物从头到脚完整可见，占画面主体",
-        f"性别：{gender}" if gender else "",
-        f"外形：{look}",
-        "双手自然垂放或空闲，禁止手持任何道具、工具、武器、农具、锄头、镐头",
-        "禁止出现锄头/工具/场景杂物/第二人/动物抢戏",
-        "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
-        "完整上色二次元立绘，不是半身、不是特写",
-        ANIME_STYLE_GUARD,
-        no_text,
-    ]
-    return "，".join(b for b in bits if b)
+    return build_character_ref_prompt_zh(
+        look=look,
+        gender=gender,
+        style_guard=ANIME_STYLE_GUARD,
+    )
 
 
 def build_location_plate_prompt(char: dict[str, Any]) -> str:
     """地点主底板：可直接作为分层 plate / Seedream 环境图1。"""
+    from tools.drama_ark_prompts import build_location_plate_prompt_zh
+
     name = str(char.get("name") or char.get("id") or "场景").strip() or "场景"
     look = enriched_look(char) or str(char.get("look") or "").strip() or "原创场景"
     colors = str(char.get("colors") or "").strip()
-    no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
-    bits = [
-        "竖屏9:16空镜场景底板",
-        f"地点「{name}」",
-        f"环境：{look}",
-        f"色调：{colors}" if colors else "",
-        "无人物、无剪影、无动物、无车辆驾驶者",
-        "固定机位可复现构图，建筑轮廓与地面材质清晰",
-        "动漫背景插画，色块分明，禁止写实摄影风景照",
-        ANIME_STYLE_GUARD,
-        "满幅构图无黑边",
-        no_text,
-    ]
-    return "，".join(b for b in bits if b)
+    return build_location_plate_prompt_zh(
+        name=name,
+        look=look,
+        colors=colors,
+        style_guard=ANIME_STYLE_GUARD,
+    )
 
 
 def environment_anchor_prompt(char: dict[str, Any] | None) -> str:

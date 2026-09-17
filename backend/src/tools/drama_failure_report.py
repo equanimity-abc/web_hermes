@@ -13,7 +13,7 @@ from typing import Any
 # value = (步骤名, 默认细分)
 _STAGE_LABELS: dict[str, tuple[str, str]] = {
     "script": ("剧本", "分集剧本"),
-    "cast": ("角色", "定妆参考"),
+    "cast": ("资产", "定妆参考"),
     "scene": ("画面", "场景出图"),
     "identity": ("画面", "角色一致性"),
     "voice": ("视频", "手动配音"),
