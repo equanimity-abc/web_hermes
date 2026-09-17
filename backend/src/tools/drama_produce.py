@@ -1935,11 +1935,11 @@ def create_from_premise(
     cancel_check: Callable[[], None] | None = None,
     on_progress: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
-    """One sentence → project + bible + outline + N episode scripts + HQ mp4(s).
+    """One sentence → SeriesPack（两阶段）→ copy-only 物化 → HQ mp4(s).
 
     Episode count / per-episode seconds are parsed from the premise unless overridden.
     """
-    from tools.drama_studio import generate_episode_script, produce_episode, save_project
+    from tools.drama_studio import load_project, produce_episode, save_project
     from tools.drama_video import output_rel
 
     text = str(premise or "").strip()
@@ -2023,30 +2023,55 @@ def create_from_premise(
 
     if cancel_check:
         cancel_check()
-    _progress(on_progress, stage="bible", message="生成人设与大纲…")
-    docs = generate_bible_and_outline(slug, text, title, series=spec)
+    _progress(on_progress, stage="series_pack", message="两阶段生成 SeriesPack（资产→分镜）…")
+    from tools.drama_series_pack_gen import generate_series_pack_from_premise
+    from tools.drama_series_pack_materialize import materialize_series_pack
+
+    pack = generate_series_pack_from_premise(
+        slug,
+        text,
+        title=title,
+        episode_count=ep_total,
+        seconds_per_episode=ep_sec,
+        persist=True,
+    )
+    if cancel_check:
+        cancel_check()
+    _progress(on_progress, stage="materialize", message="拷贝物化资产与分镜（禁止扩写）…")
+    mat = materialize_series_pack(slug, pack, write_bible=True)
+    try:
+        from tools.workspace import resolve_safe as _rs
+
+        docs = {
+            "bible": _rs(f"dramas/{slug}/bible.md").read_text(encoding="utf-8"),
+            "outline": _rs(f"dramas/{slug}/outline.md").read_text(encoding="utf-8"),
+        }
+    except Exception:
+        docs = {"bible": "", "outline": ""}
 
     script_infos: list[dict[str, Any]] = []
-    for n in episode_numbers:
-        if cancel_check:
-            cancel_check()
-        _progress(
-            on_progress,
-            stage="script",
-            message=(
-                f"生成第{n}/{episode_numbers[-1]}集剧本（目标 {ep_sec}s）…"
-                if ep_total > 1
-                else f"生成剧本（目标 {ep_sec}s）…"
-            ),
+    for row in mat.get("episodes") or []:
+        script_infos.append(
+            {
+                "episode": int(row.get("episode") or 0),
+                "count": row.get("count"),
+                "title": row.get("title"),
+                "seconds": ep_sec,
+                "source": "series_pack",
+            }
         )
-        info = generate_episode_script(
-            slug,
-            n,
-            text,
-            target_seconds=ep_sec,
-            episode_count=ep_total,
-        )
-        script_infos.append({"episode": n, **{k: info.get(k) for k in ("count", "title", "seconds")}})
+    if not script_infos:
+        for n in episode_numbers:
+            script_infos.append(
+                {"episode": n, "count": 0, "title": title, "seconds": ep_sec, "source": "series_pack"}
+            )
+
+    project = load_project(slug)
+    series_meta = dict(project.get("series") or {})
+    series_meta["script_schema"] = "series_pack"
+    project["series"] = series_meta
+    project["script_schema"] = "series_pack"
+    save_project(slug, project)
 
     if cancel_check:
         cancel_check()
@@ -2086,10 +2111,10 @@ def create_from_premise(
             "job_ids": job_ids,
             "status": (first_job or {}).get("status"),
             "hint": (
-                f"已按 {ep_total}集×{ep_sec}s 写好剧本；已后台排队 {len(job_ids)} 集成片（job_ids）。"
+                f"已按 SeriesPack 两阶段写好 {ep_total}集×{ep_sec}s；已后台排队 {len(job_ids)} 集成片（job_ids）。"
                 "poll_job 查进度；单镜失败可用 rerender_dirty。"
                 if ep_total > 1
-                else f"剧本已生成（约 {ep_sec}s），成片在后台渲染；poll_job 查进度。"
+                else f"SeriesPack 已生成（约 {ep_sec}s）并 copy-only 物化，成片在后台渲染；poll_job 查进度。"
             ),
         }
 

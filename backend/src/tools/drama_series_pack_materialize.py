@@ -279,11 +279,144 @@ def materialize_series_pack_episode(slug: str, pack: SeriesPack, episode: int) -
     }
 
 
+def write_bible_outline_from_pack(slug: str, pack: SeriesPack) -> dict[str, str]:
+    """从 SeriesPack 拷贝生成 bible.md / outline.md（给人读，不做扩写）。"""
+    cast_lines = ["# 人设圣经", "", "## 风格", pack.style.visual, ""]
+    cast_lines.append("## 角色")
+    for c in pack.cast:
+        cast_lines.extend(
+            [
+                f"### {c.name}",
+                f"- id: {c.id}",
+                f"- 外形: {c.look_full}",
+                f"- 正脸: {c.look_face}",
+                f"- 音色: {c.voice}",
+                f"- 性格: {c.trait}" if c.trait else "",
+                "",
+            ]
+        )
+    cast_lines.append("## 角色关系")
+    for rel in pack.relationships or []:
+        cast_lines.append(f"- {rel}")
+    cast_lines.extend(["", "## 场景"])
+    for loc in pack.locations:
+        cast_lines.extend(
+            [
+                f"### {loc.name}",
+                f"- id: {loc.id}",
+                f"- 底板: {loc.plate}",
+                f"- 光影: {loc.light}",
+                f"- 标志物: {'、'.join(loc.anchors)}",
+                "",
+            ]
+        )
+    if pack.props:
+        cast_lines.append("## 道具")
+        for prop in pack.props:
+            cast_lines.extend(
+                [
+                    f"### {prop.name}",
+                    f"- id: {prop.id}",
+                    f"- 外形: {prop.look}",
+                    f"- 作用: {prop.role}" if prop.role else "",
+                    "",
+                ]
+            )
+    if pack.style.bgm_mood or pack.style.bgm_instruments:
+        cast_lines.extend(
+            [
+                "## 配乐基调",
+                f"- 情绪风格: {pack.style.bgm_mood}",
+                f"- 乐器与节奏: {pack.style.bgm_instruments}",
+                "",
+            ]
+        )
+    bible = "\n".join(line for line in cast_lines if line is not None).rstrip() + "\n"
+
+    outline_lines = [
+        "# 故事大纲",
+        f"- 剧名: {pack.meta.title}",
+        f"- 一句话卖点: {pack.meta.logline}",
+        f"- 时长: 每集约 {pack.meta.seconds_per_episode}s",
+        "",
+    ]
+    for ep in pack.episodes:
+        outline_lines.append(
+            f"- EP{ep.n:02d} {ep.title or ''}: {ep.beat or f'{len(ep.shots)} 镜'}"
+        )
+    outline = "\n".join(outline_lines).rstrip() + "\n"
+
+    root = resolve_safe(f"dramas/{slug}")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "bible.md").write_text(bible, encoding="utf-8")
+    (root / "outline.md").write_text(outline, encoding="utf-8")
+    # step1 copies if helpers exist
+    try:
+        from tools.drama_step_contract import step1_bible_rel, step1_outline_rel
+
+        for rel, text in (
+            (step1_bible_rel(slug), bible),
+            (step1_outline_rel(slug), outline),
+        ):
+            path = resolve_safe(rel)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    return {"bible": bible, "outline": outline}
+
+
+def sync_project_episodes_from_pack(slug: str, pack: SeriesPack) -> dict[str, Any]:
+    """更新 project.json 的 episodes 列表与 script_schema 标记。"""
+    from tools.drama_shots import script_rel
+    from tools.drama_studio import load_project, save_project
+
+    try:
+        project = load_project(slug)
+    except Exception:
+        project = {
+            "slug": slug,
+            "title": pack.meta.title,
+            "logline": pack.meta.logline,
+            "episodes": [],
+        }
+        root = resolve_safe(f"dramas/{slug}")
+        root.mkdir(parents=True, exist_ok=True)
+    episodes = []
+    for ep in pack.episodes:
+        episodes.append(
+            {
+                "n": int(ep.n),
+                "title": ep.title or pack.meta.title,
+                "seconds": ep.seconds or pack.meta.seconds_per_episode,
+                "path": script_rel(slug, int(ep.n)),
+                "source": "series_pack",
+            }
+        )
+    project["episodes"] = episodes
+    project["script_schema"] = "series_pack"
+    if pack.meta.title and not str(project.get("title") or "").strip():
+        project["title"] = pack.meta.title
+    if pack.meta.logline:
+        project["logline"] = pack.meta.logline
+    series = project.get("series") if isinstance(project.get("series"), dict) else {}
+    series = {
+        **series,
+        "episode_count": max(len(episodes), int(series.get("episode_count") or 1)),
+        "seconds_per_episode": pack.meta.seconds_per_episode,
+        "script_schema": "series_pack",
+    }
+    project["series"] = series
+    save_project(slug, project)
+    return project
+
+
 def materialize_series_pack(
     slug: str,
     pack: SeriesPack | dict[str, Any] | str | None = None,
     *,
     episodes: list[int] | None = None,
+    write_bible: bool = True,
 ) -> dict[str, Any]:
     """端到端：校验 → 拷贝资产 → 拷贝分集分镜。"""
     if pack is None:
@@ -306,10 +439,11 @@ def materialize_series_pack(
     for n in ep_nums:
         ep_results.append(materialize_series_pack_episode(slug, pack_obj, n))
 
-    # Persist pack if caller passed inline
     from tools.drama_series_pack_gen import save_series_pack
 
     save_series_pack(slug, pack_obj)
+    docs = write_bible_outline_from_pack(slug, pack_obj) if write_bible else {}
+    project = sync_project_episodes_from_pack(slug, pack_obj)
 
     return {
         "ok": True,
@@ -317,6 +451,9 @@ def materialize_series_pack(
         "pack": series_pack_rel(slug),
         "assets": assets,
         "episodes": ep_results,
+        "bible_chars": len(docs.get("bible") or ""),
+        "outline_chars": len(docs.get("outline") or ""),
+        "project_episodes": project.get("episodes") or [],
     }
 
 
