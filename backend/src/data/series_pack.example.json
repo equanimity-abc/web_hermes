@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0.0",
+  "meta": {
+    "title": "广寒夜奔",
+    "logline": "广寒宫侍女林晚在月蚀夜盗走月核，踏上逃亡之路。",
+    "aspect": "9:16",
+    "seconds_per_episode": 60,
+    "language": "zh-CN"
+  },
+  "style": {
+    "visual": "二次元赛璐璐竖屏短剧，清晰线稿与色块，非写实摄影",
+    "palette": ["冷青", "月白", "朱红点缀"],
+    "camera_default": "中近景为主，少航拍",
+    "audio_default": "native",
+    "bgm_mood": "紧张",
+    "bgm_instruments": "弦乐+低频鼓点"
+  },
+  "cast": [
+    {
+      "id": "linwan",
+      "name": "林晚",
+      "gender": "female",
+      "age_band": "18-22",
+      "look_full": "十八九岁少女，瓜子脸杏眼，墨黑长直发披肩，白底朱红滚边广袖袍，左耳一枚月牙耳坠，正面全身站立，浅色纯底",
+      "look_face": "杏眼浅棕瞳，眉尾上挑，左耳月牙耳坠清晰，肤色冷白",
+      "voice": "女，18-22，中高音，语速中偏快，情绪克制后爆发；普通话",
+      "voice_id": "zh_female_vv_uranus_bigtts",
+      "trait": "隐忍、决断",
+      "catchphrase": "今晚必须走"
+    },
+    {
+      "id": "shouwei",
+      "name": "守卫",
+      "gender": "male",
+      "age_band": "25-35",
+      "look_full": "三十岁上下精悍男子，国字脸短茬胡，铁青束甲外罩玄色披风，腰间铜牌，正面全身站立，浅色纯底",
+      "look_face": "浓眉深目，短茬胡，眉间一道浅疤",
+      "voice": "男，25-35，中低音，语速中等，情绪戒备；普通话",
+      "voice_id": "zh_male_m191_uranus_bigtts",
+      "trait": "尽责、多疑",
+      "catchphrase": ""
+    }
+  ],
+  "locations": [
+    {
+      "id": "guanghan_stair",
+      "name": "广寒宫玉阶",
+      "plate": "竖屏空镜，近处白玉阶，中景宫门飞檐，远景冷月与薄云；左上冷月光，灯笼暖点点缀；标志物为玉阶、红灯笼、飞檐。竖屏9:16无人物视频静帧可用。",
+      "light": "左上冷月光，辅以灯笼暖点",
+      "anchors": ["玉阶", "红灯笼", "飞檐"],
+      "layout": "前景玉阶，中景宫门，后景冷月"
+    }
+  ],
+  "props": [
+    {
+      "id": "yuehe",
+      "name": "月核",
+      "look": "拳头大小半透明青白晶核，内有缓缓转动的月影纹路，表面冷光，纯白底产品展示",
+      "role": "逃亡目标，被盗走的核心"
+    }
+  ],
+  "relationships": [
+    "linwan → shouwei：逃亡与追捕"
+  ],
+  "episodes": [
+    {
+      "n": 1,
+      "title": "月蚀出奔",
+      "seconds": 12,
+      "beat": "钩子：林晚握月核决意逃离；守卫喝止。",
+      "shots": [
+        {
+          "n": 1,
+          "t_in": 0,
+          "t_out": 3,
+          "kind": "hook",
+          "cast": ["linwan"],
+          "location": "guanghan_stair",
+          "props": ["yuehe"],
+          "shot_size": "近景",
+          "camera": "推",
+          "still": "林晚近景四分之三侧，双手捧月核于胸前，眉头紧锁；身后玉阶与红灯笼虚化，左上冷月光",
+          "motion": "林晚缓缓抬眼正对镜头，下颌绷紧；镜头缓慢前推至更近",
+          "dialogue": [
+            {
+              "speaker": "linwan",
+              "text": "今晚，必须走。",
+              "emotion": "压抑"
+            }
+          ],
+          "vo": "",
+          "sfx": "远处风铃轻响",
+          "audio_mode": "native"
+        },
+        {
+          "n": 2,
+          "t_in": 3,
+          "t_out": 7,
+          "kind": "dialogue",
+          "cast": ["shouwei"],
+          "location": "guanghan_stair",
+          "props": [],
+          "shot_size": "中景",
+          "camera": "固定",
+          "still": "守卫中景正面立于玉阶，一只手按住腰间铜牌，目光锐利；飞檐与冷月在身后",
+          "motion": "守卫上前半步，抬手喝止，口型开合；镜头保持固定中景",
+          "dialogue": [
+            {
+              "speaker": "shouwei",
+              "text": "站住！月核何在？",
+              "emotion": "戒备"
+            }
+          ],
+          "audio_mode": "native"
+        },
+        {
+          "n": 3,
+          "t_in": 7,
+          "t_out": 12,
+          "kind": "action",
+          "cast": ["linwan"],
+          "location": "guanghan_stair",
+          "props": ["yuehe"],
+          "shot_size": "中景",
+          "camera": "跟",
+          "still": "林晚中景背对宫门，侧脸回望，月核收入袖中，衣袂静止",
+          "motion": "林晚转身沿玉阶向下冲出两步，袖摆扬起；镜头跟随侧移",
+          "dialogue": [],
+          "sfx": "脚步踏玉阶",
+          "audio_mode": "native"
+        }
+      ]
+    }
+  ]
+}
