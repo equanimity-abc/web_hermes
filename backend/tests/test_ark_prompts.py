@@ -62,6 +62,21 @@ def test_seedance_i2v_manual_voice_skips_invented_lines():
     assert "你好世界专用句" not in text
 
 
+def test_seedance_i2v_identity_clause():
+    from tools.drama_ark_prompts import build_seedance_identity_ref_clause, build_seedance_i2v_prompt
+
+    clause = build_seedance_identity_ref_clause(face_index=2, body_index=3)
+    assert "@图片2" in clause and "@图片3" in clause
+    assert "大头照" in clause and "全身照" in clause
+    assert "三视图" in clause
+    text = build_seedance_i2v_prompt(
+        {"画面": "近景抬头", "camera": "punch_in"},
+        identity_ref_clause=clause,
+        generate_audio=False,
+    )
+    assert "@图片2" in text and "大头照" in text
+
+
 def test_motion_prompt_wired():
     text = _motion_prompt(
         {
@@ -74,6 +89,20 @@ def test_motion_prompt_wired():
     assert "首帧" in text
     assert "运镜" in text
     assert ANIME_STYLE_GUARD in text
+
+
+def test_motion_prompt_includes_identity_when_indexed():
+    text = _motion_prompt(
+        {
+            "画面": "近景对白",
+            "camera": "punch_in",
+            "字幕": "",
+            "manual_voice": False,
+            "_seedance_face_image_index": 2,
+            "_seedance_body_image_index": 3,
+        }
+    )
+    assert "@图片2" in text and "@图片3" in text
 
 
 def test_shot_frame_writing_rule_mentions_seedance():

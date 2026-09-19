@@ -400,10 +400,14 @@ def _action_save_episode(args: dict) -> str:
     project = _load_project(slug)
     if not project:
         return _err("项目不存在，请先 init", slug=slug)
-    try:
-        n = int(args.get("episode"))
-    except (TypeError, ValueError):
-        return _err("需要 episode（正整数 1–99）")
+    raw_ep = args.get("episode")
+    if raw_ep is None or str(raw_ep).strip() == "":
+        n = 1
+    else:
+        try:
+            n = int(raw_ep)
+        except (TypeError, ValueError):
+            return _err("需要 episode（正整数 1–99）")
     if n < 1 or n > 99:
         return _err("episode 范围 1–99")
     content = args.get("content")
@@ -476,14 +480,21 @@ def _action_save_episode(args: dict) -> str:
     return _ok(**result)
 
 
-def _episode_number(args: dict) -> tuple[str | None, int | None, str | None]:
+def _episode_number(args: dict, *, default: int | None = 1) -> tuple[str | None, int | None, str | None]:
     slug = _slug(str(args.get("slug") or ""))
     if not slug:
         return None, None, "需要合法 slug"
-    try:
-        n = int(args.get("episode"))
-    except (TypeError, ValueError):
-        return slug, None, "需要 episode（正整数 1–99）"
+    raw = args.get("episode")
+    if raw is None or str(raw).strip() == "":
+        if default is not None:
+            n = int(default)
+        else:
+            return slug, None, "需要 episode（正整数 1–99）"
+    else:
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return slug, None, "需要 episode（正整数 1–99）"
     if n < 1 or n > 99:
         return slug, None, "episode 范围 1–99"
     return slug, n, None
@@ -1169,7 +1180,10 @@ def _action_create_from_premise(args: dict) -> str:
             catalog_bgm=catalog_bgm,
         )
     except Exception as e:
-        return _err(str(e))
+        return _err(
+            str(e),
+            hint="解析失败时 error 里已附原始回复落盘路径 raw=…，打开该文件看结尾是否被截断",
+        )
 
     if result.get("job_id"):
         return _ok(

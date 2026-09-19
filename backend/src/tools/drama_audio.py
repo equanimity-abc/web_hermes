@@ -136,8 +136,39 @@ def normalize_mix(raw: Any) -> dict[str, Any]:
 
 
 def load_mix(slug: str, episode: int) -> dict[str, Any]:
+    """优先读 shots.json["mix"]（生产态内聚），兼容旧 mix.json。"""
+    # 1) episode doc 内嵌
+    try:
+        from tools.drama_shots import load_doc
+
+        # 避免 hydrate 递归：直接读盘
+        from tools.drama_shots import json_rel
+
+        path = resolve_safe(json_rel(slug, episode))
+        if path.is_file():
+            raw_doc = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw_doc, dict) and isinstance(raw_doc.get("mix"), dict):
+                return normalize_mix(raw_doc["mix"])
+    except Exception:
+        pass
+    # 2) 旧 mix.json
     path = resolve_safe(mix_rel(slug, episode))
     if not path.is_file():
+        # 3) pack 配乐意图
+        try:
+            from tools.drama_layout import load_pack_or_none
+
+            pack = load_pack_or_none(slug)
+            if pack is not None and pack.style:
+                intent = " ".join(
+                    x for x in (pack.style.bgm_mood, pack.style.bgm_instruments) if x
+                ).strip()
+                if intent:
+                    base = empty_mix()
+                    base["bgm_intent"] = intent
+                    return base
+        except Exception:
+            pass
         return empty_mix()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -147,11 +178,32 @@ def load_mix(slug: str, episode: int) -> dict[str, Any]:
 
 
 def save_mix(slug: str, episode: int, mix: dict[str, Any]) -> dict[str, Any]:
-    doc = normalize_mix(mix)
+    """写入 shots.json["mix"]，并双写 mix.json 保持兼容。"""
+    doc_mix = normalize_mix(mix)
+    # 嵌进 shots.json
+    try:
+        from tools.drama_shots import episode_lock, json_rel, normalize_doc
+
+        with episode_lock(slug, episode):
+            rel = json_rel(slug, episode)
+            path = resolve_safe(rel)
+            if path.is_file():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                data = normalize_doc(data, slug, episode)
+                data["mix"] = doc_mix
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    # 兼容旧路径
     path = resolve_safe(mix_rel(slug, episode))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return doc
+    path.write_text(json.dumps(doc_mix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return doc_mix
 
 
 def load_catalog(slug: str) -> dict[str, Any]:

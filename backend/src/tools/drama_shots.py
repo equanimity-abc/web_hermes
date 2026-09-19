@@ -347,7 +347,17 @@ def load_doc(slug: str, episode: int) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
-    return normalize_doc(data, slug, episode)
+    doc = normalize_doc(data, slug, episode)
+    # 创意字段以 series_pack 为 SSOT
+    try:
+        from tools.drama_layout import hydrate_episode_doc_from_pack, load_pack_or_none
+
+        pack = load_pack_or_none(slug)
+        if pack is not None:
+            doc = hydrate_episode_doc_from_pack(doc, pack)
+    except Exception:
+        pass
+    return doc
 
 
 def save_doc_unlocked(doc: dict[str, Any]) -> str:

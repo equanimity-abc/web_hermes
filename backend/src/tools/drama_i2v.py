@@ -86,8 +86,11 @@ def _provider() -> str:
 
 
 def _motion_prompt(shot: dict[str, Any]) -> str:
-    """Seedance I2V 提示词：官方公式「主体+运动+运镜(+声音)」。"""
-    from tools.drama_ark_prompts import build_seedance_i2v_prompt
+    """Seedance I2V 提示词：官方公式「主体+运动+运镜(+声音)」+ 大头/全身认领。"""
+    from tools.drama_ark_prompts import (
+        build_seedance_i2v_prompt,
+        build_seedance_identity_ref_clause,
+    )
     from tools.drama_characters import ANIME_STYLE_GUARD
 
     slug = str(shot.get("_slug") or "")
@@ -116,12 +119,25 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
         gen_audio = False
         manual = True
 
+    identity_clause = ""
+    try:
+        face_i = int(shot.get("_seedance_face_image_index") or 0)
+        body_i = int(shot.get("_seedance_body_image_index") or 0)
+    except (TypeError, ValueError):
+        face_i, body_i = 0, 0
+    if face_i >= 1:
+        identity_clause = build_seedance_identity_ref_clause(
+            face_index=face_i,
+            body_index=body_i if body_i >= 1 and body_i != face_i else None,
+        )
+
     return build_seedance_i2v_prompt(
         shot,
         look_clause=look,
         style_guard=ANIME_STYLE_GUARD,
         generate_audio=gen_audio,
         manual_voice=manual,
+        identity_ref_clause=identity_clause,
     )
 
 

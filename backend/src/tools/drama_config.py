@@ -47,14 +47,14 @@ _PRESET_DIR = _BACKEND_DIR / "config" / "presets"
 # Workbench dropdown options per production stage / node.
 MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
     "script": [
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "label": "DeepSeek · v4-pro（默认）"},
+        {"provider": "kimi", "model": "kimi-k3", "label": "Kimi · k3"},
         {
             "provider": "ark",
             "model": "doubao-seed-character-260628",
             "label": "方舟 · Seed Character",
         },
         {"provider": "ark", "model": "glm-5-2-260617", "label": "方舟 · GLM-5.2"},
-        {"provider": "deepseek", "model": "deepseek-v4-pro", "label": "DeepSeek · v4-pro"},
-        {"provider": "kimi", "model": "kimi-k3", "label": "Kimi · k3"},
     ],
     "image": [
         {
@@ -73,8 +73,8 @@ MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
     "motion": [
         {
             "provider": "seedance",
-            "model": "doubao-seedance-2-0-260128",
-            "label": "方舟 · Seedance 2.0（Agent Plan Large+）",
+            "model": "doubao-seedance-2-5-260628",
+            "label": "方舟 · Seedance 2.5（Agent Plan Large+）",
         },
         {"provider": "wanx-video", "model": "wanx2.1-i2v-turbo", "label": "百炼 · 万相 I2V"},
         {

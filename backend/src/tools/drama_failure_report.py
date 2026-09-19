@@ -255,7 +255,7 @@ def _ark_video_model() -> str:
 
         return _resolve_seedance_model(getattr(config, "ARK_VIDEO_MODEL", ""))
     except Exception:
-        return "doubao-seedance-2-0-260128"
+        return "doubao-seedance-2-5-260628"
 
 
 def write_seedance_verify_payload(

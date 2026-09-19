@@ -82,7 +82,6 @@ const {
   addCharacter,
   saveCharacterCard,
   lockSelectedRef,
-  uploadSelectedRef,
   deleteSelectedCharacter,
   generateCharacterRef,
   generateAllCharacterRefs,
@@ -645,7 +644,6 @@ async function onResumeDramaJob(payload) {
       @add-character="addCharacter"
       @save-character="saveCharacterCard"
       @lock-ref="lockSelectedRef"
-      @upload-ref="uploadSelectedRef"
       @delete-character="deleteSelectedCharacter"
       @generate-character-ref="generateCharacterRef"
       @generate-all-refs="(cat) => generateAllCharacterRefs(cat)"

@@ -57,7 +57,7 @@ def test_hq_skips_layered_compositing_by_default():
 
 
 def test_compose_shot_image_refs_faces_capped_at_two(monkeypatch, tmp_path):
-    """Plan: env 1 + face ≤2; without plate, still at most 2 faces."""
+    """Ark：单镜角色参考最多大头+全身 2 张。"""
     from tools import drama_qc as qc
 
     faces = []
@@ -68,7 +68,7 @@ def test_compose_shot_image_refs_faces_capped_at_two(monkeypatch, tmp_path):
 
     monkeypatch.setattr(qc, "locked_env_refs_for_shot", lambda slug, shot: [])
     monkeypatch.setattr(qc, "locked_face_refs_for_shot", lambda slug, shot: faces)
-    refs = qc.compose_shot_image_refs("demo", {"n": 1}, max_refs=3)
+    refs = qc.compose_shot_image_refs("demo", {"n": 1}, max_refs=4)
     assert len(refs) == 2
     assert all("face" in r for r in refs)
 

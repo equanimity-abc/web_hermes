@@ -157,6 +157,7 @@ def build_seedance_i2v_prompt(
     style_guard: str = "",
     generate_audio: bool = True,
     manual_voice: bool = False,
+    identity_ref_clause: str = "",
 ) -> str:
     """Seedance 图生视频：优先 motion（SeriesPack），否则回退 画面。"""
     motion = str(shot.get("motion") or "").strip()
@@ -167,6 +168,8 @@ def build_seedance_i2v_prompt(
         "基于首帧参考图生成竖屏9:16短剧镜头",
         "生成视频中的主体必须与首帧参考图中的主体完全一致，五官、发型、服装与体态不变",
     ]
+    if identity_ref_clause:
+        bits.insert(1, identity_ref_clause)
     if look_clause:
         bits.append(f"角色外形锚点：{look_clause}")
     if scene:
@@ -179,10 +182,13 @@ def build_seedance_i2v_prompt(
     if style_guard:
         bits.append(style_guard)
     bits.append("运动流畅自然，幅度适中，禁止闪烁跳切与画外乱入新角色")
+    bits.append("与相邻镜头声画连续：人物状态/服装/道具/光照承接上一镜，禁止每镜重置；切镜处环境底噪不中断、不跳变、不重置")
 
+    sfx = str(shot.get("sfx") or "").strip()
     lines = _dialogue_lines(shot)
+    if sfx and generate_audio:
+        bits.append(f"音效：{sfx}")
     if lines and generate_audio and not manual_voice:
-        # Seedance 原生音频：写清谁在说什么（用外形指代）
         voice_bits: list[str] = []
         for name, line in lines:
             who = f"画面中的「{name}」" if name else "画面中的角色"
@@ -198,6 +204,20 @@ def build_seedance_i2v_prompt(
     return _join_zh(bits)
 
 
+def build_seedance_identity_ref_clause(*, face_index: int, body_index: int | None = None) -> str:
+    """Ark：在 Prompt 中认领大头照/全身照（@图片N 编号与 content 顺序一致）。"""
+    if body_index and body_index != face_index:
+        return (
+            f"角色面部特征严格参考@图片{face_index}（大头照），"
+            f"服装体型妆造严格参考@图片{body_index}（全身照）；"
+            "禁止使用三视图或多视角，禁止把同一人画成双胞胎"
+        )
+    return (
+        f"角色面部与整体形象严格参考@图片{face_index}；"
+        "保持同一张脸与同一套服装，禁止双胞胎与换脸"
+    )
+
+
 def build_seedance_ref_audio_suffix() -> str:
     return "角色按参考音频说话，口型与语音节奏精准同步，自然张合，不要额外旁白字幕"
 
@@ -207,17 +227,34 @@ def build_character_ref_prompt_zh(
     look: str,
     gender: str = "",
     style_guard: str = "",
+    portrait_9_16: bool = False,
+    face_hint: str = "",
 ) -> str:
-    """角色定妆：单人正面全身，自然语言 + 硬约束。"""
+    """角色定妆：单人正面全身（Ark：禁止三视图/多视角）。
+
+    ``face_hint`` 注入正脸锚点，使全身定妆与正脸特写锚定同一张脸，
+    避免「全身图随机脸 ↔ 正脸特写另写一张脸」的身份不一致。
+    """
+    frame = (
+        "一张竖屏9:16二次元角色全身设定图，画面中只有一个动漫角色，仅一个姿势"
+        if portrait_9_16
+        else "一张正方形二次元角色全身设定图，画面中只有一个动漫角色，仅一个姿势"
+    )
     bits = [
-        "一张正方形二次元角色设定图，画面中只有一个动漫角色，仅一个姿势，禁止多个视角",
-        "正面全身站立，居中构图，人物从头到脚完整可见，占画面主体",
+        frame,
+        "禁止三视图、多视角、并排分栏、侧面背面拼图",
+        "正面全身站立，居中构图，人物从头到脚完整入镜（头顶到脚底不裁切），占画面主体，人脸区域清晰可辨",
         f"性别为{gender}" if gender else "",
         f"外形：{look}",
+        (
+            f"人脸锚点：{face_hint}（全身图中的人脸五官、发型发色、胡须必须与此完全一致，禁止另画一张脸）"
+            if face_hint
+            else ""
+        ),
         "双手自然垂放或空闲，禁止手持任何道具、工具、武器、农具、锄头、镐头",
         "禁止出现锄头/工具/场景杂物/第二人/动物抢戏",
         "均匀浅色纯色背景，无分栏、无多格、无线条、无网格",
-        "完整上色二次元立绘，不是半身、不是特写",
+        "完整上色二次元立绘，不是半身拼贴、不是特写拼图",
         style_guard,
         _NO_TEXT,
     ]

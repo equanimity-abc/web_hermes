@@ -382,10 +382,10 @@ def default_models() -> dict[str, Any]:
         "quality_profile": "studio",
         "nodes": {},
         "script": {
-            "provider": "ark",
-            "model": "doubao-seed-character-260628",
-            "refine_model": "doubao-seed-character-260628",
-            "alternatives": ["ark", "deepseek", "kimi"],
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "refine_model": "deepseek-v4-pro",
+            "alternatives": ["deepseek", "kimi", "ark"],
         },
         "tts": {
             "provider": "seed-audio",
@@ -457,6 +457,31 @@ def _sync_character_ref_route(image: dict[str, Any]) -> None:
         image["character_ref"] = {**env, **cur}
 
 
+_LEGACY_SCRIPT_PRESETS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("ark", "glm-5-2-260617"),
+        ("ark", "doubao-seed-character-260628"),
+    }
+)
+
+
+def _coerce_script_defaults(script: dict[str, Any]) -> dict[str, Any]:
+    """旧版默认剧本（方舟 GLM/Seed Character）→ DeepSeek v4-pro。"""
+    out = dict(script or {})
+    prov = str(out.get("provider") or "").strip().lower()
+    model = str(out.get("model") or "").strip()
+    if (prov, model) in _LEGACY_SCRIPT_PRESETS:
+        out.update(
+            {
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "refine_model": "deepseek-v4-pro",
+                "alternatives": ["deepseek", "kimi", "ark"],
+            }
+        )
+    return out
+
+
 def _sync_lip_route(lip: dict[str, Any]) -> None:
     """口型收口到 Seedance（火山单轨）；旧 pixverse/latentsync 配置一律改写。"""
     cur = dict(lip or {})
@@ -522,6 +547,8 @@ def normalize_models(raw: Any) -> dict[str, Any]:
     nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
     lip = {**base["lip"], **(data.get("lip") if isinstance(data.get("lip"), dict) else {})}
     _sync_lip_route(lip)
+    script = {**base["script"], **(data.get("script") if isinstance(data.get("script"), dict) else {})}
+    script = _coerce_script_defaults(script)
     return {
         "currency": currency,
         "preset": preset,
@@ -533,7 +560,7 @@ def normalize_models(raw: Any) -> dict[str, Any]:
         "lip": lip,
         "bgm": {**base["bgm"], **(data.get("bgm") if isinstance(data.get("bgm"), dict) else {})},
         "sfx": {**base["sfx"], **(data.get("sfx") if isinstance(data.get("sfx"), dict) else {})},
-        "script": {**base["script"], **(data.get("script") if isinstance(data.get("script"), dict) else {})},
+        "script": script,
         "tts": {**base["tts"], **(data.get("tts") if isinstance(data.get("tts"), dict) else {})},
         "subtitle": {**base["subtitle"], **(data.get("subtitle") if isinstance(data.get("subtitle"), dict) else {})},
         "qc": {**base["qc"], **(data.get("qc") if isinstance(data.get("qc"), dict) else {})},

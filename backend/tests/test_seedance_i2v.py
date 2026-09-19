@@ -101,9 +101,85 @@ def test_ark_i2v_payload_uses_first_frame_and_min_duration(tmp_path, monkeypatch
     assert img["role"] == "first_frame"
     assert img["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert not any(c.get("role") == "reference_audio" for c in body["content"])
+    assert not any(c.get("role") == "reference_image" for c in body["content"])
     assert "i2v_error" in shot
     assert shot.get("i2v_generate_audio") is True
     assert shot.get("i2v_audio_ref") is False
+
+
+def test_ark_i2v_attaches_face_body_reference_images(tmp_path, monkeypatch):
+    """Ark：首帧后挂大头照+全身照 reference_image，prompt 认领 @图片2/3。"""
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    scene = tmp_path / "scene.png"
+    face = tmp_path / "hero_face.png"
+    body = tmp_path / "hero.png"
+    Image.new("RGB", (540, 960), (40, 40, 80)).save(scene)
+    Image.new("RGB", (512, 512), (200, 100, 80)).save(face)
+    Image.new("RGB", (540, 960), (80, 120, 160)).save(body)
+    dest = tmp_path / "out.mp4"
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"id": "task-1"}
+
+    class _Poll:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"status": "failed", "error": "stop"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["body"] = json
+            return _Resp()
+
+        def get(self, url, headers=None):
+            return _Poll()
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(
+        di2v,
+        "_motion_prompt",
+        lambda shot: (
+            f"idle face={shot.get('_seedance_face_image_index')} "
+            f"body={shot.get('_seedance_body_image_index')}"
+        ),
+    )
+    monkeypatch.setattr(
+        ap,
+        "_local_ref_to_data_uri",
+        lambda rel, max_side=1536: f"data:image/jpeg;base64,{Path(rel).name}",
+    )
+
+    face_rel = str(face).replace("\\", "/")
+    body_rel = str(body).replace("\\", "/")
+    shot: dict = {"_seedance_identity_refs": [face_rel, body_rel]}
+    assert ap._ark_i2v(scene, dest, shot, 4) == "none"
+    content = captured["body"]["content"]
+    roles = [c.get("role") for c in content if isinstance(c, dict)]
+    assert roles.count("first_frame") == 1
+    assert roles.count("reference_image") == 2
+    assert shot.get("_seedance_face_image_index") == 2
+    assert shot.get("_seedance_body_image_index") == 3
+    assert shot.get("i2v_identity_ref_count") == 2
+    assert "face=2" in content[0]["text"] and "body=3" in content[0]["text"]
 
 
 def test_ark_i2v_attaches_tts_as_reference_audio(tmp_path, monkeypatch):

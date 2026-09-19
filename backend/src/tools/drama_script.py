@@ -6,7 +6,12 @@ import asyncio
 import re
 from typing import Any
 
+from config import config
 from llm_client import llm_client, script_provider_chain
+
+DEFAULT_SCRIPT_PROVIDER = "deepseek"
+DEFAULT_SCRIPT_MODEL = str(getattr(config, "DEEPSEEK_MODEL", "") or "deepseek-v4-pro").strip()
+DEFAULT_SCRIPT_ALTERNATIVES = ["deepseek", "kimi", "ark"]
 
 _SCRIPT_START_RE = re.compile(
     r"^(?:#\s+\S|##\s*分镜|###\s*Shot\b)",
@@ -55,18 +60,20 @@ def script_node_config(slug: str) -> dict[str, Any]:
     except Exception:
         models = load_models(slug)
     cfg = (models or {}).get("script") if isinstance((models or {}).get("script"), dict) else {}
-    provider = str(cfg.get("provider") or "ark").strip().lower() or "ark"
+    provider = str(cfg.get("provider") or DEFAULT_SCRIPT_PROVIDER).strip().lower() or DEFAULT_SCRIPT_PROVIDER
     if provider == "moonshot":
         provider = "kimi"
     if provider in ("volcengine", "doubao", "火山"):
         provider = "ark"
     alts = cfg.get("alternatives")
     if not isinstance(alts, list) or not alts:
-        alts = ["ark", "deepseek", "kimi"]
+        alts = list(DEFAULT_SCRIPT_ALTERNATIVES)
+    model = str(cfg.get("model") or DEFAULT_SCRIPT_MODEL).strip() or DEFAULT_SCRIPT_MODEL
+    refine = str(cfg.get("refine_model") or model).strip() or model
     return {
         "provider": provider,
-        "model": str(cfg.get("model") or "").strip(),
-        "refine_model": str(cfg.get("refine_model") or "").strip(),
+        "model": model,
+        "refine_model": refine,
         "alternatives": [str(a).strip().lower() for a in alts if str(a).strip()],
     }
 

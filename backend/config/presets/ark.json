@@ -2,30 +2,30 @@
   "id": "ark",
   "title": "火山方舟",
   "tag": "方舟",
-  "description": "默认档：剧本可用 Seed Character / GLM-5.2（也可切 DeepSeek、Kimi）；出图 Seedream、视频 Seedance、配音 Seed Audio。各步骤可在工作台单独改模型。",
+  "description": "默认档：剧本默认 DeepSeek v4-pro（可切方舟 GLM/Seed Character、Kimi）；出图 Seedream、视频 Seedance、配音 Seed Audio。各步骤可在工作台单独改模型。",
   "models": {
     "script": {
-      "provider": "ark",
-      "model": "glm-5-2-260617",
-      "refine_model": "glm-5-2-260617",
-      "alternatives": ["ark", "deepseek", "kimi"]
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "refine_model": "deepseek-v4-pro",
+      "alternatives": ["deepseek", "kimi", "ark"]
     },
     "image": {
-      "establishing": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
-      "insert": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
-      "dialogue": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
-      "reaction": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
-      "action": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4, "use_ref": true },
-      "crowd": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 },
-      "title": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.3 },
-      "character_ref": { "provider": "seedream", "model": "doubao-seedream-5-0-lite-260128", "cost_per_shot": 0.4 }
+      "establishing": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "insert": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "dialogue": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "reaction": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "action": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4, "use_ref": true },
+      "crowd": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 },
+      "title": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.3 },
+      "character_ref": { "provider": "seedream", "model": "doubao-seedream-5-0-pro-260628", "cost_per_shot": 0.4 }
     },
     "motion": {
       "establishing": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "insert": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
-      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L1" },
-      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L1" },
-      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-0-260128", "fallback": "L3" },
+      "dialogue": { "ladder": "L2", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
+      "reaction": { "ladder": "L1", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L1" },
+      "action": { "ladder": "L3", "provider": "seedance", "model": "doubao-seedance-2-5-260628", "fallback": "L3" },
       "crowd": { "ladder": "L0", "provider": "l0", "fallback": "L0" },
       "title": { "ladder": "L0", "provider": "l0", "fallback": "L0" }
     },

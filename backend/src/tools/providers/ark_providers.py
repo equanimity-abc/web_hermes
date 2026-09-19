@@ -31,28 +31,22 @@ def _is_agent_plan() -> bool:
 
 
 def _resolve_seedream_model(raw: str | None = None) -> str:
-    """Normalize Seedream IDs. Agent Plan 仅支持 5.0 lite（不含 pro）。"""
+    """Normalize Seedream IDs → 官方 dated API model ID（默认 Pro）。"""
     model = str(
-        raw or getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-lite-260128"
+        raw or getattr(config, "ARK_IMAGE_MODEL", "") or "doubao-seedream-5-0-pro-260628"
     ).strip()
     aliases = {
-        "doubao-seedream-5.0-lite": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5.0": "doubao-seedream-5-0-lite-260128",
-        "seedream-5.0": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5-0": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5-0-260128": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5.0-pro": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5-0-pro": "doubao-seedream-5-0-lite-260128",
-        "doubao-seedream-5-0-pro-260628": "doubao-seedream-5-0-lite-260128",
+        "doubao-seedream-5.0-lite": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5.0": "doubao-seedream-5-0-pro-260628",
+        "seedream-5.0": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0-260128": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0-lite-260128": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5.0-pro": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0-pro": "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0-pro-260628": "doubao-seedream-5-0-pro-260628",
     }
-    resolved = aliases.get(model, model) or "doubao-seedream-5-0-lite-260128"
-    if _is_agent_plan() and "pro" in resolved.lower() and "seedream" in resolved.lower():
-        log.warning(
-            "Agent Plan 不支持 Seedream Pro（%s）→ 改用 doubao-seedream-5-0-lite-260128",
-            resolved,
-        )
-        return "doubao-seedream-5-0-lite-260128"
-    return resolved
+    return aliases.get(model, model) or "doubao-seedream-5-0-pro-260628"
 
 
 def resolve_ark_text_model(raw: str | None = None) -> str:
@@ -90,13 +84,16 @@ def resolve_ark_text_model(raw: str | None = None) -> str:
 def _resolve_seedance_model(raw: str | None = None) -> str:
     """Normalize Seedance marketing names → official dated API model IDs.
 
-    Tier note (Agent Plan): Medium 不含 Seedance 2.0；Large/Max 可用 2.0 / 2.0-fast。
+    Tier note (Agent Plan): Medium 不含 Seedance 2.x；Large/Max 可用 2.5 / 2.0。
     不在此按套餐降级——由 ``ARK_VIDEO_MODEL`` 显式配置。
     """
     model = str(
-        raw or getattr(config, "ARK_VIDEO_MODEL", "") or "doubao-seedance-2-0-260128"
+        raw or getattr(config, "ARK_VIDEO_MODEL", "") or "doubao-seedance-2-5-260628"
     ).strip()
     aliases = {
+        "doubao-seedance-2.5": "doubao-seedance-2-5-260628",
+        "doubao-seedance-2-5": "doubao-seedance-2-5-260628",
+        "seedance-2.5": "doubao-seedance-2-5-260628",
         "doubao-seedance-2.0": "doubao-seedance-2-0-260128",
         "doubao-seedance-2-0": "doubao-seedance-2-0-260128",
         "seedance-2.0": "doubao-seedance-2-0-260128",
@@ -107,7 +104,7 @@ def _resolve_seedance_model(raw: str | None = None) -> str:
         "doubao-seedance-1-5-pro": "doubao-seedance-1-5-pro-251215",
         "seedance-1.5-pro": "doubao-seedance-1-5-pro-251215",
     }
-    return aliases.get(model, model) or "doubao-seedance-2-0-260128"
+    return aliases.get(model, model) or "doubao-seedance-2-5-260628"
 
 
 def format_ark_http_error(status: int, body: str, *, model: str = "") -> str:
@@ -117,8 +114,8 @@ def format_ark_http_error(status: int, body: str, *, model: str = "") -> str:
         hint = (
             "当前 ARK_BASE_URL 是 Agent Plan（/api/plan/v3），该模型不在套餐内。"
             "文本请用 glm-5-2-260617 或 doubao-seed-2-0-lite-260215；"
-            "出图请用 doubao-seedream-5-0-lite-260128（不要用 pro）；"
-            "视频 Seedance 2.0 需 Large/Max，Medium 请改 doubao-seedance-1-5-pro-251215。"
+            "出图请用 doubao-seedream-5-0-pro-260628；"
+            "视频 Seedance 2.5 需 Large/Max，Medium 请改 doubao-seedance-1-5-pro-251215。"
         )
         if model:
             return f"模型 {model} 不支持 Agent Plan。{hint} 原始：{detail[:180]}"
@@ -147,8 +144,23 @@ def _download(url: str, dest: Path) -> bool:
         return False
 
 
-# Seedream 多参考融合过多会稀释身份，漫剧分镜默认最多 3 张定妆。
-_MAX_SEEDREAM_REFS = 3
+# Seedream：Ark 大头+全身(+环境) 最多 4；再多会稀释身份。
+_MAX_SEEDREAM_REFS = 4
+# Seedance：首帧之外额外挂的角色 reference_image（大头+全身）
+_MAX_SEEDANCE_IDENTITY_REFS = 2
+
+
+def _classify_ref_role(rel: str) -> str:
+    """粗分参考图角色：face / body / env / other。"""
+    path = str(rel or "").replace("\\", "/").lower()
+    name = path.rsplit("/", 1)[-1]
+    if "_face." in name or name.endswith("_face.png") or name.endswith("_face.jpg"):
+        return "face"
+    if "_plate." in name or name.endswith("_plate.png") or name.endswith("_plate.jpg"):
+        return "env"
+    if "/characters/" in path and name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return "body"
+    return "other"
 
 
 def _image_path_to_data_uri(path: Path, *, max_side: int = 1536) -> str | None:
@@ -322,28 +334,63 @@ def _prompt_with_identity_refs(
     ref_count: int,
     env_ref_count: int = 0,
     lock_mode: str = "",
+    refs: tuple[str, ...] | list[str] | None = None,
 ) -> str:
-    """参考图分工：环境底板锁背景，角色定妆锁脸——不是整图编辑底图。"""
+    """参考图分工（Ark）：大头照锁脸、全身照锁妆造体型、环境底板锁场景。"""
     base = str(prompt or "").strip()
     if ref_count <= 0:
         return base
     mode = str(lock_mode or "").strip().lower()
     if mode == "face_from_body":
         clause = (
-            "参考图为同一角色的全身定妆立绘：必须生成该人肩上以上的正脸特写，"
+            "参考图为同一角色的全身定妆立绘：必须生成该人肩上以上的正脸大头照特写，"
+            "精确裁剪到人脸区域，尽量少带颈部肩部与背景；"
             "严格保持同一性别、年龄感、五官、发型发色与妆面；"
-            "禁止换成另一张脸（如把青年男改成老翁或女生），禁止手持道具，"
+            "禁止换成另一张脸（如把青年男改成老翁或女生），禁止三视图/多视角，禁止手持道具，"
             "不要复刻全身站姿与定妆背景，只改景别为面部近景"
         )
         return f"{base}。{clause}" if base else clause
+
+    roles = [_classify_ref_role(r) for r in (refs or ())[: max(0, int(ref_count or 0))]]
+    if roles and len(roles) == int(ref_count or 0):
+        bits: list[str] = [f"参考图共{ref_count}张（按编号认领，禁止拼贴叠印）"]
+        face_idxs = [i + 1 for i, r in enumerate(roles) if r == "face"]
+        body_idxs = [i + 1 for i, r in enumerate(roles) if r == "body"]
+        env_idxs = [i + 1 for i, r in enumerate(roles) if r == "env"]
+        if face_idxs:
+            bits.append(
+                "图"
+                + "、".join(str(i) for i in face_idxs)
+                + "为大头照：严格锁定面部五官与发型妆面，禁止换脸与双胞胎"
+            )
+        if body_idxs:
+            bits.append(
+                "图"
+                + "、".join(str(i) for i in body_idxs)
+                + "为全身照：严格锁定服装体型妆造与整体形象"
+            )
+        if env_idxs:
+            bits.append(
+                "图"
+                + "、".join(str(i) for i in env_idxs)
+                + "为地点/环境底板：保持同一建筑轮廓、主光与地面材质，禁止换成无关背景"
+            )
+        other_idxs = [i + 1 for i, r in enumerate(roles) if r == "other"]
+        if other_idxs and not (face_idxs or body_idxs or env_idxs):
+            bits.append("严格保持与参考图同一主体外形，禁止另造新人")
+        bits.append("生成本镜全新构图、景别与姿势，不要复制定妆立绘站姿与背景")
+        clause = "；".join(bits)
+        return f"{base}。{clause}" if base else clause
+
+    # 无路径时的回退（单测 / 旧调用）
     env_n = max(0, min(int(env_ref_count or 0), ref_count))
     face_n = max(0, ref_count - env_n)
     if env_n >= 1 and face_n >= 1:
         clause = (
-            f"参考图共{ref_count}张：图1为地点/环境底板，必须保持同一建筑轮廓、布局、主光与地面材质，"
-            "禁止换成无关背景；"
-            f"图2起为角色定妆（共{face_n}张），严格保持同一张脸、发型与服装；"
-            "不要复制定妆立绘的站姿与背景，也不要把底板当可编辑贴图随意扭曲"
+            f"参考图共{ref_count}张：含环境底板与角色定妆；"
+            "环境图保持同一建筑轮廓、主光与地面材质；"
+            "角色图按大头照锁脸、全身照锁服装体型；禁止三视图与双胞胎；"
+            "不要复制定妆立绘站姿与背景"
         )
     elif env_n >= 1:
         clause = (
@@ -357,10 +404,8 @@ def _prompt_with_identity_refs(
         )
     else:
         clause = (
-            f"参考图共{ref_count}张定妆立绘：图1为身份锁（本镜说话人/主体），"
-            "必须与图1同一张脸、同一发型与服装；"
-            "图2起为同镜其它可锁脸角色外形参考，不得画成与图1对等抢戏的大脸；"
-            "禁止把多张定妆图简单拼贴/叠印进同一画面；"
+            f"参考图共{ref_count}张：优先大头照锁面部、全身照锁服装体型；"
+            "禁止三视图/多视角与双胞胎；禁止把多张定妆图拼贴叠印；"
             "生成本镜全新构图与姿势，不要复制定妆立绘构图"
         )
     if not base:
@@ -480,6 +525,7 @@ def _ark_image(
         ref_count=ref_count,
         env_ref_count=env_ref_count,
         lock_mode=str((shot or {}).get("ref_lock_mode") or "") if isinstance(shot, dict) else "",
+        refs=tuple(refs or ()),
     )
 
     # Content-addressed cache (skip network when prompt/seed/model unchanged).
@@ -643,6 +689,42 @@ def _ark_image(
         return False
 
 
+def _seedance_identity_ref_rels(shot: Any) -> list[str]:
+    """本镜 Seedance 身份参考：主体大头照→全身照（最多 2）。"""
+    if not isinstance(shot, dict):
+        return []
+    cached = shot.get("_seedance_identity_refs")
+    if isinstance(cached, (list, tuple)) and cached:
+        return [str(x).replace("\\", "/") for x in cached if str(x).strip()][:_MAX_SEEDANCE_IDENTITY_REFS]
+    slug = str(shot.get("_slug") or "").strip()
+    if not slug:
+        return []
+    try:
+        from tools.drama_characters import (
+            character_ark_pair_refs,
+            character_requires_face_identity,
+            load_characters,
+            resolve_shot_characters,
+        )
+        from tools.drama_spatial import identity_subject_character
+
+        subject = identity_subject_character(slug, shot)
+        if subject and character_requires_face_identity(subject):
+            pair = character_ark_pair_refs(slug, subject)
+            if pair:
+                return pair[:_MAX_SEEDANCE_IDENTITY_REFS]
+        cast = resolve_shot_characters(shot, load_characters(slug))
+        for char in cast:
+            if not character_requires_face_identity(char):
+                continue
+            pair = character_ark_pair_refs(slug, char)
+            if pair:
+                return pair[:_MAX_SEEDANCE_IDENTITY_REFS]
+    except Exception:
+        return []
+    return []
+
+
 def _ark_i2v(scene, dest, shot, seconds) -> str:
     """Seedance 图生视频（异步任务）。"""
     key = _ark_key()
@@ -661,7 +743,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     from tools.drama_i2v import _motion_prompt
 
     model = _resolve_seedance_model(getattr(config, "ARK_VIDEO_MODEL", ""))
-    prompt = _motion_prompt(shot)
+    identity_rels = _seedance_identity_ref_rels(shot)
     scene_path = Path(scene)
     if not scene_path.is_file():
         if isinstance(shot, dict):
@@ -674,6 +756,23 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         if isinstance(shot, dict):
             shot["i2v_error"] = "scene_encode_failed"
         return "none"
+
+    # 先编码身份参考，再按实际挂载数写 @图片N（首帧=1）
+    identity_uris: list[tuple[str, str]] = []
+    for rel in identity_rels[:_MAX_SEEDANCE_IDENTITY_REFS]:
+        uri = _local_ref_to_data_uri(rel, max_side=1536)
+        if uri:
+            identity_uris.append((rel, uri))
+    if isinstance(shot, dict):
+        shot["_seedance_identity_refs"] = [r for r, _ in identity_uris]
+        face_i = 2 if identity_uris else 0
+        body_i = 3 if len(identity_uris) >= 2 else (2 if len(identity_uris) == 1 else 0)
+        shot["_seedance_face_image_index"] = face_i
+        shot["_seedance_body_image_index"] = (
+            body_i if len(identity_uris) >= 2 else (face_i if identity_uris else 0)
+        )
+
+    prompt = _motion_prompt(shot)
     duration = _seedance_duration(seconds)
 
     # 默认：Seedance generate_audio 自带声（人声/音效）。
@@ -706,6 +805,15 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
             "role": "first_frame",
         },
     ]
+    # Ark：首帧后挂大头照+全身照为 reference_image，强化脸/服一致性
+    for _rel, uri in identity_uris:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": uri},
+                "role": "reference_image",
+            }
+        )
     if used_ref_audio and audio_url:
         content.append(
             {
@@ -729,6 +837,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         shot["i2v_audio_ref"] = bool(used_ref_audio)
         shot["i2v_generate_audio"] = bool(gen_audio)
         shot["manual_voice"] = bool(_manual_voice_enabled(shot))
+        shot["i2v_identity_ref_count"] = len(identity_uris)
 
     def _remember_error(msg: str) -> None:
         if isinstance(shot, dict):
@@ -757,6 +866,31 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     def _format_http_error(resp: httpx.Response) -> str:
         return format_ark_http_error(resp.status_code, resp.text or "", model=model)
 
+    def _strip_identity_refs_for_retry() -> None:
+        """首帧任务若拒收 reference_image：去掉身份图并清掉 @图片认领文案，保留首帧。"""
+        nonlocal content, body, prompt
+        if not identity_uris:
+            return
+        content = [
+            c
+            for c in content
+            if not (isinstance(c, dict) and c.get("role") == "reference_image")
+        ]
+        # 去掉认领句（避免指向不存在的 @图片N）
+        for marker in ("角色面部特征严格参考@图片", "角色面部与整体形象严格参考@图片"):
+            if marker in prompt:
+                parts = prompt.split("。")
+                prompt = "。".join(p for p in parts if marker not in p)
+                break
+        if content and isinstance(content[0], dict) and content[0].get("type") == "text":
+            content[0]["text"] = prompt
+        body = {**body, "content": content}
+        if isinstance(shot, dict):
+            shot["i2v_identity_ref_count"] = 0
+            shot["_seedance_identity_refs_dropped"] = True
+            shot["_seedance_face_image_index"] = 0
+            shot["_seedance_body_image_index"] = 0
+
     try:
         with httpx.Client(timeout=300.0, follow_redirects=True) as client:
             submit = client.post(
@@ -764,6 +898,28 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 headers=_ark_headers(),
                 json=body,
             )
+            if submit.status_code >= 400 and identity_uris:
+                err_txt = (submit.text or "").lower()
+                if any(
+                    k in err_txt
+                    for k in (
+                        "reference_image",
+                        "invalidparameter",
+                        "invalid_parameter",
+                        "role",
+                        "content",
+                    )
+                ):
+                    log.warning(
+                        "ark i2v retry without identity reference_image: %s",
+                        submit.text[:300],
+                    )
+                    _strip_identity_refs_for_retry()
+                    submit = client.post(
+                        f"{_ark_base()}/contents/generations/tasks",
+                        headers=_ark_headers(),
+                        json=body,
+                    )
             if submit.status_code >= 400:
                 _remember_error(f"model={model}; {_format_http_error(submit)}")
                 log.warning("ark i2v submit failed model=%s: %s", model, submit.text[:500])

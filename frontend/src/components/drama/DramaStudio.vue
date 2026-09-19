@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import DramaThumbImg from '@/components/drama/DramaThumbImg.vue'
 import DramaProgressStatusBar from '@/components/drama/DramaProgressStatusBar.vue'
 import DramaScriptFileSummary from '@/components/drama/DramaScriptFileSummary.vue'
-import { castRefSizeOptions, normalizeRefSize, refCanvasSize } from '@/utils/dramaRefSizes'
+import { normalizeRefSize } from '@/utils/dramaRefSizes'
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -29,7 +29,7 @@ const props = defineProps({
   scriptWorkspace: { type: Object, default: null },
   scriptWorkspaceDrafts: { type: Object, default: () => ({}) },
   scriptWorkspaceDirty: { type: Object, default: () => ({}) },
-  scriptWorkspaceKey: { type: String, default: 'script' },
+  scriptWorkspaceKey: { type: String, default: 'series_pack' },
   scriptWorkspaceLoading: { type: Boolean, default: false },
   scriptWorkspaceLabels: { type: Object, default: () => ({}) },
   scriptChatLoading: { type: Boolean, default: false },
@@ -96,7 +96,6 @@ const emit = defineEmits([
   'add-character',
   'save-character',
   'lock-ref',
-  'upload-ref',
   'delete-character',
   'delete-candidate',
   'generate-character-ref',
@@ -157,7 +156,6 @@ const emit = defineEmits([
 ])
 
 const stage = ref('script')
-const refInput = ref(null)
 const keyInput = ref(null)
 const bgmInput = ref(null)
 const voiceVideoRef = ref(null)
@@ -188,7 +186,7 @@ const stageList = computed(() => [
 ])
 
 const scriptWorkspaceTabs = computed(() => {
-  const keys = props.scriptWorkspace?.keys || ['project', 'bible', 'outline', 'script', 'shots', 'characters', 'mix']
+    const keys = props.scriptWorkspace?.keys || ['series_pack', 'project', 'characters', 'shots']
   const labels = props.scriptWorkspaceLabels || {}
   const epLabel = `ep${String(props.episodeN || 1).padStart(2, '0')}.md`
   return keys.map((key) => {
@@ -247,43 +245,6 @@ const CAST_REF_MODELS = [
   { provider: 'kling-image', model: 'kling/kling-v3-omni-image-generation', label: '可灵 · Kling V3 Omni' },
   { provider: 'wanx', model: 'qwen-image-plus', label: '百炼 · Qwen-Image-Plus' },
 ]
-const GENDER_OPTIONS = [
-  { value: '', label: '自动' },
-  { value: 'male', label: '男' },
-  { value: 'female', label: '女' },
-]
-
-function voiceGenderOf(v) {
-  const label = String(v?.label || v?.id || '')
-  if (label.includes('女') && !label.includes('男')) return 'female'
-  if (label.includes('男')) return 'male'
-  return ''
-}
-
-// 按当前角色性别把同性别音色排前（同性别优先，方便挑选）
-const sortedVoices = computed(() => {
-  const gender = props.charDraft?.gender || ''
-  const list = props.voices || []
-  if (!gender) return list
-  const rank = (v) => (voiceGenderOf(v) === gender ? 0 : 1)
-  return [...list].sort((a, b) => rank(a) - rank(b))
-})
-
-const charRefModelKey = computed({
-  get() {
-    const p = props.charDraft.ref_image_provider || 'seedream'
-    const m = props.charDraft.ref_image_model || 'doubao-seedream-5-0-pro-260628'
-    return `${p}|${m}`
-  },
-  set(v) {
-    const [provider, model] = String(v || '').split('|')
-    const hit = CAST_REF_MODELS.find((o) => o.provider === provider && o.model === model)
-    if (hit) {
-      props.charDraft.ref_image_provider = hit.provider
-      props.charDraft.ref_image_model = hit.model
-    }
-  },
-})
 
 function catalogOptions(nodeId) {
   if (nodeId === 'character_ref') return props.modelCatalog?.image || CAST_REF_MODELS
@@ -335,16 +296,6 @@ watch(
   { immediate: true, flush: 'post' },
 )
 
-function onCastRefModelChange(event) {
-  const key = event?.target?.value
-  if (!key) return
-  const [provider, model] = String(key).split('|')
-  if (props.charDraft) {
-    props.charDraft.ref_image_provider = provider
-    props.charDraft.ref_image_model = model || props.charDraft.ref_image_model
-  }
-  emit('apply-stage-model', { node: 'character_ref', key })
-}
 const castAssets = computed(() =>
   (props.characters || []).filter((c) => (c.category || 'character') === castCategory.value),
 )
@@ -371,60 +322,10 @@ function openCastSection(category) {
   castSectionOpen.value = { ...castSectionOpen.value, [category]: true }
 }
 
-const castAddLabel = computed(() => {
-  const map = { character: '添加角色', prop: '添加道具', scene: '添加场景' }
-  return map[castCategory.value] || '添加'
-})
-
 function castAssetUrl(url) {
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 }
-
-function formatFileSize(bytes) {
-  const n = Number(bytes || 0)
-  if (!n) return '—'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(2)} MB`
-}
-
-const castRefModelLabel = computed(() => {
-  const p = props.selectedCharacter?.ref_image_provider || props.charDraft.ref_image_provider
-  const m = props.selectedCharacter?.ref_image_model || props.charDraft.ref_image_model
-  const hit = CAST_REF_MODELS.find((o) => o.provider === p && o.model === m)
-  return hit?.label || m || '—'
-})
-
-const castRefInfo = computed(() => {
-  const c = props.selectedCharacter
-  if (!c) return null
-  const slide = castRefActiveSlide.value
-  if (slide?.key === 'face') {
-    if (!c.ref_face_exists) return null
-    return {
-      pixelSize: '正脸特写锚',
-      fileSize: '出图 / QC 优先',
-      model: castRefModelLabel.value,
-      locked: Boolean(c.ref_locked),
-    }
-  }
-  if (!c.ref_exists) return null
-  const w = Number(c.ref_width || 0)
-  const h = Number(c.ref_height || 0)
-  const cat = props.charDraft.category || c.category || 'character'
-  const [cw, ch] = refCanvasSize(cat, c.ref_size ?? props.charDraft.ref_size)
-  return {
-    pixelSize: w > 0 && h > 0 ? `${w} × ${h} px` : cw && ch ? `${cw} × ${ch} px（设定）` : '—',
-    fileSize: formatFileSize(c.ref_bytes),
-    model: castRefModelLabel.value,
-    locked: Boolean(c.ref_locked),
-  }
-})
-
-const castRefSizeSelectOptions = computed(() =>
-  castRefSizeOptions(props.charDraft?.category || props.selectedCharacter?.category || 'character'),
-)
 
 watch(
   () => props.charDraft?.category,
@@ -437,18 +338,6 @@ watch(
   },
 )
 
-function onAddCastAsset() {
-  const names = { character: '新角色', prop: '新道具', scene: '新场景' }
-  emit('add-character', {
-    category: castCategory.value,
-    name: names[castCategory.value] || '新资产',
-  })
-}
-
-function onGenerateAllCastRefs() {
-  emit('generate-all-refs', castCategory.value)
-}
-
 // 画面候选图轮播
 const currentCandidateIndex = ref(0)
 const sceneCandidatesList = computed(() => props.selected?.candidates || [])
@@ -459,6 +348,14 @@ const currentCandidateIsLocked = computed(() => {
   if (!cand || !props.selected) return false
   if (String(cand.id || '') !== String(props.selected.chosen || '').trim()) return false
   return (props.selected.locked || []).includes('scene')
+})
+
+/** 新 series_pack 流程：单图出画面（files.scene），无候选墙。候选为空时回退显示这张真实画面。 */
+const sceneFallbackUrl = computed(() => {
+  const scene = props.selected?.files?.scene
+  if (!scene?.exists || !scene?.url) return ''
+  const url = String(scene.url)
+  return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
 
 function prevCandidate() {
@@ -612,72 +509,12 @@ const facePreviewUrl = computed(() => {
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
 
-const castRefSlide = ref(0)
-
 const platePreviewUrl = computed(() => {
   const url = props.selectedCharacter?.ref_plate_url || ''
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
 
-const castRefSlides = computed(() => {
-  const char = props.selectedCharacter
-  const cat = char?.category || 'character'
-  if (cat === 'scene') {
-    return [
-      {
-        key: 'plate',
-        label: '主底板（无人物）',
-        url: platePreviewUrl.value || refPreviewUrl.value,
-        empty: '尚未生成主底板',
-      },
-    ]
-  }
-  if (cat === 'prop') {
-    return [
-      {
-        key: 'body',
-        label: '道具设定图',
-        url: refPreviewUrl.value,
-        empty: '暂无道具设定图',
-      },
-    ]
-  }
-  return [
-    {
-      key: 'body',
-      label: '全身定妆',
-      url: refPreviewUrl.value,
-      empty: '暂无全身定妆',
-    },
-    {
-      key: 'face',
-      label: '正脸特写',
-      url: facePreviewUrl.value,
-      empty: '尚未生成正脸特写',
-    },
-  ]
-})
-
-const castRefActiveSlide = computed(() => {
-  const slides = castRefSlides.value
-  if (!slides.length) return null
-  const idx = Math.min(Math.max(0, castRefSlide.value), slides.length - 1)
-  return slides[idx]
-})
-
-watch(
-  () => props.selectedCharacterId,
-  () => {
-    castRefSlide.value = 0
-  },
-)
-
-function stepCastRefSlide(delta) {
-  const n = castRefSlides.value.length
-  if (n < 2) return
-  castRefSlide.value = (castRefSlide.value + delta + n) % n
-}
 const mix = computed(() => props.episode?.mix || null)
 const bgmPreviewUrl = computed(() => {
   const mounted = mix.value?.file?.url || ''
@@ -895,9 +732,9 @@ function shotPreviewUrl(shot) {
 }
 
 function shotVideoPreviewUrl(shot) {
-  // 视频页只看表演母带 motion，避免被 clip/lip 污染观感
+  // 视频页优先表演母带 motion；空镜（L0，专业档无 Ken Burns）无 motion 时回退成片 clip，再回退静态画面。
   if (!shot) return ''
-  const url = shot.files?.motion?.url || shot.files?.scene?.url || ''
+  const url = shot.files?.motion?.url || shot.files?.clip?.url || shot.files?.scene?.url || ''
   return url ? withBust(url) : ''
 }
 
@@ -967,59 +804,6 @@ function shotVideoStatusClass(shot) {
   return 'is-todo'
 }
 
-function i2vModeLabel(mode) {
-  if (mode === 'on') return '强制 I2V'
-  if (mode === 'off') return '关闭 I2V'
-  return '自动'
-}
-
-const cameraOptions = computed(() => {
-  const ids = props.episode?.cameras?.length
-    ? props.episode.cameras
-    : ['punch_in', 'punch_shake', 'pan_right', 'pan_left', 'rise', 'fall', 'pull_out']
-  const labels = {
-    punch_in: '推进',
-    punch_shake: '推进抖动',
-    pan_right: '右摇',
-    pan_left: '左摇',
-    rise: '升起',
-    fall: '下降',
-    pull_out: '拉远',
-  }
-  return ids.map((id) => ({ id, label: labels[id] || id }))
-})
-
-const ladderOptions = [
-  { id: 'L0', label: 'L0 静图运镜' },
-  { id: 'L1', label: 'L1 I2V' },
-  { id: 'L2', label: 'L2 口型' },
-  { id: 'L3', label: 'L3 动作' },
-  { id: 'L4', label: 'L4 关键帧' },
-]
-
-const i2vSourceOptions = [
-  { id: '', label: '待生成' },
-  { id: 'fallback', label: '静图运镜' },
-  { id: 'ai', label: 'AI' },
-  { id: 'keys', label: '关键帧' },
-]
-
-function cameraLabel(shot) {
-  return String(shot?.camera || '—')
-}
-
-function routeLabel(shot) {
-  const route = shot?.route
-  if (!route) return '—'
-  if (route.will_run === false || route.ladder === 'L0') return 'L0 静图运镜'
-  return route.ladder ? `${route.ladder} I2V` : 'I2V'
-}
-
-function onRefFile(ev) {
-  const file = ev.target.files?.[0]
-  ev.target.value = ''
-  if (file) emit('upload-ref', file)
-}
 function onBgmFile(ev) {
   const file = ev.target.files?.[0]
   ev.target.value = ''
@@ -1033,12 +817,6 @@ function onKeyFile(ev) {
 }
 function onGenerateAllScenes() {
   emit('generate-all-scenes')
-}
-
-function shotRolesLabel(shot) {
-  const roles = shot?.角色
-  if (Array.isArray(roles) && roles.length) return roles.join('、')
-  return ''
 }
 
 function shotDescPreview(shot) {
@@ -1068,38 +846,6 @@ const seriesEpisodeOptions = computed(() => {
     n: i + 1,
     title: `第${i + 1}集`,
   }))
-})
-
-const shotEnvAssets = computed(() => {
-  const shot = props.selected
-  if (!shot) return []
-  const cards = props.characters || []
-  const out = []
-  const locId = String(shot.location_id || '').trim()
-  if (locId) {
-    const card = cards.find((c) => String(c.id) === locId)
-    if (card) {
-      out.push({
-        id: card.id,
-        name: card.name || locId,
-        kind: '地点',
-        url: card.ref_plate_url || card.ref_url || '',
-      })
-    }
-  }
-  for (const pid of shot.prop_ids || []) {
-    const id = String(pid || '').trim()
-    if (!id) continue
-    const card = cards.find((c) => String(c.id) === id)
-    if (!card) continue
-    out.push({
-      id: card.id,
-      name: card.name || id,
-      kind: '道具',
-      url: card.ref_url || '',
-    })
-  }
-  return out
 })
 
 // 预加载候选缩略图
@@ -1132,10 +878,6 @@ function onGenerateVideo() {
 
 function onGenerateAllVideo() {
   emit('generate-all-video')
-}
-
-function onGenerateVoice() {
-  emit('generate-lip')
 }
 
 function onGenerateAllVoice() {
@@ -1554,14 +1296,6 @@ function lipWarnings(shot) {
   return Array.isArray(shot?.lip_warnings) ? shot.lip_warnings : []
 }
 
-function canGenerateVoiceFor(shot) {
-  if (!shot) return false
-  if ((shot.locked || []).includes('shot')) return false
-  return Boolean((shot.字幕 || shot.对白 || '').trim())
-}
-
-const canGenerateVoice = computed(() => canGenerateVoiceFor(props.selected))
-
 function isVideoGeneratingShot(n) {
   const p = props.videoGenProgress
   return Boolean(p && p.status === 'running' && Number(p.shotN) === Number(n))
@@ -1774,15 +1508,7 @@ const statusBar = computed(() => {
     <div v-if="project" class="drama-stage-title">
       <h2>{{ currentStage.title }}</h2>
       <div class="drama-stage-title-actions">
-        <template v-if="stage === 'cast'">
-          <button type="button" class="btn-ghost btn-sm" :disabled="saving" @click="onAddCastAsset">
-            {{ castAddLabel }}
-          </button>
-          <button type="button" class="btn-ghost btn-sm" :disabled="rendering" @click="onGenerateAllCastRefs">
-            {{ rendering ? '生成中…' : '批量生成' }}
-          </button>
-        </template>
-        <template v-else-if="stage === 'scene'">
+        <template v-if="stage === 'scene'">
           <button type="button" class="btn-ghost btn-sm" :disabled="rendering || !shots.length" @click="onGenerateAllScenes">
             {{ rendering ? '生成中…' : '批量出图' }}
           </button>
@@ -2002,7 +1728,7 @@ const statusBar = computed(() => {
                       v-for="item in castAssetsOf(tab.id)"
                       :key="item.id"
                       class="drama-cast-row"
-                      :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked, busy: isCharacterBusy(item.id) }"
+                      :class="{ active: item.id === selectedCharacterId, busy: isCharacterBusy(item.id) }"
                     >
                       <button
                         type="button"
@@ -2015,16 +1741,16 @@ const statusBar = computed(() => {
                         </div>
                         <span class="drama-cast-row-name">{{ item.name || item.id }}</span>
                         <span v-if="isCharacterBusy(item.id)" class="drama-cast-row-lock" title="处理中">…</span>
-                        <span v-else-if="item.ref_locked" class="drama-cast-row-lock" title="已锁定">🔒</span>
+                        <span v-else-if="item.ref_exists" class="drama-cast-row-lock" title="已有定妆">✓</span>
                       </button>
                       <button
                         type="button"
                         class="btn-tiny drama-cast-row-gen"
-                        :disabled="isCharacterBusy(item.id) || item.ref_locked"
-                        :title="item.ref_locked ? '已锁定' : (isCharacterBusy(item.id) ? '生成中' : '生成定妆图')"
+                        :disabled="isCharacterBusy(item.id)"
+                        :title="isCharacterBusy(item.id) ? '生成中' : '重新生成'"
                         @click.stop="openCastSection(tab.id); emit('generate-character-ref', item.id)"
                       >
-                        {{ isCharacterBusy(item.id) ? '…' : '生成' }}
+                        {{ isCharacterBusy(item.id) ? '…' : '重生成' }}
                       </button>
                     </div>
                   </div>
@@ -2034,7 +1760,7 @@ const statusBar = computed(() => {
                       :key="item.id"
                       type="button"
                       class="drama-cast-card"
-                      :class="{ active: item.id === selectedCharacterId, locked: item.ref_locked }"
+                      :class="{ active: item.id === selectedCharacterId }"
                       @click="openCastSection(tab.id); emit('select-character', item.id)"
                     >
                       <div class="drama-cast-thumb">
@@ -2046,202 +1772,109 @@ const statusBar = computed(() => {
                         <span v-else class="drama-candidate-empty">无图</span>
                       </div>
                       <span class="drama-cast-name">{{ item.name || item.id }}</span>
-                      <span v-if="item.ref_locked" class="drama-cast-lock" title="已锁定">🔒</span>
                     </button>
                   </div>
-                  <p v-if="!castAssetsOf(tab.id).length" class="drama-empty-hint">暂无{{ tab.label }}，点上方「{{ { character: '添加角色', prop: '添加道具', scene: '添加场景' }[tab.id] }}」新建。</p>
+                  <p v-if="!castAssetsOf(tab.id).length" class="drama-empty-hint">暂无{{ tab.label }}（由剧本 SeriesPack 物化而来）。</p>
                 </div>
               </div>
             </div>
           </div>
 
-          <div v-if="selectedCharacter && (selectedCharacter.category || 'character') === castCategory" class="drama-scene-detail">
+          <div
+            v-if="selectedCharacter && (selectedCharacter.category || 'character') === castCategory"
+            class="drama-scene-detail drama-cast-detail--asset"
+          >
             <div class="drama-scene-detail-head">
               <h3>{{ selectedCharacter.name || selectedCharacter.id }}</h3>
-              <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-primary btn-sm" :disabled="selectedCharacterBusy" @click="emit('save-character')">保存</button>
-                <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || selectedCharacter.ref_locked" @click="emit('generate-character-ref', selectedCharacter.id)">
-                  {{ selectedCharacterBusy ? '生成中…' : (castCategory === 'scene' ? '生成主底板' : castCategory === 'prop' ? '生成设定图' : '生成定妆图') }}
+              <div class="drama-scene-detail-actions drama-cast-regen-bar">
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="selectedCharacterBusy"
+                  @click="emit('generate-character-ref', selectedCharacter.id)"
+                >
+                  {{ selectedCharacterBusy ? '生成中…' : '生成' }}
                 </button>
-                <button type="button" class="btn-tiny" :disabled="selectedCharacterBusy || !selectedCharacter.ref_exists" @click="emit('lock-ref', selectedCharacter.id)">
-                  {{ selectedCharacter.ref_locked ? '解锁' : '锁定' }}
+                <button
+                  type="button"
+                  class="btn-tiny btn-tiny-danger"
+                  :disabled="selectedCharacterBusy"
+                  @click="emit('delete-character', selectedCharacter.id)"
+                >
+                  删除
                 </button>
-                <button type="button" class="btn-tiny btn-tiny-danger" :disabled="selectedCharacterBusy" @click="emit('delete-character', selectedCharacter.id)">删除</button>
               </div>
             </div>
 
-            <div class="drama-scene-body">
-              <div class="drama-scene-left">
-                <div class="drama-scene-script drama-cast-form">
-                  <label class="drama-field">
-                    名称
-                    <input
-                      v-model="charDraft.name"
-                      type="text"
-                      :placeholder="castCategory === 'scene' ? '场景名称' : castCategory === 'prop' ? '道具名称' : '角色名称'"
-                    />
-                  </label>
-                  <label v-if="castCategory === 'character'" class="drama-field">
-                    别名
-                    <input v-model="charDraft.aliases" type="text" placeholder="可选" />
-                  </label>
-                  <div v-if="castCategory === 'character'" class="drama-cast-fields-pair">
-                    <label class="drama-field">
-                      性别
-                      <select v-model="charDraft.gender">
-                        <option v-for="g in GENDER_OPTIONS" :key="g.value" :value="g.value">{{ g.label }}</option>
-                      </select>
-                    </label>
-                    <label class="drama-field">
-                      音色
-                      <select v-model="charDraft.voice">
-                        <option value="">自动（按性别）</option>
-                        <option v-if="charDraft.voice && !voices.some((v) => v.id === charDraft.voice)" :value="charDraft.voice">
-                          {{ voices.find((v) => v.id === charDraft.voice)?.label || charDraft.voice }}
-                        </option>
-                        <option v-for="v in sortedVoices" :key="v.id" :value="v.id">
-                          {{ v.label || v.id }}
-                        </option>
-                      </select>
-                    </label>
+            <div
+              class="drama-cast-char-board"
+              :class="{ 'drama-cast-char-board--single': castCategory !== 'character' }"
+            >
+              <template v-if="castCategory === 'character'">
+                <article class="drama-cast-char-pane">
+                  <header class="drama-cast-char-pane-head">全身定妆</header>
+                  <div class="drama-cast-char-preview drama-cast-char-preview--body">
+                    <img v-if="refPreviewUrl" :src="refPreviewUrl" alt="全身定妆" />
+                    <span v-else class="drama-cast-char-empty">暂无全身定妆</span>
                   </div>
-                  <label class="drama-field">
-                    {{ castCategory === 'scene' ? '空间描述' : castCategory === 'prop' ? '外形描述' : '三视图' }}
-                    <textarea
-                      v-model="charDraft.look"
-                      class="drama-scene-script-text"
-                      rows="4"
-                      :placeholder="
-                        castCategory === 'scene'
-                          ? '空间结构、主光方向、地面材质、1–3 个标志物（用于生成无人物主底板）'
-                          : castCategory === 'prop'
-                            ? '外形、材质、尺寸感、纹样等可画细节'
-                            : '正面、侧面、背面的发型、服装、配饰与气质等细节描述'
-                      "
-                    />
-                  </label>
-                  <div v-if="castCategory === 'character'" class="drama-cast-traits">
-                    <label class="drama-field">
-                      发型发色
-                      <input v-model="charDraft.hair" type="text" placeholder="如：黑色长直发、刘海" />
-                    </label>
-                    <label class="drama-field">
-                      瞳色五官
-                      <input v-model="charDraft.eyes" type="text" placeholder="如：杏眼、浅棕瞳" />
-                    </label>
-                    <label class="drama-field">
-                      服饰
-                      <input v-model="charDraft.outfit" type="text" placeholder="常服要点，跨镜锁定" />
-                    </label>
-                    <label class="drama-field">
-                      特征标记
-                      <input v-model="charDraft.marks" type="text" placeholder="如：右颊小痣、耳饰" />
-                    </label>
+                  <textarea
+                    v-model="charDraft.look"
+                    class="drama-cast-char-text"
+                    rows="5"
+                    placeholder="正面全身：年龄感、发型发色、服装主色、独占锚点"
+                  />
+                </article>
+                <article class="drama-cast-char-pane">
+                  <header class="drama-cast-char-pane-head">正脸锚点</header>
+                  <div class="drama-cast-char-preview drama-cast-char-preview--face">
+                    <img v-if="facePreviewUrl" :src="facePreviewUrl" alt="正脸锚点" />
+                    <span v-else class="drama-cast-char-empty">尚未生成正脸</span>
                   </div>
-                </div>
+                  <textarea
+                    v-model="charDraft.look_face"
+                    class="drama-cast-char-text"
+                    rows="5"
+                    placeholder="瞳色 / 眉眼 / 痣 / 耳饰等正脸特征"
+                  />
+                </article>
+              </template>
 
-                <div class="drama-stage-settings">
-                  <div class="drama-stage-settings-head">设置</div>
-                  <div class="drama-stage-settings-row">
-                    <label class="drama-field">
-                      尺寸
-                      <select v-model.number="charDraft.ref_size">
-                        <option v-for="opt in castRefSizeSelectOptions" :key="opt.value" :value="opt.value">
-                          {{ opt.hint }}
-                        </option>
-                      </select>
-                    </label>
-                    <label class="drama-field">
-                      定妆模型
-                      <select
-                        class="drama-model-select"
-                        :value="charRefModelKey"
-                        :disabled="selectedCharacterBusy"
-                        @change="onCastRefModelChange"
-                      >
-                        <option
-                          v-for="opt in catalogOptions('character_ref')"
-                          :key="`${opt.provider}|${opt.model}`"
-                          :value="`${opt.provider}|${opt.model}`"
-                        >
-                          {{ opt.label }}
-                        </option>
-                      </select>
-                    </label>
-                  </div>
-                  <div v-if="castRefInfo" class="drama-scene-meta">
-                    <span class="drama-scene-meta-item"><strong>像素</strong>{{ castRefInfo.pixelSize }}</span>
-                    <span class="drama-scene-meta-item"><strong>文件</strong>{{ castRefInfo.fileSize }}</span>
-                    <span class="drama-scene-meta-item"><strong>模型</strong>{{ castRefInfo.model }}</span>
-                    <span class="drama-scene-meta-item"><strong>状态</strong>{{ castRefInfo.locked ? '已锁定' : '未锁定' }}</span>
-                  </div>
-                  <div class="drama-cast-upload-row">
-                    <button
-                      type="button"
-                      class="btn-ghost btn-sm"
-                      :disabled="selectedCharacterBusy || selectedCharacter.ref_locked"
-                      @click="refInput?.click()"
-                    >
-                      上传参考图
-                    </button>
-                    <input ref="refInput" class="drama-file" type="file" accept="image/*" @change="onRefFile" />
-                  </div>
+              <article v-else-if="castCategory === 'scene'" class="drama-cast-char-pane">
+                <header class="drama-cast-char-pane-head">场景底板</header>
+                <div class="drama-cast-char-preview drama-cast-char-preview--body">
+                  <img
+                    v-if="platePreviewUrl || refPreviewUrl"
+                    :src="platePreviewUrl || refPreviewUrl"
+                    alt="场景底板"
+                  />
+                  <span v-else class="drama-cast-char-empty">暂无场景底板</span>
                 </div>
-              </div>
+                <textarea
+                  v-model="charDraft.look"
+                  class="drama-cast-char-text"
+                  rows="5"
+                  placeholder="无人物竖屏空镜：建筑轮廓、主光、地面材质"
+                />
+              </article>
 
-              <div class="drama-scene-right">
-                <div class="drama-scene-candidates">
-                  <div class="drama-candidates-head">
-                    <h4>{{ castRefActiveSlide?.label || '定妆图' }}</h4>
-                    <div class="drama-candidates-actions">
-                      <span class="drama-candidate-count">
-                        {{ castRefSlides.length ? castRefSlide + 1 : 0 }}/{{ castRefSlides.length }}
-                      </span>
-                      <button
-                        type="button"
-                        class="btn-tiny"
-                        :disabled="selectedCharacterBusy || !selectedCharacter.ref_exists"
-                        @click="emit('lock-ref', selectedCharacter.id)"
-                      >
-                        {{ selectedCharacter.ref_locked ? '解锁' : '锁定' }}
-                      </button>
-                    </div>
-                  </div>
-                  <div class="drama-scene-carousel">
-                    <button
-                      type="button"
-                      class="drama-candidate-nav drama-candidate-prev"
-                      :disabled="castRefSlides.length < 2"
-                      aria-label="上一张"
-                      @click="stepCastRefSlide(-1)"
-                    >
-                      ‹
-                    </button>
-                    <div class="drama-candidate-frame">
-                      <img
-                        v-if="castRefActiveSlide?.url"
-                        :src="castRefActiveSlide.url"
-                        :alt="castRefActiveSlide.label"
-                      />
-                      <span v-else class="drama-candidate-empty">{{ castRefActiveSlide?.empty || '暂无定妆图' }}</span>
-                    </div>
-                    <button
-                      type="button"
-                      class="drama-candidate-nav drama-candidate-next"
-                      :disabled="castRefSlides.length < 2"
-                      aria-label="下一张"
-                      @click="stepCastRefSlide(1)"
-                    >
-                      ›
-                    </button>
-                  </div>
+              <article v-else class="drama-cast-char-pane">
+                <header class="drama-cast-char-pane-head">道具设定</header>
+                <div class="drama-cast-char-preview drama-cast-char-preview--prop">
+                  <img v-if="refPreviewUrl" :src="refPreviewUrl" alt="道具设定" />
+                  <span v-else class="drama-cast-char-empty">暂无道具设定图</span>
                 </div>
-              </div>
+                <textarea
+                  v-model="charDraft.look"
+                  class="drama-cast-char-text"
+                  rows="5"
+                  placeholder="外形、材质、尺寸感、纹样"
+                />
+              </article>
             </div>
           </div>
 
           <div v-else class="drama-cast-empty">
-            <p>从左侧选择一项进行编辑，或点击「{{ castAddLabel }}」新建。</p>
+            <p>从左侧选择一项查看与重新生成；资产由剧本物化，不在此新建。</p>
           </div>
         </div>
       </section>
@@ -2282,95 +1915,64 @@ const statusBar = computed(() => {
             </div>
           </div>
 
-          <div v-if="selected" class="drama-scene-detail">
+          <div v-if="selected" class="drama-scene-detail drama-cast-detail--asset">
             <div class="drama-scene-detail-head">
               <h3>Shot {{ selected.n }}</h3>
-              <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-primary btn-sm" :disabled="selectedShotBusy || shotFrozen || candidatesFull" @click="onGenerateCandidate">
-                  {{ selectedGeneratingCandidates ? '生成中…' : selectedShotBusy ? '处理中…' : '生成候选图' }}
+              <div class="drama-scene-detail-actions drama-cast-regen-bar">
+                <button
+                  type="button"
+                  class="btn-tiny"
+                  :disabled="selectedShotBusy || shotFrozen || !currentCandidate"
+                  @click="onCandidateLockClick"
+                >
+                  {{ currentCandidateIsLocked ? '解锁' : '锁定' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-tiny btn-tiny-danger"
+                  :disabled="selectedShotBusy || !currentCandidate"
+                  @click="emit('delete-candidate', currentCandidate && currentCandidate.id)"
+                >
+                  删除
+                </button>
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="selectedShotBusy || shotFrozen || candidatesFull"
+                  @click="onGenerateCandidate"
+                >
+                  {{ selectedGeneratingCandidates ? '生成中…' : selectedShotBusy ? '处理中…' : '生成' }}
                 </button>
               </div>
             </div>
 
-            <div class="drama-scene-body">
-              <div class="drama-scene-left">
-                <div class="drama-scene-script">
-                  <label class="drama-field">
-                    画面描述
-                    <textarea class="drama-scene-script-text" :value="selected.画面 || ''" rows="4" readonly placeholder="（剧本中尚未填写画面描述）" />
-                  </label>
-                  <p class="drama-scene-script-hint">来自剧本分镜；修改请返回「剧本」步骤编辑对应 Shot 的「画面」字段。</p>
-                  <div v-if="shotRolesLabel(selected) || selected.地点 || (selected.道具 && selected.道具.length) || selected.字幕 || selected.旁白 || selected.对白" class="drama-scene-meta">
-                    <span v-if="selected.地点" class="drama-scene-meta-item"><strong>地点</strong>{{ selected.地点 }}</span>
-                    <span v-if="selected.道具 && selected.道具.length" class="drama-scene-meta-item"><strong>道具</strong>{{ Array.isArray(selected.道具) ? selected.道具.join('、') : selected.道具 }}</span>
-                    <span v-if="shotRolesLabel(selected)" class="drama-scene-meta-item"><strong>角色</strong>{{ shotRolesLabel(selected) }}</span>
-                    <span v-if="selected.字幕 || selected.对白" class="drama-scene-meta-item"><strong>字幕</strong>{{ selected.字幕 || selected.对白 }}</span>
-                    <span v-if="selected.旁白" class="drama-scene-meta-item"><strong>旁白</strong>{{ selected.旁白 }}</span>
-                  </div>
-                  <div v-if="shotEnvAssets.length" class="drama-scene-env-refs">
-                    <div v-for="asset in shotEnvAssets" :key="asset.id" class="drama-scene-env-card">
-                      <img v-if="asset.url" :src="asset.url" :alt="asset.name" />
-                      <span>{{ asset.kind }} · {{ asset.name }}</span>
-                    </div>
-                  </div>
+            <div class="drama-cast-char-board drama-cast-char-board--single drama-shot-board">
+              <article class="drama-cast-char-pane">
+                <header class="drama-cast-char-pane-head">画面</header>
+                <div class="drama-cast-char-preview drama-cast-char-preview--shot">
+                  <DramaThumbImg
+                    v-if="sceneFallbackUrl"
+                    :key="`scene-${selectedN}-${props.bust || 0}`"
+                    :src="sceneFallbackUrl"
+                    alt="当前画面"
+                    loading="eager"
+                    fetchpriority="high"
+                  />
+                  <span v-else class="drama-cast-char-empty">暂无画面</span>
                 </div>
-
-                <div class="drama-stage-settings">
-                  <div class="drama-stage-settings-head">设置</div>
-                  <div class="drama-stage-settings-row">
-                    <label class="drama-field">
-                      出图模型
-                      <select class="drama-model-select" :value="currentModelKey('image')" :disabled="saving" @change="onStageModelChange('image', $event)">
-                        <option v-for="opt in catalogOptions('image')" :key="`${opt.provider}|${opt.model}`" :value="`${opt.provider}|${opt.model}`">{{ opt.label }}</option>
-                      </select>
-                    </label>
-                  </div>
-                  <p class="drama-stage-settings-hint">作用于本项目全部分镜出图</p>
-                </div>
-              </div>
-
-              <div class="drama-scene-right">
-                <div class="drama-scene-candidates">
-                  <div class="drama-candidates-head">
-                    <h4>候选图</h4>
-                    <div class="drama-candidates-actions">
-                      <span class="drama-candidate-count">{{ sceneCandidatesList.length ? currentCandidateIndex + 1 : 0 }}/{{ sceneCandidatesList.length }}</span>
-                      <button
-                        type="button"
-                        class="btn-tiny"
-                        :disabled="selectedShotBusy || shotFrozen || !currentCandidate"
-                        @click="onCandidateLockClick"
-                      >
-                        {{ currentCandidateIsLocked ? '解锁' : '锁定' }}
-                      </button>
-                      <button type="button" class="btn-tiny" :disabled="selectedShotBusy || !currentCandidate" @click="emit('delete-candidate', currentCandidate && currentCandidate.id)">删除</button>
-                    </div>
-                  </div>
-                  <div class="drama-scene-carousel">
-                    <button type="button" class="drama-candidate-nav drama-candidate-prev" :disabled="sceneCandidatesList.length <= 1" @click="prevCandidate">‹</button>
-                    <div class="drama-candidate-frame">
-                      <DramaThumbImg
-                        v-if="currentCandidate && candUrl(currentCandidate)"
-                        :key="`${currentCandidate.id}-${currentCandidate.bytes || 0}-${props.bust || 0}`"
-                        :src="candUrl(currentCandidate)"
-                        :alt="currentCandidate.id"
-                        loading="eager"
-                        fetchpriority="high"
-                      />
-                      <span v-else-if="currentCandidate && currentCandidate.exists === false" class="drama-candidate-empty">
-                        {{ currentCandidate.id }} 文件缺失
-                      </span>
-                      <span v-else class="drama-candidate-empty">无候选图，点击「生成候选图」</span>
-                    </div>
-                    <button type="button" class="drama-candidate-nav drama-candidate-next" :disabled="sceneCandidatesList.length <= 1" @click="nextCandidate">›</button>
-                  </div>
-                </div>
-              </div>
+                <textarea
+                  class="drama-cast-char-text"
+                  :value="selected.画面 || ''"
+                  rows="4"
+                  readonly
+                  placeholder="（剧本中尚未填写画面描述）"
+                />
+              </article>
             </div>
           </div>
 
           <div v-else class="drama-cast-empty">
-            <p>从左侧选择一镜，查看剧本画面描述并生成候选图。</p>
+            <p>从左侧选择一镜，查看画面描述并生成候选图。</p>
           </div>
         </div>
       </section>
@@ -2410,182 +2012,55 @@ const statusBar = computed(() => {
             </div>
           </div>
 
-          <div v-if="selected" class="drama-scene-detail">
+          <div v-if="selected" class="drama-scene-detail drama-cast-detail--asset">
             <div class="drama-scene-detail-head">
-              <div class="drama-scene-detail-title">
-                <h3>Shot {{ selected.n }}</h3>
-              </div>
-              <div class="drama-scene-detail-actions">
-                <button type="button" class="btn-ghost btn-sm" :disabled="selectedShotBusy || !dirty" @click="emit('save')">
-                  {{ selectedShotBusy && dirty ? '保存中…' : dirty ? '保存' : '已保存' }}
-                </button>
-                <button
-                  v-if="manualVoice"
-                  type="button"
-                  class="btn-ghost btn-sm"
-                  :disabled="selectedShotBusy || !canGenerateVoice"
-                  @click="onGenerateVoice"
-                >
-                  {{ selectedShotBusy && !dirty ? '生成中…' : '生成配音' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn-ghost btn-sm"
-                  :disabled="selectedShotBusy || !selected?.files?.motion?.exists"
-                  :title="selected?.motion_locked ? '解锁后允许重新生成覆盖 motion' : '锁定后声音/口型不会改写表演母带'"
-                  @click="emit('toggle-lock', 'motion')"
-                >
-                  {{ selected?.motion_locked || (selected?.locked || []).includes('motion') ? '解锁运动' : '锁定运动' }}
-                </button>
+              <h3>Shot {{ selected.n }}</h3>
+              <div class="drama-scene-detail-actions drama-cast-regen-bar">
                 <button
                   type="button"
                   class="btn-primary btn-sm"
                   :disabled="selectedShotBusy || !canGenerateI2v"
                   @click="onGenerateVideo"
                 >
-                  {{ isVideoGeneratingShot(selectedN) || (selectedShotBusy && !dirty) ? '生成中…' : '生成视频' }}
+                  {{ isVideoGeneratingShot(selectedN) || (selectedShotBusy && !dirty) ? '生成中…' : '生成' }}
                 </button>
               </div>
             </div>
 
-            <div class="drama-scene-body">
-              <div class="drama-scene-left">
-                <div class="drama-scene-script">
-              <label class="drama-field">
-                画面描述
+            <div class="drama-cast-char-board drama-cast-char-board--single drama-shot-board">
+              <article class="drama-cast-char-pane">
+                <header class="drama-cast-char-pane-head">视频预览</header>
+                <div class="drama-cast-char-preview drama-cast-char-preview--shot">
+                  <video
+                    v-if="shotVideoPreviewKind(selected) === 'video'"
+                    :key="shotVideoPreviewUrl(selected)"
+                    class="drama-shot-media"
+                    :src="shotVideoPreviewUrl(selected)"
+                    controls
+                    autoplay
+                    playsinline
+                  />
+                  <img
+                    v-else-if="shotVideoPreviewKind(selected) === 'image'"
+                    class="drama-shot-media"
+                    :src="shotVideoPreviewUrl(selected)"
+                    alt="镜头画面"
+                  />
+                  <span v-else class="drama-cast-char-empty">暂无视频，请先锁定画面关键帧</span>
+                </div>
                 <textarea
-                  class="drama-scene-script-text"
+                  class="drama-cast-char-text"
                   :value="selected.画面 || ''"
-                  rows="3"
+                  rows="4"
                   readonly
                   placeholder="（剧本中尚未填写画面描述）"
                 />
-              </label>
-              <div v-if="manualVoice" class="drama-voice-script-row">
-                <label class="drama-field">
-                  字幕
-                  <textarea
-                    v-model="draft.字幕"
-                    class="drama-scene-script-text"
-                    rows="2"
-                    placeholder="（本镜无台词字幕）"
-                  />
-                </label>
-                <label class="drama-field">
-                  旁白
-                  <textarea
-                    v-model="draft.旁白"
-                    class="drama-scene-script-text"
-                    rows="2"
-                    placeholder="（本镜无旁白）"
-                  />
-                </label>
-              </div>
-              <p class="drama-voice-lip-hint">
-                {{
-                  manualVoice
-                    ? '手动配音已开：生成视频前会先合成 TTS，并作为 Seedance 参考音频。'
-                    : '默认使用 Seedance 模型自带声。需要固定台词音色时，打开上方「手动配音」。'
-                }}
-              </p>
-              <div class="drama-voice-meta-row drama-video-meta-row">
-                <label class="drama-voice-kv">
-                  <strong>模型</strong>
-                  <select
-                    :value="currentModelKey('motion')"
-                    :disabled="saving"
-                    @change="onStageModelChange('motion', $event)"
-                  >
-                    <option
-                      v-for="opt in catalogOptions('motion')"
-                      :key="`${opt.provider}|${opt.model}`"
-                      :value="`${opt.provider}|${opt.model}`"
-                    >
-                      {{ opt.label }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>运镜</strong>
-                  <select v-model="draft.camera">
-                    <option v-for="cam in cameraOptions" :key="cam.id" :value="cam.id">
-                      {{ cam.label }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>I2V</strong>
-                  <select v-model="draft.i2v">
-                    <option v-for="mode in i2vModes" :key="mode" :value="mode">
-                      {{ i2vModeLabel(mode) }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>路由</strong>
-                  <select v-model="draft.i2v_ladder">
-                    <option value="">自动（{{ selected.route?.ladder || '—' }}）</option>
-                    <option v-for="lad in ladderOptions" :key="lad.id" :value="lad.id">
-                      {{ lad.label }}
-                    </option>
-                  </select>
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>时长</strong>
-                  <input
-                    v-model="draft.duration"
-                    class="drama-video-duration-input"
-                    type="text"
-                    inputmode="decimal"
-                    placeholder="秒"
-                    title="时长（秒，一位小数）"
-                  />
-                </label>
-                <label class="drama-voice-kv">
-                  <strong>状态</strong>
-                  <select v-model="draft.i2v_source">
-                    <option v-for="src in i2vSourceOptions" :key="src.id" :value="src.id">
-                      {{ src.label }}
-                    </option>
-                  </select>
-                </label>
-                <div v-if="manualVoice" class="drama-voice-kv">
-                  <strong>配音</strong>
-                  <span class="drama-voice-readonly">{{ shotHasVoice(selected) ? '已就绪' : '未生成' }}</span>
-                </div>
-              </div>
-            </div>
-              </div>
-
-              <div class="drama-scene-right">
-                <div class="drama-av-preview-panel">
-                <div class="drama-av-preview-area">
-                  <div class="drama-av-frame">
-                    <video
-                      v-if="shotVideoPreviewKind(selected) === 'video'"
-                      :key="shotVideoPreviewUrl(selected)"
-                      class="drama-media"
-                      :src="shotVideoPreviewUrl(selected)"
-                      controls
-                      autoplay
-                      playsinline
-                    />
-                    <img
-                      v-else-if="shotVideoPreviewKind(selected) === 'image'"
-                      class="drama-media"
-                      :src="shotVideoPreviewUrl(selected)"
-                      alt="镜头画面"
-                    />
-                    <div v-else class="drama-stage-empty">本镜尚未出图或视频，请先在「画面」步骤锁定关键帧</div>
-                  </div>
-                </div>
-              </div>
-              </div>
+              </article>
             </div>
           </div>
 
           <div v-else class="drama-cast-empty">
-            <p>从左侧选择一镜，查看画面并生成 I2V 视频。</p>
+            <p>从左侧选择一镜，查看画面并生成视频。</p>
           </div>
         </div>
       </section>

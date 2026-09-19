@@ -580,13 +580,13 @@ class DramaQueue:
         raise ValueError(f"未实现的任务：{job.kind}")
 
     def _run_rerender_dirty(self, job: DramaJob) -> dict[str, Any]:
+        from tools.drama_layout import ensure_episode_ready
         from tools.drama_studio import get_episode
         from tools.drama_video import render_episode_video
 
+        doc = ensure_episode_ready(job.slug, job.episode)
         ep = get_episode(job.slug, job.episode)
-        markdown = ep.get("script")
-        if not markdown:
-            raise FileNotFoundError("没有分集剧本")
+        markdown = ep.get("script") or ""
 
         def on_progress(**fields: Any) -> None:
             self._progress(job, **fields)
@@ -595,7 +595,7 @@ class DramaQueue:
             job.slug,
             job.episode,
             str(markdown),
-            title=str(ep.get("title") or ""),
+            title=str(ep.get("title") or doc.get("title") or ""),
             cancel_check=job.check_cancel,
             on_progress=on_progress,
         )
@@ -612,20 +612,20 @@ class DramaQueue:
         return result
 
     def _run_render_episode(self, job: DramaJob) -> dict[str, Any]:
+        from tools.drama_layout import ensure_episode_ready
         from tools.drama_studio import get_episode, load_project, save_project
         from tools.drama_video import render_episode_video
 
+        doc = ensure_episode_ready(job.slug, job.episode)
         ep = get_episode(job.slug, job.episode)
-        markdown = ep.get("script")
-        if not markdown:
-            raise FileNotFoundError("没有分集剧本")
+        markdown = ep.get("script") or ""
         force = bool((job.params or {}).get("force"))
 
         result = render_episode_video(
             job.slug,
             job.episode,
             str(markdown),
-            title=str(ep.get("title") or ""),
+            title=str(ep.get("title") or doc.get("title") or ""),
             force=force,
             cancel_check=job.check_cancel,
             on_progress=lambda **fields: self._progress(job, **fields),

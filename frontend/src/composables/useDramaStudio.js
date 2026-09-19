@@ -26,7 +26,7 @@ export function useDramaStudio() {
   const scriptWorkspace = ref(null)
   const scriptWorkspaceDrafts = ref({})
   const scriptWorkspaceDirty = ref({})
-  const scriptWorkspaceKey = ref('script')
+  const scriptWorkspaceKey = ref('series_pack')
   const scriptWorkspaceLoading = ref(false)
   const boardMode = ref('shots')
   const selectedCharacterId = ref(null)
@@ -533,6 +533,11 @@ export function useDramaStudio() {
       id: char?.id || '',
       name: char?.name || '',
       look: char?.look || '',
+      look_face: char?.look_face || '',
+      age_band: char?.age_band || '',
+      trait: char?.trait || '',
+      voice_hint: char?.voice_hint || '',
+      catchphrase: char?.catchphrase || '',
       hair: char?.hair || '',
       eyes: char?.eyes || '',
       outfit: char?.outfit || '',
@@ -834,12 +839,14 @@ export function useDramaStudio() {
   }
 
   const SCRIPT_WORKSPACE_LABELS = {
+    series_pack: 'series_pack.json',
     project: 'project.json',
+    characters: 'characters.json',
+    shots: 'shots.json',
+    // legacy aliases
+    script: 'ep.md',
     bible: 'bible.md',
     outline: 'outline.md',
-    script: 'epNN.md',
-    shots: 'shots.json',
-    characters: 'characters.json',
     mix: 'mix.json',
   }
 
@@ -1680,6 +1687,11 @@ export function useDramaStudio() {
       const body = {
         name: String(charDraft.value.name || '').trim(),
         look: charDraft.value.look,
+        look_face: charDraft.value.look_face || '',
+        age_band: charDraft.value.age_band || '',
+        trait: charDraft.value.trait || '',
+        voice_hint: charDraft.value.voice_hint || '',
+        catchphrase: charDraft.value.catchphrase || '',
         hair: charDraft.value.hair || '',
         eyes: charDraft.value.eyes || '',
         outfit: charDraft.value.outfit || '',
@@ -2519,6 +2531,11 @@ export function useDramaStudio() {
       await dramaApi.saveCharacter(slug.value, cid, {
         name: String(src.name || '').trim(),
         look: src.look,
+        look_face: src.look_face || '',
+        age_band: src.age_band || '',
+        trait: src.trait || '',
+        voice_hint: src.voice_hint || '',
+        catchphrase: src.catchphrase || '',
         hair: src.hair || '',
         eyes: src.eyes || '',
         outfit: src.outfit || '',
@@ -2645,7 +2662,7 @@ export function useDramaStudio() {
     try {
       const cards = characters.value.filter((c) => {
         if (category && (c.category || 'character') !== category) return false
-        return !(c.ref_locked && c.ref_exists)
+        return true
       })
       if (!cards.length) {
         notice.value = '没有可生成的定妆照'

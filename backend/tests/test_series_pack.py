@@ -71,6 +71,49 @@ def test_dump_roundtrip():
     assert len(again.episodes[0].shots) == 3
 
 
+def test_coerce_llm_dirty_fields():
+    """LLM 常把 palette 写成句、gender 写成「男」、look_full 带「手持」——加载时纠偏。"""
+    raw = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    raw["style"]["palette"] = "土黄、岩灰、深褐，点缀鎏金与青金蓝"
+    raw["cast"][0]["gender"] = "男"
+    raw["cast"][0]["look_full"] = (
+        "正面全身定妆：花白短须粗布短打，手持锄头站姿挺拔，浅色纯底可辨五官服装"
+    )
+    pack = loads_series_pack(raw)
+    assert isinstance(pack.style.palette, list)
+    assert len(pack.style.palette) >= 2
+    assert pack.cast[0].gender == "male"
+    assert "手持" not in pack.cast[0].look_full
+    assert "锄头" not in pack.cast[0].look_full
+
+
+def test_coerce_llm_dialogue_line_and_kind():
+    """LLM 常把台词字段写成 line、kind 写成中文「对白」——加载时吸收到 schema 字段。"""
+    raw = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    shot = raw["episodes"][0]["shots"][0]
+    shot["kind"] = "对白"
+    shot["dialogue"] = [{"speaker": "linwan", "line": "今晚，必须走。"}]
+    pack = loads_series_pack(raw)
+    fixed = pack.episodes[0].shots[0]
+    assert fixed.kind == "dialogue"
+    assert fixed.dialogue[0].text == "今晚，必须走。"
+    assert fixed.dialogue[0].speaker == "linwan"
+
+
+def test_rejects_establishing_empty_shot():
+    raw = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    raw["episodes"][0]["shots"][0]["kind"] = "establishing"
+    with pytest.raises(ValidationError, match="禁止 establishing"):
+        loads_series_pack(raw)
+
+
+def test_requires_motion_for_all_shots():
+    raw = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    raw["episodes"][0]["shots"][0]["motion"] = ""
+    with pytest.raises(ValidationError, match="motion"):
+        loads_series_pack(raw)
+
+
 def test_write_canonical_schema_file():
     """Keep checked-in schema file in sync with Pydantic model."""
     write_json_schema_file(SCHEMA_OUT)

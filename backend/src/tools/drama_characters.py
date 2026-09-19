@@ -242,26 +242,22 @@ VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
 CHAR_CANDIDATE_MAX = 4
 
 # ---------------------------------------------------------------------------
-# 火山 Seedream 5.0 lite 尺寸契约（Agent Plan 全链路）
+# 火山 Ark 角色一致性契约（Seedream 定妆 + Seedance 参考）
 #
-# API（lite）：总像素 ∈ [3_686_400, ~10_404_496]，宽高比 ∈ [1/16, 16]
-#   官方 2K 推荐：1:1=2048²；9:16=1600×2848；下限竖屏恰为 1440×2560
-#
-# 落盘 / 请求默认（避免「请求抬升再压回」的质量损失）：
-#   角色全身   2048×2048
-#   角色正脸   磁盘 1024×1024（ArcFace 够用；请求侧由 _seedream_gen_size 抬到 2048²）
-#   道具方图   2048×2048
-#   道具竖屏   1440×2560
-#   场景底板   1440×2560（可选 1600×2848）
-#   分镜画面   1600×2848（= Seedream 2K 9:16；成片再缩到 1080×1920）
-#   成片视频   1080×1920
-#   Seedance首帧编码 max_side=1536（仅提交压缩，不改主资产）
+# 官方推荐：大头照（人脸特写）+ 全身照；禁止三视图/多视角（易双胞胎）。
+#   大头照：约 1:1，1024²，人脸居中、尽量少带颈肩与背景
+#   全身照：与成片同向；竖屏短剧用 9:16（1440×2560），人物居中全身完整
+#   Seedream lite：总像素 ≥ 3_686_400
+#   Seedance 参考：宽高 300–6000，长边建议 1024–2048
+#   成片视频：1080×1920；Seedance 首帧编码 max_side=1536
 # ---------------------------------------------------------------------------
 FACE_REF_SIZE = 1024
+# 全身竖屏默认键（与 9:16 成片对齐）
+BODY_REF_PORTRAIT_KEY = 1440
 REF_SIZE_PRESETS: dict[str, dict[int, tuple[int, int]]] = {
     "character": {
-        2048: (2048, 2048),
-        # 以下为可选较小档：请求 Seedream 时仍会抬到 ≥3686400，落盘再压回该尺寸
+        1440: (1440, 2560),  # 9:16 正面全身（竖屏短剧默认）
+        2048: (2048, 2048),  # 方图备选
         1536: (1536, 1536),
         1024: (1024, 1024),
     },
@@ -275,7 +271,7 @@ REF_SIZE_PRESETS: dict[str, dict[int, tuple[int, int]]] = {
     },
 }
 DEFAULT_REF_SIZE_BY_CATEGORY: dict[str, int] = {
-    "character": 2048,
+    "character": BODY_REF_PORTRAIT_KEY,
     "prop": 2048,
     "scene": 1440,
 }
@@ -322,7 +318,7 @@ def normalize_ref_image_route(raw_provider: Any, raw_model: Any) -> tuple[str, s
         "doubao-seedream-5-0-pro-260628",
         "doubao-seedream-5.0-pro",
     ):
-        model = str(default.get("model") or "doubao-seedream-5-0-lite-260128").strip()
+        model = str(default.get("model") or "doubao-seedream-5-0-pro-260628").strip()
     for opt in options:
         if provider == opt["provider"] and model == opt["model"]:
             return provider, model
@@ -479,6 +475,31 @@ def generation_face_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
         except ValueError:
             pass
     return body
+
+
+def character_ark_pair_refs(slug: str, char: dict[str, Any] | None) -> list[str]:
+    """Ark 推荐组合：大头照在前、全身照在后（有则成对；缺一则单张）。
+
+    禁止返回多视角/三视图；同一角色最多两张。
+    """
+    if not isinstance(char, dict):
+        return []
+    cid = str(char.get("id") or "").strip()
+    if not cid:
+        return []
+    body = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
+    face = str(char.get("ref_face") or ref_face_rel(slug, cid)).replace("\\", "/")
+    out: list[str] = []
+    for rel in (face, body):
+        if not rel or rel in out:
+            continue
+        try:
+            path = resolve_safe(rel)
+        except ValueError:
+            continue
+        if path.is_file() and path.stat().st_size > 0:
+            out.append(rel)
+    return out[:2]
 
 
 def ref_face_exists(slug: str, char: dict[str, Any] | None) -> bool:
@@ -715,7 +736,7 @@ def _gender_phrase(char: dict[str, Any]) -> str:
 
 
 def build_asset_ref_prompt(char: dict[str, Any]) -> str:
-    """角色定妆：单张正面全身立绘；道具设定图。场景请用 ``build_location_plate_prompt``。"""
+    """角色定妆：单张正面全身（Ark：禁止三视图）；道具设定图。场景请用 plate。"""
     from tools.drama_ark_prompts import build_character_ref_prompt_zh, build_prop_ref_prompt_zh
 
     look = enriched_look(char) or str(char.get("look") or "").strip() or "原创设计"
@@ -732,11 +753,17 @@ def build_asset_ref_prompt(char: dict[str, Any]) -> str:
     if category == "scene":
         return build_location_plate_prompt(char)
     look = sanitize_character_look_for_portrait(look)
+    face_hint = sanitize_character_look_for_portrait(
+        str(char.get("look_face") or char.get("face") or "").strip()
+    )
     gender = _gender_phrase(char)
+    w, h = ref_canvas_size(char)
     return build_character_ref_prompt_zh(
         look=look,
+        face_hint=face_hint,
         gender=gender,
         style_guard=ANIME_STYLE_GUARD,
+        portrait_9_16=(h > w),
     )
 
 
@@ -782,27 +809,35 @@ def environment_anchor_prompt(char: dict[str, Any] | None) -> str:
 
 
 def build_face_ref_prompt(char: dict[str, Any], *, from_body_ref: bool = False) -> str:
-    """正脸特写定妆：肩上以上，中性表情，专供身份锁与 ArcFace。
+    """正脸大头照：精确裁到人脸区域（Ark：少带颈肩与背景），专供身份锁。
 
-    ``from_body_ref=True`` 时强调必须与全身定妆参考图为同一人，避免文生图另起一张脸。
+    ``from_body_ref=True`` 时强调必须与全身定妆参考图为同一人。
     """
     name = str(char.get("name") or char.get("id") or "角色").strip() or "角色"
-    look = sanitize_character_look_for_portrait(
+    look_full = sanitize_character_look_for_portrait(
         enriched_look(char) or str(char.get("look") or "").strip() or "原创二次元角色"
     )
+    look_face = sanitize_character_look_for_portrait(str(char.get("look_face") or "").strip())
     gender = _gender_phrase(char)
     no_text = "禁止任何文字、姓名、标签、编号、水印、界面元素"
+    face_bits = look_face or look_full
     bits = [
-        "一张正方形二次元角色正脸特写",
+        "一张正方形二次元角色大头照人脸特写",
         f"角色「{name}」",
-        "肩部以上近景，正面平视，五官清晰居中，中性表情",
+        "精确裁剪到人脸区域，正面平视，五官清晰居中，中性表情",
+        "人脸占画面主体绝大部分（人脸占比要大，这是防止换脸/ID 漂移的关键），尽量少带颈部、肩部与背景",
         f"性别：{gender}" if gender else "",
-        f"外形提示（仅辅助，不得另造新人）：{look}" if from_body_ref else f"外形：{look}",
+        f"正脸锚点：{look_face}" if look_face else "",
+        (
+            f"外形提示（仅辅助，不得另造新人）：{look_full}"
+            if from_body_ref
+            else f"外形：{face_bits}"
+        ),
         (
             "必须与参考全身定妆立绘为同一人：同一性别、年龄感、五官、发型发色与妆面；"
-            "只改景别为肩上正脸，禁止换成老头子/女生/路人等另一张脸"
+            "只改景别为大头照，禁止换成老头子/女生/路人等另一张脸，禁止三视图或多视角拼图"
             if from_body_ref
-            else "同一张脸同一发型同一妆面，禁止侧面背面多视角拼图"
+            else "同一张脸同一发型同一妆面，禁止侧面背面多视角拼图，禁止三视图"
         ),
         "禁止手持道具、禁止第二人、禁止全身站姿复刻",
         "均匀浅色纯色背景，无分栏无网格",
@@ -1106,19 +1141,24 @@ def next_char_candidate_ids(char: dict[str, Any], count: int = 1) -> list[str]:
 def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     cid = parse_character_id(str(raw.get("id") or ""))
     name = str(raw.get("name") or cid).strip() or cid
+    category = normalize_category(raw.get("category"))
     allowed = voice_ids_for(slug)
-    voice = str(raw.get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
-    if voice not in allowed:
-        # Never silently map a female Xia* voice onto the male default.
-        rescued = safe_tts_voice(voice)
-        if rescued in allowed:
-            voice = rescued
-        elif any(x in voice for x in ("Xiao", "Xia")) and FEMALE_VOICE_FALLBACK in allowed:
-            voice = FEMALE_VOICE_FALLBACK
-        else:
-            voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
     catalog = list_voice_catalog(slug)
-    gender = normalize_gender(raw.get("gender"), voice, catalog)
+
+    if category != "character":
+        # 道具/场景无性别、无音色：不按音色反推性别，也不占用音色槽
+        gender = ""
+        voice = ""
+    else:
+        voice = str(raw.get("voice") or "").strip()
+        gender = normalize_gender(raw.get("gender"), voice, catalog)
+        voice_g = voice_gender(voice, catalog) if voice in allowed else ""
+        # 音色缺失/非法，或与角色性别冲突 → 按性别挑匹配音色（避免落 allowed[0] 女声）
+        if voice not in allowed or (gender and voice_g and voice_g != gender):
+            voice = pick_default_voice(slug, gender or voice_g, [])
+        if not voice:
+            voice = DEFAULT_VOICE if DEFAULT_VOICE in allowed else (allowed[0] if allowed else DEFAULT_VOICE)
+        gender = normalize_gender(raw.get("gender"), voice, catalog)
     canonical = ref_rel(slug, cid)
     ref = str(raw.get("ref") or canonical).replace("\\", "/").strip() or canonical
     # 坏路径（含 ../、绝对路径等）一律回落到规范定妆路径，避免产线 resolve_safe 炸沙箱
@@ -1143,7 +1183,6 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         resolve_safe(ref_plate)
     except ValueError:
         ref_plate = plate_canonical
-    category = normalize_category(raw.get("category"))
     return {
         "id": cid,
         "name": name,
@@ -1154,6 +1193,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "pack_id": str(raw.get("pack_id") or "").strip(),
         "voice_hint": str(raw.get("voice_hint") or "").strip(),
         "trait": str(raw.get("trait") or "").strip(),
+        "age_band": str(raw.get("age_band") or "").strip(),
         "hair": str(raw.get("hair") or "").strip(),
         "eyes": str(raw.get("eyes") or "").strip(),
         "outfit": str(raw.get("outfit") or "").strip(),
@@ -1201,6 +1241,15 @@ def load_characters(slug: str) -> list[dict[str, Any]]:
             continue
         seen.add(rec["id"])
         out.append(rec)
+    # 外形文案以 series_pack 为 SSOT
+    try:
+        from tools.drama_layout import hydrate_characters_from_pack, load_pack_or_none
+
+        pack = load_pack_or_none(slug)
+        if pack is not None:
+            out = hydrate_characters_from_pack(out, pack)
+    except Exception:
+        pass
     return out
 
 
@@ -1259,8 +1308,12 @@ def upsert_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         merged = {**existing, **{k: v for k, v in patch.items() if v is not None}}
         merged["id"] = cid
         merged["name"] = name or str(merged.get("name") or cid)
-        # 新建角色未显式指定音色时，按性别自动挑选（避免所有角色都落 DEFAULT_VOICE）
-        if is_new and not str(merged.get("voice") or "").strip():
+        # 新建角色未显式指定音色时，按性别自动挑选（道具/场景无音色，跳过）
+        if (
+            is_new
+            and normalize_category(merged.get("category")) == "character"
+            and not str(merged.get("voice") or "").strip()
+        ):
             merged["voice"] = pick_default_voice(slug, normalize_gender(merged.get("gender")), cards)
         rec = normalize_character(slug, merged)
         if is_shadow_stage_card(rec):
@@ -1342,9 +1395,12 @@ def save_character_ref(slug: str, cid: str, data: bytes) -> dict[str, Any]:
     cat = normalize_category(rec.get("category"))
     if cat == "scene":
         if rec.get("ref_locked") and ref_plate_exists(slug, rec):
-            raise CharacterError("参考图已锁定，解锁后才能替换")
+            # 允许覆盖：先解锁
+            set_ref_locked(slug, cid, False)
+            rec = find_character(load_characters(slug), cid) or rec
     elif rec.get("ref_locked") and ref_exists(slug, rec):
-        raise CharacterError("参考图已锁定，解锁后才能替换")
+        set_ref_locked(slug, cid, False)
+        rec = find_character(load_characters(slug), cid) or rec
     if not data:
         raise CharacterError("参考图不能为空")
     if cat == "scene":

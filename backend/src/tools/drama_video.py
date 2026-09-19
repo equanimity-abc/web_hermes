@@ -1042,7 +1042,7 @@ def _generate_scene_image(
 
 
 def generate_character_portrait(slug: str, char: dict[str, Any], *, dest_rel: str | None = None, seed: int | None = None) -> str | None:
-    """文生图出定妆图（角色三视图 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None.
+    """文生图出定妆图（角色正面全身 / 物品 / 场景参考）。返回新的 ref 相对路径，失败返回 None.
 
     ``seed`` 显式传入时用于重试；``None`` 时用时间扰动，避免「重新生成」仍画出同一张脸。
     写入前会把旧定妆备份为 ``*.prev.png``，防止误覆盖无法找回。
@@ -2831,7 +2831,24 @@ def render_episode_video(
 
     Call export_episode (or layers including assemble) to build the full episode.
     """
-    doc = sync_shots_doc(slug, episode, markdown, title=title)
+    text = str(markdown or "").strip()
+    if text:
+        try:
+            doc = sync_shots_doc(slug, episode, text, title=title)
+        except Exception:
+            # 合成剧本与解析格式不完全兼容时，回退已有生产态
+            doc = load_doc(slug, episode)
+            if not (doc and doc.get("shots")):
+                raise
+    else:
+        doc = load_doc(slug, episode)
+        if not (doc and doc.get("shots")):
+            try:
+                from tools.drama_layout import ensure_episode_ready
+
+                doc = ensure_episode_ready(slug, episode)
+            except FileNotFoundError as e:
+                raise ValueError("没有分集剧本也没有 shots.json") from e
     ep_title = str(title or doc.get("title") or f"第{episode}集")
     rebuilt: list[int] = []
     skipped: list[int] = []

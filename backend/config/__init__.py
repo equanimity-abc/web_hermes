@@ -29,8 +29,8 @@ class Config:
     )
     ARK_TEXT_MODEL: str = os.getenv("ARK_TEXT_MODEL", "glm-5-2-260617")
     ARK_TEXT_MODEL_ALT: str = os.getenv("ARK_TEXT_MODEL_ALT", "glm-5-2-260617")
-    ARK_IMAGE_MODEL: str = os.getenv("ARK_IMAGE_MODEL", "doubao-seedream-5-0-lite-260128")
-    ARK_VIDEO_MODEL: str = os.getenv("ARK_VIDEO_MODEL", "doubao-seedance-2-0-260128")
+    ARK_IMAGE_MODEL: str = os.getenv("ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
+    ARK_VIDEO_MODEL: str = os.getenv("ARK_VIDEO_MODEL", "doubao-seedance-2-5-260628")
     ARK_AUDIO_MODEL: str = os.getenv("ARK_AUDIO_MODEL", "doubao-seed-audio-1-0")
 
     # 阿里云百炼（DashScope）：出图 / 图生视频 / 高拟真配音

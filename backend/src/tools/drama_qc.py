@@ -837,11 +837,16 @@ def _char_ref_path(slug: str, char: dict[str, Any]) -> str | None:
 
 
 def locked_face_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
-    """本镜出图用的角色参考路径（优先正脸特写；身份主体优先排序）。
+    """本镜出图用的角色参考路径（Ark：大头照→全身照；身份主体优先）。
 
     注意：这是图生图参考，不是身份校验锚；校验请用 ``identity_ref_rel``（全身）。
+    每个角色最多贡献 2 张（脸+身）；总脸槽由 compose 再裁。
     """
-    from tools.drama_characters import character_requires_face_identity, generation_face_ref_rel
+    from tools.drama_characters import (
+        character_ark_pair_refs,
+        character_requires_face_identity,
+        ref_exists,
+    )
 
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
@@ -860,16 +865,12 @@ def locked_face_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
     refs: list[str] = []
     for char in ordered:
         if not char.get("ref_locked") or not ref_exists(slug, char):
-            continue
-        rel = generation_face_ref_rel(slug, char)
-        if not rel:
-            continue
-        try:
-            path = resolve_safe(rel)
-        except ValueError:
-            continue
-        if path.is_file() and rel not in refs:
-            refs.append(rel)
+            # 未锁但文件已在：仍允许作参考（工作台重生成后会自动锁）
+            if not ref_exists(slug, char):
+                continue
+        for rel in character_ark_pair_refs(slug, char):
+            if rel not in refs:
+                refs.append(rel)
     return refs
 
 
@@ -920,24 +921,28 @@ def locked_env_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
     return refs
 
 
-def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 3) -> list[str]:
-    """Seedream 参考打包。
+def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 4) -> list[str]:
+    """Seedream 参考打包（Ark：大头照优先于全身，再环境）。
 
-    对话/近景：优先脸（身份锁），再环境底板；远景/空镜：环境优先。
-    总数 ≤ max_refs；脸最多 2 张。
+    对话/近景：脸→身→环境；远景/空镜：环境优先，再脸身。
+    角色对最多占 2 槽（同一人的大头+全身）；总数 ≤ max_refs。
     """
     from tools.drama_models import infer_kind, infer_size
 
-    limit = max(1, min(int(max_refs or 3), 3))
+    limit = max(1, min(int(max_refs or 4), 4))
     env = locked_env_refs_for_shot(slug, shot)
+    # Ark：单角色最多大头+全身两张，勿塞第二人定妆冲淡身份
     faces = locked_face_refs_for_shot(slug, shot)[:2]
     kind = infer_kind(shot)
     size = infer_size(shot)
-    face_first = kind in ("dialogue", "reaction", "cu", "ms") or size in (
+    face_first = kind in ("dialogue", "reaction", "cu", "ms", "hook", "action") or size in (
         "CU",
         "MCU",
         "ECU",
         "MS",
+        "近景",
+        "特写",
+        "中景",
     )
     primary = faces if face_first else env
     secondary = env if face_first else faces
@@ -952,7 +957,6 @@ def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 
             break
         if rel not in out:
             out.append(rel)
-    # 若尚有空位且有第二环境（道具），补进
     if len(out) < limit:
         for rel in env:
             if len(out) >= limit:
@@ -965,9 +969,9 @@ def compose_shot_image_refs(slug: str, shot: dict[str, Any], *, max_refs: int = 
 def locked_refs_for_shot(slug: str, shot: dict[str, Any]) -> list[str]:
     """本镜出图参考图路径（环境 + 角色），供 Seedream ``image``。
 
-    顺序：地点主底板（若有）→ 身份主体脸 → 其它可锁脸角色（总 ≤3）。
+    Ark：大头照+全身照（≤2）+ 环境；总数 ≤4。
     """
-    return compose_shot_image_refs(slug, shot, max_refs=3)
+    return compose_shot_image_refs(slug, shot, max_refs=4)
 
 
 def _scene_path(shot: dict[str, Any]) -> Path | None:

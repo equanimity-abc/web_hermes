@@ -28,13 +28,39 @@ def test_example_passes_semantic_validator():
     assert errors == []
 
 
-def test_motion_rejects_other_cast_name():
+def test_motion_new_cast_is_warning_with_path():
     raw = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     # shot 1 cast is only linwan; inject 守卫 into motion
     raw["episodes"][0]["shots"][0]["motion"] = "林晚抬眼，守卫冲入画面"
     pack = loads_series_pack(raw)
     issues = validate_series_pack(pack)
-    assert any(i.code == "motion_new_cast" for i in issues)
+    hits = [i for i in issues if i.code == "motion_new_cast"]
+    assert hits
+    assert all(i.level == "warning" for i in hits)
+    assert hits[0].path == "episodes[1].shots[1].motion"
+
+
+def test_merge_does_not_block_on_motion_new_cast():
+    example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    assets = {k: example[k] for k in ("meta", "style", "cast", "locations", "props", "relationships")}
+    episodes = json.loads(json.dumps(example["episodes"]))
+    episodes[0]["shots"][0]["motion"] = "林晚抬眼，守卫冲入画面"
+    pack = merge_series_pack(assets, episodes)  # warning 不阻断
+    assert pack.episodes[0].shots[0].motion == "林晚抬眼，守卫冲入画面"
+
+
+def test_merge_error_includes_path():
+    example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    assets = {k: example[k] for k in ("meta", "style", "cast", "locations", "props", "relationships")}
+    assets["cast"][1]["look_full"] = (
+        "三十岁男子，瓜子脸，墨黑长直发披肩，白底朱红滚边长袍，正面全身站立，浅色纯底"
+    )
+    episodes = json.loads(json.dumps(example["episodes"]))
+    with pytest.raises(ValueError) as ei:
+        merge_series_pack(assets, episodes)
+    msg = str(ei.value)
+    assert "look_collision" in msg
+    assert "cast." in msg
 
 
 def test_look_collision_detected():
@@ -101,3 +127,51 @@ def test_merge_rejects_unknown_location():
     episodes[0]["shots"][0]["location"] = "missing_loc"
     with pytest.raises(Exception):
         merge_series_pack(assets, episodes)
+
+
+def test_extract_json_error_reports_context_and_reason():
+    with pytest.raises(ValueError) as ei:
+        extract_json_payload("抱歉，我无法生成分镜。", phase="phase2")
+    msg = str(ei.value)
+    assert "无法从 LLM 回复解析 JSON" in msg
+    assert "Phase2 分镜数组" in msg
+    assert "未见 JSON 结构" in msg
+    assert "chars=" in msg
+    assert "头: " in msg
+    assert "尾: " in msg
+
+
+def test_extract_json_error_flags_truncation():
+    # 没有任何闭合括号的截断 → 直接/回退都无法解析，必须报“疑似截断”
+    raw = '[{"n":1,"shots":[{"n":1,"still":"愚公拄拐立于山前'
+    with pytest.raises(ValueError) as ei:
+        extract_json_payload(raw, phase="phase2")
+    assert "疑似被 max_tokens 截断" in str(ei.value)
+
+
+def test_extract_json_failure_dumps_raw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tools import workspace as ws
+
+    monkeypatch.setattr(ws, "workspace_root", lambda: tmp_path)
+    raw = '[{"n":1,"shots":[{"n":1,"still":"愚公拄拐立于山前'
+    with pytest.raises(ValueError) as ei:
+        extract_json_payload(raw, phase="phase2", slug="dump-demo")
+    msg = str(ei.value)
+    assert "dramas/dump-demo/logs/series_pack_phase2_last.txt" in msg
+    dumped = tmp_path / "dramas" / "dump-demo" / "logs" / "series_pack_phase2_last.txt"
+    assert dumped.is_file()
+    text = dumped.read_text(encoding="utf-8")
+    assert raw in text
+    assert "chars=" in text
+
+
+def test_dump_raw_failure_is_best_effort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tools import workspace as ws
+
+    monkeypatch.setattr(ws, "workspace_root", lambda: tmp_path)
+    # 非法 slug 使 resolve_safe 抛错 → 落盘失败仅告警，不得掩盖原始解析错误
+    with pytest.raises(ValueError) as ei:
+        extract_json_payload("no json here", phase="phase2", slug="../..")
+    msg = str(ei.value)
+    assert "无法从 LLM 回复解析 JSON" in msg
+    assert "raw=(落盘失败)" in msg

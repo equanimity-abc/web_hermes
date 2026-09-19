@@ -1213,13 +1213,21 @@ def _produce_episode_hq_body(
 
     ep = get_episode(slug, n)
     markdown = ep.get("script")
-    if not markdown:
-        raise FileNotFoundError("没有分集剧本，请先 save_episode")
 
     from tools.drama_video import sync_shots_doc
 
     clock.start("sync")
-    doc = sync_shots_doc(slug, n, str(markdown), title=str(ep.get("title") or ""))
+    # series_pack 时代：已有 shots.json 则直接用生产态，不再强制 ep.md / save_episode
+    doc = load_doc(slug, n)
+    if not (doc and doc.get("shots")):
+        try:
+            from tools.drama_layout import ensure_episode_ready
+
+            doc = ensure_episode_ready(slug, n)
+        except FileNotFoundError as exc:
+            if not markdown:
+                raise FileNotFoundError(str(exc) or "没有分集剧本，请先 save_episode") from exc
+            doc = sync_shots_doc(slug, n, str(markdown), title=str(ep.get("title") or ""))
     from tools.drama_produce_gates import assert_produce_ready
 
     assert_produce_ready(slug, n, force=bool(force or allow_qc_fail_export), doc=doc)

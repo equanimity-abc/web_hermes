@@ -666,6 +666,15 @@ def get_episode(slug: str, episode: int) -> dict[str, Any]:
     )
     script_rel = str(ep_meta.get("path") or _rel(slug, "episodes", f"ep{n:02d}.md"))
     script = _read_text(script_rel)
+    # series_pack SSOT：无可用 ep.md 时从 shots / pack 合成，避免「没有分集剧本」误拦
+    try:
+        from tools.drama_layout import resolve_episode_script
+
+        resolved = resolve_episode_script(slug, n, existing=script, persist=False)
+        if resolved:
+            script = resolved
+    except Exception:
+        pass
     doc = load_doc(slug, n)
     # Heal duration↔timing drift so UI / script / shots.json stay globally consistent.
     if doc and doc_timings_need_sync(doc, script):
@@ -778,15 +787,20 @@ def patch_episode(slug: str, episode: int, patch: dict[str, Any]) -> dict[str, A
 
 def _ensure_shots_doc(slug: str, episode: int) -> dict[str, Any]:
     doc = load_doc(slug, episode)
-    if doc is not None:
+    if doc is not None and doc.get("shots"):
         return doc
-    ep = get_episode(slug, episode)
-    script = ep.get("script")
-    if not script:
-        raise DramaNotFound("没有 shots.json，也没有分集剧本。请先 parse_shots 或 save_episode")
-    from tools.drama_video import sync_shots_doc
+    try:
+        from tools.drama_layout import ensure_episode_ready
 
-    return sync_shots_doc(slug, episode, str(script), title=str(ep.get("title") or ""))
+        return ensure_episode_ready(slug, episode)
+    except FileNotFoundError as e:
+        ep = get_episode(slug, episode)
+        script = ep.get("script")
+        if not script:
+            raise DramaNotFound("没有 shots.json，也没有分集剧本。请先 parse_shots 或 save_episode") from e
+        from tools.drama_video import sync_shots_doc
+
+        return sync_shots_doc(slug, episode, str(script), title=str(ep.get("title") or ""))
 
 
 def patch_shot(slug: str, episode: int, shot_n: int, patch: dict[str, Any]) -> dict[str, Any]:
@@ -1822,9 +1836,7 @@ def rerender_dirty_shots(slug: str, episode: int) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
     _assert_budget(slug, n)
-    ep = get_episode(slug, n)
-    if not ep.get("script"):
-        raise DramaNotFound("没有分集剧本")
+    _ensure_shots_doc(slug, n)
     from tools.drama_queue import drama_jobs
 
     try:
@@ -2451,13 +2463,17 @@ def rerender_dirty_shots_sync(slug: str, episode: int) -> dict[str, Any]:
     """Synchronous rerender — used by tests and legacy callers."""
     slug = parse_slug(slug)
     n = parse_episode(episode)
+    doc = _ensure_shots_doc(slug, n)
     ep = get_episode(slug, n)
-    markdown = ep.get("script")
-    if not markdown:
-        raise DramaNotFound("没有分集剧本")
+    markdown = ep.get("script") or ""
     from tools.drama_video import render_episode_video
 
-    result = render_episode_video(slug, n, str(markdown), title=str(ep.get("title") or ""))
+    result = render_episode_video(
+        slug,
+        n,
+        str(markdown),
+        title=str(ep.get("title") or doc.get("title") or ""),
+    )
     result["impact"] = {
         "rebuilt_shots": result.get("rebuilt_shots") or [],
         "skipped_shots": result.get("skipped_shots") or [],
@@ -2579,6 +2595,12 @@ def save_character(slug: str, patch: dict[str, Any]) -> dict[str, Any]:
         rec = upsert_character(slug, {**patch, "id": cid})
     except CharacterError as e:
         raise DramaBadRequest(str(e)) from e
+    try:
+        from tools.drama_series_pack_materialize import sync_asset_to_series_pack
+
+        sync_asset_to_series_pack(slug, rec)
+    except Exception:
+        pass
     layers: list[str] = []
     if before:
         if str(before.get("look") or "") != str(rec.get("look") or "") or str(
@@ -2657,15 +2679,16 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
     if rec is None:
         raise DramaNotFound(f"找不到资产：{cid}，请先保存")
     cat = normalize_category(rec.get("category"))
-    # Scene: plate is the only visual; lock / ready checks use plate
-    if cat == "scene":
-        if rec.get("ref_locked") and ref_plate_exists(slug, rec):
-            raise DramaBadRequest("参考图已锁定，解锁后才能重新生成")
-    elif rec.get("ref_locked") and ref_exists(slug, rec):
-        raise DramaBadRequest("参考图已锁定，解锁后才能重新生成")
+    # 工作台「重新生成」直接覆盖已有图；流水线仍靠生成后自动锁定
+    was_locked = bool(rec.get("ref_locked"))
+    if was_locked:
+        try:
+            rec = set_ref_locked(slug, cid, False)
+        except Exception:
+            rec = {**rec, "ref_locked": False}
     if not str(rec.get("look") or "").strip():
         raise DramaBadRequest(
-            "请先填写空间描述再生成" if cat == "scene" else "请先填写三视图再生成"
+            "请先填写空间描述再生成" if cat == "scene" else "请先填写全身定妆描述再生成"
         )
 
     from tools.drama_video import generate_character_face_portrait, generate_character_portrait, generate_location_plate
@@ -2692,11 +2715,10 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
             invalidate_character_embedding(slug, cid)
         except Exception:
             pass
-        if lock:
-            try:
-                set_ref_locked(slug, cid, True)
-            except Exception:
-                pass
+        try:
+            set_ref_locked(slug, cid, True)
+        except Exception:
+            pass
         _dirty_shots_for_character(slug, cid, ["scene", "clip"])
         out = find_character(load_characters(slug), cid) or {**rec, **patch}
         return enrich_character(slug, out)
@@ -2734,11 +2756,10 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
         invalidate_character_embedding(slug, cid)
     except Exception:
         pass
-    if lock:
-        try:
-            set_ref_locked(slug, cid, True)
-        except Exception:
-            pass
+    try:
+        set_ref_locked(slug, cid, True)
+    except Exception:
+        pass
     # Regenerated ref / plate must invalidate bound shot scenes.
     _dirty_shots_for_character(slug, cid, ["scene", "clip"])
     out = find_character(load_characters(slug), cid) or rec
@@ -2751,7 +2772,7 @@ def generate_character_ref(slug: str, cid: str, *, lock: bool = False, seed: int
 
 
 def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any]:
-    """根据聊天指令更新三视图描述并重新生成定妆图。"""
+    """根据聊天指令更新全身定妆/正脸描述并重新生成定妆图。"""
     import asyncio
 
     load_project(slug)
@@ -2770,16 +2791,21 @@ def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any
         raise DramaBadRequest("参考图已锁定，解锁后才能调整")
 
     current_look = str(rec.get("look") or "").strip()
+    current_face = str(rec.get("look_face") or "").strip()
     category = str(rec.get("category") or "character")
     name = str(rec.get("name") or cid)
 
     system = (
-        "你是漫剧定妆设定助手。根据用户指令更新三视图文字描述。"
-        "只输出一行，格式严格为：三视图：<更新后的描述>"
+        "你是漫剧定妆设定助手。根据用户指令更新角色外形文字。"
+        "角色定妆用「正面全身」描述，禁止写成三视图/多视角。"
+        "只输出一到两行，格式严格为：\n"
+        "外形：<更新后的正面全身描述>\n"
+        "正脸：<更新后的正脸锚点>（可选，无改动可省略）"
     )
     user = (
         f"资产类型：{category}\n名称：{name}\n"
-        f"当前三视图：{current_look or '（未填写）'}\n\n"
+        f"当前外形：{current_look or '（未填写）'}\n"
+        f"当前正脸：{current_face or '（未填写）'}\n\n"
         f"用户调整指令：{text}"
     )
     raw = asyncio.run(
@@ -2790,16 +2816,23 @@ def refine_character_ref(slug: str, cid: str, instruction: str) -> dict[str, Any
         )
     )
     new_look = current_look
+    new_face = current_face
     for line in str(raw or "").splitlines():
         line = line.strip()
-        if line.startswith("三视图：") or line.startswith("三视图:"):
+        if line.startswith("外形：") or line.startswith("外形:"):
             new_look = line.split("：", 1)[-1].split(":", 1)[-1].strip() or new_look
-        elif line.startswith("外形：") or line.startswith("外形:"):
+        elif line.startswith("正脸：") or line.startswith("正脸:"):
+            new_face = line.split("：", 1)[-1].split(":", 1)[-1].strip() or new_face
+        elif line.startswith("三视图：") or line.startswith("三视图:"):
+            # 兼容旧模型输出：当作全身外形
             new_look = line.split("：", 1)[-1].split(":", 1)[-1].strip() or new_look
-    if new_look == current_look and raw.strip():
+    if new_look == current_look and raw.strip() and "外形" not in raw and "正脸" not in raw:
         new_look = raw.strip()
 
-    upsert_character(slug, {"id": cid, "look": new_look})
+    patch_look: dict[str, Any] = {"id": cid, "look": new_look}
+    if new_face != current_face:
+        patch_look["look_face"] = new_face
+    upsert_character(slug, patch_look)
     rec = find_character(load_characters(slug), cid) or rec
 
     from tools.drama_video import generate_character_face_portrait, generate_character_portrait
@@ -2979,14 +3012,12 @@ def delete_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, A
     return enrich_character(slug, rec)
 
 
+# 高内聚工作台文件：创意 SSOT + 壳 + 资产运行态 + 分集生产态（含 mix）
 SCRIPT_WORKSPACE_KEYS = (
+    "series_pack",
     "project",
-    "bible",
-    "outline",
-    "script",
-    "shots",
     "characters",
-    "mix",
+    "shots",
 )
 
 
@@ -3005,108 +3036,72 @@ def _parse_json_text(raw: str, *, label: str) -> Any:
 
 
 def get_script_workspace(slug: str, episode: int) -> dict[str, Any]:
-    """Load all script-step artifacts for the workbench file editor."""
+    """剧本工作台：以 series_pack 为创意真相源，去掉 bible/outline/ep.md 双写。"""
     slug = parse_slug(slug)
     n = parse_episode(episode)
     project = load_project(slug)
 
-    from tools.drama_step_contract import (
-        load_step1_doc,
-        load_step1_script_text,
-        step1_bible_rel,
-        step1_outline_rel,
-        step1_script_rel,
-        step1_shots_rel,
-    )
-
-    # Prefer step1_script (unique truth); fall back to legacy paths for older projects.
-    script_path = step1_script_rel(slug, n)
-    shots_path = step1_shots_rel(slug, n)
-    legacy_script = _rel(slug, "episodes", f"ep{n:02d}.md")
-    legacy_shots = json_rel(slug, n)
-    characters_path = _rel(slug, "characters.json")
-    project_path = _project_rel(slug)
-    bible_path = step1_bible_rel(slug)
-    outline_path = step1_outline_rel(slug)
-    legacy_bible = _rel(slug, "bible.md")
-    legacy_outline = _rel(slug, "outline.md")
-    mix_path = _rel(slug, "videos", f"ep{n:02d}", "mix.json")
-
     from tools.drama_audio import load_mix
     from tools.drama_characters import load_characters
+    from tools.drama_layout import series_pack_rel as pack_rel
+    from tools.drama_series_pack import dump_series_pack
+    from tools.drama_series_pack_gen import load_saved_series_pack
 
-    doc = load_step1_doc(slug, n)
-    if doc is None:
-        doc = load_doc(slug, n)
-        shots_path = legacy_shots
+    characters_path = _rel(slug, "characters.json")
+    project_path = _project_rel(slug)
+    shots_path = json_rel(slug, n)
+    pack_path = pack_rel(slug)
+
+    doc = load_doc(slug, n)
     mix = load_mix(slug, n)
+    if isinstance(doc, dict) and "mix" not in doc:
+        doc = {**doc, "mix": mix}
     chars = load_characters(slug)
-    script_text = load_step1_script_text(slug, n) or _read_text(legacy_script) or ""
-    if not script_text.strip():
-        script_path = legacy_script
-    bible_text = _read_text(bible_path) or _read_text(legacy_bible) or ""
-    if not bible_text.strip():
-        bible_path = legacy_bible
-    outline_text = _read_text(outline_path) or _read_text(legacy_outline) or ""
-    if not outline_text.strip():
-        outline_path = legacy_outline
+
+    pack = load_saved_series_pack(slug)
+    pack_text = ""
+    if pack is not None:
+        pack_text = dump_series_pack(pack) + "\n"
+    else:
+        try:
+            p = resolve_safe(pack_path)
+            if p.is_file():
+                pack_text = p.read_text(encoding="utf-8")
+        except Exception:
+            pack_text = ""
 
     files = {
-        "script": {
-            "key": "script",
-            "label": f"ep{n:02d}.md",
-            "path": script_path,
-            "format": "markdown",
-            "exists": bool(script_text.strip()),
-            "content": script_text,
-        },
-        "shots": {
-            "key": "shots",
-            "label": "分镜 shots.json",
-            "path": shots_path,
+        "series_pack": {
+            "key": "series_pack",
+            "label": "剧包 series_pack.json（创意 SSOT）",
+            "path": pack_path,
             "format": "json",
-            "exists": doc is not None,
-            "content": _pretty_json(doc) if doc is not None else "",
-        },
-        "characters": {
-            "key": "characters",
-            "label": "角色/场景/道具 characters.json",
-            "path": characters_path,
-            "format": "json",
-            "exists": True,
-            "content": _pretty_json({"characters": chars}),
+            "exists": bool(pack_text.strip()),
+            "content": pack_text if pack_text.endswith("\n") else (pack_text + ("\n" if pack_text else "")),
         },
         "project": {
             "key": "project",
-            "label": "项目 project.json",
+            "label": "项目壳 project.json",
             "path": project_path,
             "format": "json",
             "exists": True,
             "content": _pretty_json(project),
         },
-        "bible": {
-            "key": "bible",
-            "label": "圣经 bible.md",
-            "path": bible_path,
-            "format": "markdown",
-            "exists": bool(bible_text.strip()),
-            "content": bible_text,
-        },
-        "outline": {
-            "key": "outline",
-            "label": "大纲 outline.md",
-            "path": outline_path,
-            "format": "markdown",
-            "exists": bool(outline_text.strip()),
-            "content": outline_text,
-        },
-        "mix": {
-            "key": "mix",
-            "label": "配乐 mix.json",
-            "path": mix_path,
+        "characters": {
+            "key": "characters",
+            "label": "资产运行态 characters.json",
+            "path": characters_path,
             "format": "json",
             "exists": True,
-            "content": _pretty_json(mix),
+            "content": _pretty_json({"characters": chars}),
+        },
+        "shots": {
+            "key": "shots",
+            "label": "分集生产态 shots.json（含 mix）",
+            "path": shots_path,
+            "format": "json",
+            "exists": doc is not None,
+            "content": _pretty_json(doc) if doc is not None else "",
         },
     }
     return {
@@ -3114,6 +3109,7 @@ def get_script_workspace(slug: str, episode: int) -> dict[str, Any]:
         "episode": n,
         "keys": list(SCRIPT_WORKSPACE_KEYS),
         "files": files,
+        "layout": "series_pack_ssot",
     }
 
 
@@ -3124,27 +3120,33 @@ def save_script_workspace(
     *,
     keys: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Persist one or more script-step files. keys=None means save all provided."""
+    """Persist workspace files. Creative edits to series_pack; runtime to characters/shots."""
     slug = parse_slug(slug)
     n = parse_episode(episode)
     load_project(slug)
     if not isinstance(files, dict):
         raise DramaBadRequest("files 必须是对象")
 
-    wanted = [k for k in (keys or list(files.keys())) if k in SCRIPT_WORKSPACE_KEYS]
+    # 兼容旧键名：bible/outline/script/mix 忽略或映射
+    alias = {"script": "series_pack", "bible": "series_pack", "outline": "series_pack", "mix": "shots"}
+    normalized: dict[str, Any] = {}
+    for k, v in files.items():
+        normalized[alias.get(k, k)] = v
+
+    wanted = [k for k in (keys or list(normalized.keys())) if k in SCRIPT_WORKSPACE_KEYS or k in alias]
+    wanted = [alias.get(k, k) for k in wanted]
+    wanted = [k for k in wanted if k in SCRIPT_WORKSPACE_KEYS]
     if not wanted:
         raise DramaBadRequest("没有可保存的文件键")
 
     saved: list[str] = []
     hints: list[str] = []
-
-    # Order matters: script syncs shots/characters; save script before independent JSON if both present.
     order = [k for k in SCRIPT_WORKSPACE_KEYS if k in wanted]
 
     for key in order:
-        if key not in files:
+        if key not in normalized:
             continue
-        raw = files[key]
+        raw = normalized[key]
         content = raw if isinstance(raw, str) else (
             raw.get("content") if isinstance(raw, dict) else None
         )
@@ -3152,12 +3154,19 @@ def save_script_workspace(
             raise DramaBadRequest(f"{key} 缺少 content")
         text = str(content)
 
-        if key == "script":
-            if not text.strip():
-                raise DramaBadRequest("剧本不能为空")
-            save_script(slug, n, text)
+        if key == "series_pack":
+            from tools.drama_series_pack import loads_series_pack
+            from tools.drama_series_pack_gen import save_series_pack
+            from tools.drama_series_pack_materialize import materialize_series_pack
+            from tools.drama_series_pack_validate import assert_series_pack_valid
+
+            data = _parse_json_text(text, label="series_pack.json")
+            pack = assert_series_pack_valid(loads_series_pack(data))
+            save_series_pack(slug, pack)
+            # 同步运行态 / 生产态副本（不写 bible 真相源）
+            materialize_series_pack(slug, pack, write_bible=False)
             saved.append(key)
-            hints.append("已保存剧本并同步 shots / 角色资产")
+            hints.append("已保存 series_pack 并同步资产/分镜运行态")
         elif key == "shots":
             data = _parse_json_text(text, label="shots.json")
             if not isinstance(data, dict):
@@ -3166,10 +3175,16 @@ def save_script_workspace(
             data["episode"] = n
             if "shots" not in data or not isinstance(data.get("shots"), list):
                 raise DramaBadRequest("shots.json 需要 shots 数组")
+            # mix 内嵌时一并落盘
+            if isinstance(data.get("mix"), dict):
+                from tools.drama_audio import save_mix
+
+                save_mix(slug, n, data["mix"])
             save_doc(data)
             saved.append(key)
         elif key == "characters":
             from tools.drama_characters import save_characters
+            from tools.drama_series_pack_materialize import sync_asset_to_series_pack
 
             data = _parse_json_text(text, label="characters.json")
             if isinstance(data, dict) and isinstance(data.get("characters"), list):
@@ -3179,39 +3194,26 @@ def save_script_workspace(
             else:
                 raise DramaBadRequest("characters.json 需要 {characters:[…]} 或数组")
             save_characters(slug, cards)
+            for rec in cards:
+                if isinstance(rec, dict):
+                    try:
+                        sync_asset_to_series_pack(slug, rec)
+                    except Exception:
+                        pass
             saved.append(key)
+            hints.append("资产运行态已保存；外形文案已回写 series_pack")
         elif key == "project":
+            from tools.drama_layout import slim_project_shell, load_pack_or_none
+
             data = _parse_json_text(text, label="project.json")
             if not isinstance(data, dict):
                 raise DramaBadRequest("project.json 必须是对象")
             data["slug"] = slug
+            pack = load_pack_or_none(slug)
+            if pack is not None:
+                data = slim_project_shell(data, pack)
+                data["slug"] = slug
             save_project(slug, data)
-            saved.append(key)
-        elif key == "bible":
-            _write_text(_rel(slug, "bible.md"), text.rstrip() + ("\n" if text.strip() else ""))
-            try:
-                from tools.drama_step_contract import step1_bible_rel
-
-                _write_text(step1_bible_rel(slug), text.rstrip() + ("\n" if text.strip() else ""))
-            except Exception:
-                pass
-            saved.append(key)
-        elif key == "outline":
-            _write_text(_rel(slug, "outline.md"), text.rstrip() + ("\n" if text.strip() else ""))
-            try:
-                from tools.drama_step_contract import step1_outline_rel
-
-                _write_text(step1_outline_rel(slug), text.rstrip() + ("\n" if text.strip() else ""))
-            except Exception:
-                pass
-            saved.append(key)
-        elif key == "mix":
-            from tools.drama_audio import save_mix
-
-            data = _parse_json_text(text, label="mix.json")
-            if not isinstance(data, dict):
-                raise DramaBadRequest("mix.json 必须是对象")
-            save_mix(slug, n, data)
             saved.append(key)
 
     workspace = get_script_workspace(slug, n)

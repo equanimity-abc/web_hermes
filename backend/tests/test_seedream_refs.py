@@ -20,15 +20,26 @@ def test_prompt_with_identity_refs():
     one = ark_providers._prompt_with_identity_refs("竖屏近景嫦娥", ref_count=1)
     assert "定妆" in one and "全新构图" in one
     two = ark_providers._prompt_with_identity_refs("双人镜", ref_count=2)
-    assert "图1" in two and "身份锁" in two and "图2" in two
+    assert "大头照" in two or "全身照" in two or "定妆" in two
     assert "拼贴" in two or "叠印" in two
     none = ark_providers._prompt_with_identity_refs("空镜", ref_count=0)
     assert none == "空镜"
     face = ark_providers._prompt_with_identity_refs(
         "正脸特写", ref_count=1, lock_mode="face_from_body"
     )
-    assert "正脸特写" in face and "同一性别" in face
+    assert "正脸" in face and "同一性别" in face
     assert "全新构图" not in face
+    # 路径感知：大头 + 全身
+    pair = ark_providers._prompt_with_identity_refs(
+        "对话近景",
+        ref_count=2,
+        refs=(
+            "dramas/demo/characters/hero_face.png",
+            "dramas/demo/characters/hero.png",
+        ),
+    )
+    assert "大头照" in pair and "全身照" in pair
+    assert "图1" in pair and "图2" in pair
 
 
 def test_seedream_image_payload_single_and_multi(tmp_path, monkeypatch):
@@ -46,6 +57,6 @@ def test_seedream_image_payload_single_and_multi(tmp_path, monkeypatch):
     )
     single = ark_providers._seedream_image_payload(("ref-a",))
     assert single == "data:image/jpeg;base64,ref-a"
-    multi = ark_providers._seedream_image_payload(("ref-a", "ref-b", "ref-c", "ref-d"))
+    multi = ark_providers._seedream_image_payload(("ref-a", "ref-b", "ref-c", "ref-d", "ref-e"))
     assert isinstance(multi, list)
-    assert len(multi) == 3  # capped
+    assert len(multi) == 4  # Ark face+body+env cap

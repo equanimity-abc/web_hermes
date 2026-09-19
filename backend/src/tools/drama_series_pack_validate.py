@@ -3,7 +3,7 @@
 规则来源：剧本 SSOT 方案
 1. shots 引用的 cast/location/props 必须可解析（Pydantic 已覆盖）
 2. still 禁止过程词（Pydantic 已覆盖）
-3. motion 不得引入本镜以外角色名 / 其它场景名
+3. motion 引入本镜以外角色名 / 其它场景名（warning，仅提示不阻断）
 4. dialogue.speaker ∈ shot.cast（Pydantic 已覆盖）
 5. 两角色 look_full 主色+发型不得雷同
 6. plate 禁止人物（Pydantic 已覆盖）
@@ -181,7 +181,8 @@ def validate_series_pack(
                         )
                     )
 
-            # Rule 3: motion must not introduce other cast/location names
+            # Rule 3 (warning): motion 引入本镜以外角色/场景名只提示，不阻断成片。
+            # 反应镜里「智叟讥讽愚公」这类提法很常见，硬闸会反复打回 LLM 也改不净。
             allowed_cast_names = {
                 cast_by_id[cid].name for cid in shot.cast if cid in cast_by_id
             }
@@ -192,6 +193,7 @@ def validate_series_pack(
                             code="motion_new_cast",
                             message=f"motion 出现本镜以外角色名「{name}」",
                             path=f"{path}.motion",
+                            level="warning",
                         )
                     )
             shot_loc = loc_by_id.get(shot.location)
@@ -203,6 +205,7 @@ def validate_series_pack(
                             code="motion_new_location",
                             message=f"motion 出现其它场景名「{name}」",
                             path=f"{path}.motion",
+                            level="warning",
                         )
                     )
 

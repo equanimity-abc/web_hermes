@@ -193,6 +193,10 @@ class CharacterBody(BaseModel):
     category: str | None = None
     aliases: list[str] | str | None = None
     look: str | None = None
+    look_face: str | None = None
+    age_band: str | None = None
+    trait: str | None = None
+    voice_hint: str | None = None
     hair: str | None = None
     eyes: str | None = None
     outfit: str | None = None

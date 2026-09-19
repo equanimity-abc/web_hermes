@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -62,6 +63,185 @@ STILL_PROCESS_FORBIDDEN = frozenset(
 CAMERA_MOVES: tuple[str, ...] = ("推", "拉", "摇", "移", "跟", "升", "降", "环绕", "固定")
 SHOT_SIZES: tuple[str, ...] = ("远景", "全景", "中景", "近景", "特写")
 
+_GENDER_ALIASES: dict[str, Literal["male", "female", "other"]] = {
+    "male": "male",
+    "m": "male",
+    "男": "male",
+    "男性": "male",
+    "男子": "male",
+    "男生": "male",
+    "female": "female",
+    "f": "female",
+    "女": "female",
+    "女性": "female",
+    "女子": "female",
+    "女生": "female",
+    "other": "other",
+    "其他": "other",
+    "中性": "other",
+    "未知": "other",
+}
+
+_HANDHELD_LOOK_RE = re.compile(
+    r"(手持|握着|拿着|扛着|背着|拄着|带着|挥舞|抡起)[^，；。、,\s]{0,16}"
+)
+
+
+def coerce_gender(value: Any) -> Literal["male", "female", "other"]:
+    key = str(value or "").strip().lower()
+    # keep CJK keys as-is for alias lookup
+    raw = str(value or "").strip()
+    if raw in _GENDER_ALIASES:
+        return _GENDER_ALIASES[raw]
+    if key in _GENDER_ALIASES:
+        return _GENDER_ALIASES[key]
+    if "女" in raw:
+        return "female"
+    if "男" in raw:
+        return "male"
+    return "other"
+
+
+_KIND_ALIASES: dict[str, str] = {
+    "hook": "hook",
+    "dialogue": "dialogue",
+    "action": "action",
+    "reaction": "reaction",
+    "insert": "insert",
+    "establishing": "establishing",
+    "title": "title",
+    "crowd": "crowd",
+    # LLM 常见中文/口语别名
+    "钩子": "hook",
+    "对白": "dialogue",
+    "对话": "dialogue",
+    "台词": "dialogue",
+    "动作": "action",
+    "反应": "reaction",
+    "特写": "insert",
+    "道具": "insert",
+    "空镜": "establishing",
+    "场景": "establishing",
+    "定场": "establishing",
+    "标题": "title",
+    "字幕": "title",
+    "人群": "crowd",
+    "群像": "crowd",
+}
+
+
+def coerce_kind(value: Any) -> ShotKind:
+    """把 LLM 常见的中文/口语 kind 归一为合法 ShotKind。"""
+    raw = str(value or "").strip()
+    key = raw.lower()
+    if key in _KIND_ALIASES:
+        return cast(ShotKind, _KIND_ALIASES[key])
+    if raw in _KIND_ALIASES:
+        return cast(ShotKind, _KIND_ALIASES[raw])
+    return "establishing"
+
+
+def coerce_palette(value: Any) -> list[str]:
+    if isinstance(value, list):
+        items = [str(x).strip() for x in value if str(x).strip()]
+        return items[:5]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    parts = re.split(r"[,，、/;；|+\n]+", text)
+    items = [p.strip() for p in parts if p.strip()]
+    if len(items) <= 1 and len(text) > 24:
+        # 整句色板：截成短片段，避免整段塞进单元素超长
+        items = [text[:40]]
+    return items[:5]
+
+
+def sanitize_look_full(value: str) -> str:
+    """去掉 look_full 里的手持道具措辞，避免 LLM 脏输出阻断整包校验。"""
+    original = str(value or "").strip()
+    if not original:
+        return original
+    s = _HANDHELD_LOOK_RE.sub("", original)
+    for bad in ("手持", "握着锄", "拿着刀", "扛着"):
+        s = s.replace(bad, "")
+    s = re.sub(r"[，、；]{2,}", "，", s)
+    s = re.sub(r"^[\s，、；]+|[\s，、；]+$", "", s)
+    cleaned = s.strip("，、； ")
+    if len(cleaned) >= 20:
+        return cleaned
+    # 剥离后过短：补一句中性定妆锚点，仍禁止把道具措辞留回
+    padded = (cleaned or "正面全身定妆") + "，站姿自然，浅色纯底，五官服装可辨"
+    return padded[:400]
+
+
+_DIALOGUE_FIELDS = ("speaker", "text", "emotion")
+_DIALOGUE_TEXT_ALIASES = ("line", "台词", "字幕", "对白", "content")
+
+
+def _coerce_dialogue_line(item: dict[str, Any]) -> dict[str, Any]:
+    """dialogue[] 只保留 schema 字段，并吸收 line/字幕 等别名到 text。"""
+    out = {k: item[k] for k in _DIALOGUE_FIELDS if k in item}
+    if "text" not in out:
+        for alias in _DIALOGUE_TEXT_ALIASES:
+            if alias in item:
+                out["text"] = item[alias]
+                break
+    return out
+
+
+def normalize_series_pack_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """加载前纠偏 LLM 常见脏字段（gender/palette/look_full 及 kind/dialogue 字段名）。"""
+    out = dict(data)
+    style = out.get("style")
+    if isinstance(style, dict):
+        style = dict(style)
+        if "palette" in style:
+            style["palette"] = coerce_palette(style.get("palette"))
+        out["style"] = style
+    cast = out.get("cast")
+    if isinstance(cast, list):
+        rows = []
+        for row in cast:
+            if not isinstance(row, dict):
+                rows.append(row)
+                continue
+            item = dict(row)
+            if "gender" in item:
+                item["gender"] = coerce_gender(item.get("gender"))
+            if item.get("look_full"):
+                item["look_full"] = sanitize_look_full(str(item["look_full"]))
+            rows.append(item)
+        out["cast"] = rows
+    episodes = out.get("episodes")
+    if isinstance(episodes, list):
+        eps = []
+        for ep in episodes:
+            if not isinstance(ep, dict):
+                eps.append(ep)
+                continue
+            ep_item = dict(ep)
+            shots = ep_item.get("shots")
+            if isinstance(shots, list):
+                fixed_shots = []
+                for shot in shots:
+                    if not isinstance(shot, dict):
+                        fixed_shots.append(shot)
+                        continue
+                    s = dict(shot)
+                    if "kind" in s:
+                        s["kind"] = coerce_kind(s.get("kind"))
+                    dlg = s.get("dialogue")
+                    if isinstance(dlg, list):
+                        s["dialogue"] = [
+                            _coerce_dialogue_line(x) if isinstance(x, dict) else x
+                            for x in dlg
+                        ]
+                    fixed_shots.append(s)
+                ep_item["shots"] = fixed_shots
+            eps.append(ep_item)
+        out["episodes"] = eps
+    return out
+
 
 class PackModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -89,6 +269,11 @@ class SeriesStyle(PackModel):
     audio_default: AudioMode = "native"
     bgm_mood: str = ""
     bgm_instruments: str = ""
+
+    @field_validator("palette", mode="before")
+    @classmethod
+    def _palette_list(cls, v: Any) -> list[str]:
+        return coerce_palette(v)
 
 
 class CastMember(PackModel):
@@ -118,13 +303,15 @@ class CastMember(PackModel):
     trait: str = ""
     catchphrase: str = ""
 
-    @field_validator("look_full")
+    @field_validator("gender", mode="before")
     @classmethod
-    def _no_handheld_props(cls, v: str) -> str:
-        for bad in ("手持", "握着锄", "拿着刀", "扛着"):
-            if bad in v:
-                raise ValueError(f"look_full 禁止手持道具措辞：{bad}（道具写入 props）")
-        return v
+    def _gender_en(cls, v: Any) -> str:
+        return coerce_gender(v)
+
+    @field_validator("look_full", mode="before")
+    @classmethod
+    def _strip_handheld_props(cls, v: Any) -> str:
+        return sanitize_look_full(str(v or ""))
 
 
 class LocationSpec(PackModel):
@@ -201,8 +388,10 @@ class ShotSpec(PackModel):
     def _timing_and_motion(self) -> ShotSpec:
         if self.t_out <= self.t_in:
             raise ValueError("t_out 必须大于 t_in")
-        if self.kind in ("dialogue", "action", "reaction", "hook") and not str(self.motion or "").strip():
-            raise ValueError(f"{self.kind} 镜必须填写 motion")
+        if self.kind == "establishing":
+            raise ValueError("禁止 establishing/空镜（每镜必须有主体动作，全部走 I2V）")
+        if not str(self.motion or "").strip():
+            raise ValueError(f"{self.kind} 镜必须填写 motion（全部走 I2V，禁止静止空镜）")
         for line in self.dialogue:
             if line.speaker not in self.cast:
                 raise ValueError(f"dialogue.speaker={line.speaker} 不在本镜 cast 中")
@@ -282,7 +471,9 @@ def series_pack_json_schema() -> dict[str, Any]:
 def loads_series_pack(data: dict[str, Any] | str | bytes) -> SeriesPack:
     if isinstance(data, (str, bytes)):
         data = json.loads(data)
-    return SeriesPack.model_validate(data)
+    if not isinstance(data, dict):
+        raise TypeError("SeriesPack 须为 JSON 对象")
+    return SeriesPack.model_validate(normalize_series_pack_payload(data))
 
 
 def load_series_pack_file(path: str | Path) -> SeriesPack:

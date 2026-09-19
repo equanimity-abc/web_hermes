@@ -1,9 +1,15 @@
 """SeriesPack → 下游资产 / shots：只拷贝字段，禁止 LLM/规则扩写外形与场景。
 
-正式产物：
-- dramas/{slug}/series_pack.json（已由 gen 落盘）
-- characters.json：cast / locations / props 卡片（look 原样拷贝）
-- videos/epNN/shots.json + step1_script：分镜字段仍兼容旧键，但 画面=still 拷贝
+正式产物（高内聚）::
+
+- dramas/{slug}/series_pack.json     创意唯一真相源
+- dramas/{slug}/characters.json      资产运行态（定妆路径/锁）
+- dramas/{slug}/videos/epNN/shots.json  分集生产态（候选/QC/mix）
+- dramas/{slug}/project.json         项目壳
+
+可选导出（非真相源）::
+
+- dramas/{slug}/exports/bible.md · outline.md
 """
 
 from __future__ import annotations
@@ -108,6 +114,7 @@ def materialize_series_pack_assets(slug: str, pack: SeriesPack) -> dict[str, Any
             "look": look,  # 原样
             "look_face": face,
             "gender": member.gender if member.gender in ("male", "female") else "",
+            "age_band": member.age_band or "",
             "catchphrase": member.catchphrase or "",
             "trait": member.trait or "",
             "pack_id": member.id,
@@ -279,8 +286,115 @@ def materialize_series_pack_episode(slug: str, pack: SeriesPack, episode: int) -
     }
 
 
-def write_bible_outline_from_pack(slug: str, pack: SeriesPack) -> dict[str, str]:
-    """从 SeriesPack 拷贝生成 bible.md / outline.md（给人读，不做扩写）。"""
+def sync_asset_to_series_pack(slug: str, rec: dict[str, Any]) -> bool:
+    """把角色/场景/道具卡字段写回 series_pack.json（有则更新，无包则跳过）。"""
+    from tools.drama_characters import normalize_category
+    from tools.drama_series_pack import dump_series_pack, loads_series_pack
+    from tools.drama_series_pack_gen import load_saved_series_pack, save_series_pack
+
+    pack = load_saved_series_pack(slug)
+    if pack is None:
+        return False
+    data = json.loads(dump_series_pack(pack))
+    pack_id = str(rec.get("pack_id") or rec.get("id") or "").strip()
+    name = str(rec.get("name") or "").strip()
+    cat = normalize_category(rec.get("category"))
+    changed = False
+
+    if cat == "character":
+        for row in data.get("cast") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or "") not in {pack_id, str(rec.get("id") or "")} and str(
+                row.get("name") or ""
+            ) != name:
+                continue
+            if name:
+                row["name"] = name
+            look = str(rec.get("look") or "").strip()
+            if look:
+                row["look_full"] = look
+            face = str(rec.get("look_face") or "").strip()
+            if face:
+                row["look_face"] = face
+            gender = str(rec.get("gender") or "").strip()
+            if gender in ("male", "female", "other"):
+                row["gender"] = gender
+            age = str(rec.get("age_band") or "").strip()
+            if age:
+                row["age_band"] = age
+            voice_hint = str(rec.get("voice_hint") or "").strip()
+            if voice_hint:
+                row["voice"] = voice_hint
+            voice_id = str(rec.get("voice") or "").strip()
+            if voice_id:
+                row["voice_id"] = voice_id
+            trait = str(rec.get("trait") or "").strip()
+            if trait:
+                row["trait"] = trait
+            catchphrase = str(rec.get("catchphrase") or "").strip()
+            row["catchphrase"] = catchphrase
+            changed = True
+            break
+    elif cat == "scene":
+        for row in data.get("locations") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or "") not in {pack_id, str(rec.get("id") or "")} and str(
+                row.get("name") or ""
+            ) != name:
+                continue
+            if name:
+                row["name"] = name
+            look = str(rec.get("look") or "").strip()
+            if look:
+                # look 可能带「光影/标志物」后缀；若含空镜/静帧则整段回写 plate
+                row["plate"] = look
+            changed = True
+            break
+    elif cat == "prop":
+        for row in data.get("props") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or "") not in {pack_id, str(rec.get("id") or "")} and str(
+                row.get("name") or ""
+            ) != name:
+                continue
+            if name:
+                row["name"] = name
+            look = str(rec.get("look") or "").strip()
+            if look:
+                row["look"] = look
+            role = str(rec.get("role") or rec.get("trait") or "").strip()
+            if role:
+                row["role"] = role
+            changed = True
+            break
+
+    if not changed:
+        return False
+    try:
+        updated = loads_series_pack(data)
+    except Exception:
+        # plate 等校验失败时仍尽量落盘原始 JSON（避免挡住定妆重生成）
+        path = resolve_safe(series_pack_rel(slug))
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return True
+    save_series_pack(slug, updated)
+    return True
+
+
+def write_bible_outline_from_pack(
+    slug: str,
+    pack: SeriesPack,
+    *,
+    dest: str = "exports",
+) -> dict[str, str]:
+    """从 SeriesPack 生成可读 markdown。
+
+    dest=\"exports\"（默认）：写入 ``exports/``，根目录 bible/outline 仅留迁移提示。
+    dest=\"root\"：兼容旧行为，直接写根目录（不推荐）。
+    """
     cast_lines = ["# 人设圣经", "", "## 风格", pack.style.visual, ""]
     cast_lines.append("## 角色")
     for c in pack.cast:
@@ -348,65 +462,50 @@ def write_bible_outline_from_pack(slug: str, pack: SeriesPack) -> dict[str, str]
 
     root = resolve_safe(f"dramas/{slug}")
     root.mkdir(parents=True, exist_ok=True)
-    (root / "bible.md").write_text(bible, encoding="utf-8")
-    (root / "outline.md").write_text(outline, encoding="utf-8")
-    # step1 copies if helpers exist
-    try:
-        from tools.drama_step_contract import step1_bible_rel, step1_outline_rel
+    stub = (
+        "# 已迁移\n\n"
+        "本文件不再是剧本真相源。请编辑 `series_pack.json`；"
+        "可读导出见 `exports/`。\n"
+    )
+    if dest == "root":
+        (root / "bible.md").write_text(bible, encoding="utf-8")
+        (root / "outline.md").write_text(outline, encoding="utf-8")
+        bible_rel = f"dramas/{slug}/bible.md"
+        outline_rel = f"dramas/{slug}/outline.md"
+    else:
+        export_dir = root / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        (export_dir / "bible.md").write_text(bible, encoding="utf-8")
+        (export_dir / "outline.md").write_text(outline, encoding="utf-8")
+        (root / "bible.md").write_text(stub, encoding="utf-8")
+        (root / "outline.md").write_text(stub, encoding="utf-8")
+        bible_rel = f"dramas/{slug}/exports/bible.md"
+        outline_rel = f"dramas/{slug}/exports/outline.md"
 
-        for rel, text in (
-            (step1_bible_rel(slug), bible),
-            (step1_outline_rel(slug), outline),
-        ):
-            path = resolve_safe(rel)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-    except Exception:
-        pass
-    return {"bible": bible, "outline": outline}
+    return {"bible": bible, "outline": outline, "bible_rel": bible_rel, "outline_rel": outline_rel}
 
 
 def sync_project_episodes_from_pack(slug: str, pack: SeriesPack) -> dict[str, Any]:
-    """更新 project.json 的 episodes 列表与 script_schema 标记。"""
-    from tools.drama_shots import script_rel
+    """更新 project.json 壳字段（集索引）；创意正文不进 project。"""
+    from tools.drama_layout import slim_project_shell
     from tools.drama_studio import load_project, save_project
 
     try:
         project = load_project(slug)
     except Exception:
-        project = {
-            "slug": slug,
-            "title": pack.meta.title,
-            "logline": pack.meta.logline,
-            "episodes": [],
-        }
+        project = {"slug": slug, "title": pack.meta.title, "episodes": []}
         root = resolve_safe(f"dramas/{slug}")
         root.mkdir(parents=True, exist_ok=True)
-    episodes = []
-    for ep in pack.episodes:
-        episodes.append(
-            {
-                "n": int(ep.n),
-                "title": ep.title or pack.meta.title,
-                "seconds": ep.seconds or pack.meta.seconds_per_episode,
-                "path": script_rel(slug, int(ep.n)),
-                "source": "series_pack",
-            }
-        )
-    project["episodes"] = episodes
-    project["script_schema"] = "series_pack"
-    if pack.meta.title and not str(project.get("title") or "").strip():
-        project["title"] = pack.meta.title
-    if pack.meta.logline:
-        project["logline"] = pack.meta.logline
-    series = project.get("series") if isinstance(project.get("series"), dict) else {}
-    series = {
-        **series,
-        "episode_count": max(len(episodes), int(series.get("episode_count") or 1)),
-        "seconds_per_episode": pack.meta.seconds_per_episode,
-        "script_schema": "series_pack",
-    }
-    project["series"] = series
+    videos = project.get("videos")
+    manual = project.get("manual_voice")
+    created = project.get("created_at")
+    project = slim_project_shell(project, pack)
+    if created:
+        project["created_at"] = created
+    if videos is not None:
+        project["videos"] = videos
+    if manual is not None:
+        project["manual_voice"] = bool(manual)
     save_project(slug, project)
     return project
 
@@ -416,9 +515,9 @@ def materialize_series_pack(
     pack: SeriesPack | dict[str, Any] | str | None = None,
     *,
     episodes: list[int] | None = None,
-    write_bible: bool = True,
+    write_bible: bool = False,
 ) -> dict[str, Any]:
-    """端到端：校验 → 拷贝资产 → 拷贝分集分镜。"""
+    """端到端：校验 → 资产运行态 → 分集生产态。默认不把 bible/outline 当真相源。"""
     if pack is None:
         loaded = load_saved_series_pack(slug)
         if loaded is None:
@@ -442,7 +541,7 @@ def materialize_series_pack(
     from tools.drama_series_pack_gen import save_series_pack
 
     save_series_pack(slug, pack_obj)
-    docs = write_bible_outline_from_pack(slug, pack_obj) if write_bible else {}
+    docs = write_bible_outline_from_pack(slug, pack_obj, dest="exports") if write_bible else {}
     project = sync_project_episodes_from_pack(slug, pack_obj)
 
     return {
@@ -453,7 +552,9 @@ def materialize_series_pack(
         "episodes": ep_results,
         "bible_chars": len(docs.get("bible") or ""),
         "outline_chars": len(docs.get("outline") or ""),
+        "exports": {k: docs[k] for k in ("bible_rel", "outline_rel") if k in docs},
         "project_episodes": project.get("episodes") or [],
+        "layout": "series_pack_ssot",
     }
 
 

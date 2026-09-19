@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,13 +26,19 @@ from tools.drama_series_pack import (
 )
 from tools.drama_series_pack_validate import (
     PackIssue,
-    assert_series_pack_valid,
     validate_series_pack,
 )
 from tools.workspace import resolve_safe
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.I)
 _DraftFn = Callable[..., str]
+
+log = logging.getLogger("drama.series_pack")
+
+_PHASE_LABEL = {
+    "phase1": "Phase1 资产骨架",
+    "phase2": "Phase2 分镜数组",
+}
 
 
 PHASE1_SYSTEM = (
@@ -47,11 +55,17 @@ PHASE1_SYSTEM = (
     "}\n"
     "硬性规则：\n"
     "1) id 必须小写英文/数字/下划线，以字母开头（如 linwan）；name 用中文短名，禁止「愚公的孙女」当姓名；\n"
-    "2) look_full=正面全身定妆一整句（只写人物本体，禁止手持道具）；look_face=正脸锚点；\n"
-    "3) voice=性别+年龄+音域+语速+情绪(+方言)；audio_default 默认 native；\n"
-    "4) plate=无人物竖屏空镜一整句，必须含「空镜」或「视频静帧」字样；anchors 1–3 个；\n"
-    "5) 角色彼此在年龄段/发型发色/服装主色/独占锚点上拉开差距；\n"
-    "6) 场景 1–3 个、道具宁少勿滥；禁止输出 episodes。\n"
+    "2) gender 只能是 male/female/other（禁止写「男」「女」）；"
+    "神祇/帝王/传说人物按传统形象定性别（如天帝、山神等男性形象写 male），仅对明确无性别实体才用 other；"
+    "palette 必须是短字符串数组（如 [\"土黄\",\"岩灰\"]），禁止一整句；\n"
+    "3) look_full=正面全身定妆一整句（只写人物本体，禁止手持道具，禁止三视图/多视角），"
+    "必须含发色/发型/胡须/年龄感等身份锚点，禁止只写「面容端正/五官清晰」这类空话；"
+    "look_face=正脸大头照锚点，必须与 look_full 同一人（五官/发色/胡须逐字一致，禁止另写一张脸）；\n"
+    "4) voice=性别+年龄+音域+语速+情绪(+方言)；audio_default 默认 native；"
+    "voice_id 一律留空字符串（系统会按性别自动匹配音色），禁止自编无效音色 id；\n"
+    "5) plate=无人物竖屏空镜一整句，必须含「空镜」或「视频静帧」字样；anchors 1–3 个；\n"
+    "6) 角色彼此在年龄段/发型发色/服装主色/独占锚点上拉开差距；\n"
+    "7) 场景 1–3 个、道具宁少勿滥；禁止输出 episodes。\n"
 )
 
 PHASE2_SYSTEM = (
@@ -62,17 +76,30 @@ PHASE2_SYSTEM = (
     '"n","t_in","t_out","kind","cast","location","props",'
     '"shot_size","camera","still","motion","dialogue","vo","sfx","audio_mode"'
     "}]}]\n"
+    "单镜示例（字段名严格照抄，id 换成输入里的真实 id）：\n"
+    '{"n":1,"t_in":0,"t_out":3,"kind":"hook","cast":["a"],"location":"b","props":[],'
+    '"shot_size":"近景","camera":"推",'
+    '"still":"人物近景正面，眉头紧锁，背景山壁静止",'
+    '"motion":"人物缓缓抬头正对镜头，镜头缓慢前推",'
+    '"dialogue":[{"speaker":"a","text":"这山，非移不可。","emotion":"坚定"}],'
+    '"vo":"","sfx":"","audio_mode":"native"}\n'
     "硬性规则：\n"
-    "1) shot_size 只能是 "
+    "1) kind 只能是 hook/dialogue/action/reaction/insert/title/crowd；禁止 establishing/空镜/纯环境镜头；\n"
+    "2) shot_size 只能是 "
     + "/".join(SHOT_SIZES)
     + "；camera 只能是 "
     + "/".join(CAMERA_MOVES)
     + "；\n"
-    "2) still=冻结静帧（只给 Seedream），禁止过程词：然后/接着/渐渐/跑向/走向/切到/转场/淡入…；\n"
-    "3) motion=相对 still 的动作时序（只给 Seedance）；dialogue/action/hook/reaction 必须有 motion；\n"
-    "4) dialogue[].speaker 必须是本镜 cast 里的 id；禁止旧字段「画面」；\n"
-    "5) 单集场景≤3、道具≤4；时间轴 t_in/t_out 连续覆盖本集秒数；\n"
-    "6) still/motion 里用角色中文短名可以，但不得引入资产包以外的新角色或新场景名。\n"
+    "3) still=冻结静帧（只给 Seedream），禁止任何过程/剪辑词：然后/接着/随后/渐渐/逐渐/移动/飘动/缓缓/跑向/走向/切到/转场/淡入…；动态只写进 motion；\n"
+    "4) motion=相对 still 的动作时序（只给 Seedance），每镜必填（全部走 I2V，禁止静止空镜）；\n"
+    "5) dialogue[] 每项固定三个字段：{\"speaker\":\"<cast id>\",\"text\":\"<台词>\",\"emotion\":\"<可选情绪>\"}；"
+    "台词字段名是 text，禁止写 line/字幕/对白；speaker 必须是本镜 cast 里的 id；\n"
+    "6) 单集场景≤3、道具≤4；时间轴 t_in/t_out 连续覆盖本集秒数；\n"
+    "7) still/motion 里用角色中文短名可以，但不得引入资产包以外的新角色或新场景名；\n"
+    "8) 本镜 cast 必须覆盖 still/motion 里出现的每个角色：motion 里提到哪个中文角色名，就必须把对应 id 写进本镜 cast；不出镜的角色不要在 motion 里写名字。\n"
+    "9) 连续性：相邻 shot 的画面必须承接——motion 开头显式写出上一镜遗留状态（服装破损/伤口/手持道具/人物站位/光照方向），禁止每镜重置状态；\n"
+    "10) 转场：两镜衔接写清「触发点+方式」（动势接动势/遮挡/声音先导/硬切/叠化匹配），禁止无触发点的生硬跳切；\n"
+    "11) sfx=本镜环境声+动作音效（写清来源/方位/音量/时长）；切镜处环境底噪不中断不跳变；上一镜音效余音写进本镜 sfx 开头（如「剑鸣余音延续 0.5s 渐弱」）；\n"
 )
 
 
@@ -98,11 +125,48 @@ def load_saved_series_pack(slug: str) -> SeriesPack | None:
     return loads_series_pack(path.read_text(encoding="utf-8"))
 
 
-def extract_json_payload(text: str) -> Any:
-    """从 LLM 回复中提取 JSON（对象或数组）。"""
+def _dump_raw(slug: str, phase: str, raw: str) -> str | None:
+    """把原始 LLM 回复落盘，便于定位解析失败原因；失败绝不影响主流程。"""
+    if not str(slug or "").strip() or not str(phase or "").strip():
+        return None
+    rel = f"dramas/{slug}/logs/series_pack_{phase}_last.txt"
+    try:
+        path = resolve_safe(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).isoformat()
+        path.write_text(f"# {stamp} chars={len(raw)}\n{raw}\n", encoding="utf-8")
+        return rel
+    except Exception as exc:  # noqa: BLE001 — best-effort 诊断落盘，不能掩盖原始错误
+        log.warning("series pack raw dump failed: %s", exc)
+        return None
+
+
+def _json_failure_reason(raw: str) -> str:
+    """给出「疑似原因」的措辞，仅用于诊断提示，不承担修复。"""
+    opens = raw.count("{") + raw.count("[")
+    closes = raw.count("}") + raw.count("]")
+    if not opens and not closes and '"' not in raw:
+        return "回复中未见 JSON 结构（可能输出的是说明文字）"
+    if opens != closes:
+        return "JSON 括号未闭合，疑似被 max_tokens 截断"
+    return "JSON 语法非法（常见：字符串内裸换行／尾随逗号／全角引号）"
+
+
+def _clip(raw: str, limit: int = 120) -> tuple[str, str]:
+    flat = raw.replace("\r", " ").replace("\n", "⏎")
+    return flat[:limit], flat[-limit:]
+
+
+def extract_json_payload(text: str, *, phase: str = "", slug: str = "") -> Any:
+    """从 LLM 回复中提取 JSON（对象或数组）。
+
+    ``phase`` / ``slug`` 只用于失败诊断（落盘原始回复 + 更可读的报错），
+    不改变任何解析策略，因此复跑仍会复现同一个解析失败。
+    """
+    where = _PHASE_LABEL.get(phase, "未知阶段")
     raw = str(text or "").strip()
     if not raw:
-        raise ValueError("LLM 返回空内容")
+        raise ValueError(f"LLM 返回空内容（{where}）")
     fence = _JSON_FENCE_RE.search(raw)
     if fence:
         raw = fence.group(1).strip()
@@ -119,13 +183,24 @@ def extract_json_payload(text: str) -> Any:
                 return json.loads(raw[start : end + 1])
             except json.JSONDecodeError:
                 continue
-    raise ValueError("无法从 LLM 回复解析 JSON")
+    dump_rel = _dump_raw(slug, phase, raw)
+    head, tail = _clip(raw)
+    raise ValueError(
+        f"无法从 LLM 回复解析 JSON（{where}；{_json_failure_reason(raw)}；"
+        f"chars={len(raw)}；raw={dump_rel or '(落盘失败)'}）\n"
+        f"头: {head} | 尾: {tail}"
+    )
 
 
 def _default_draft(slug: str, prompt: str, *, system: str) -> str:
     from tools.drama_script import draft_text_sync
 
-    return draft_text_sync(slug, prompt, system=system)
+    last = ""
+    for attempt in range(3):
+        last = str(draft_text_sync(slug, prompt, system=system) or "")
+        if last.strip():
+            return last
+    return last
 
 
 def _issues_text(issues: list[PackIssue], *, limit: int = 12) -> str:
@@ -152,7 +227,9 @@ def generate_asset_skeleton(
     if repair_notes:
         user += f"\n上次校验失败，请按下列问题修正后重新输出完整 JSON：\n{repair_notes}\n"
     raw = draft(slug, user, system=PHASE1_SYSTEM)
-    data = extract_json_payload(raw)
+    if not str(raw or "").strip():
+        raise ValueError("LLM 返回空内容（Phase1 资产骨架）")
+    data = extract_json_payload(raw, phase="phase1", slug=slug)
     if not isinstance(data, dict):
         raise ValueError("Phase1 必须返回 JSON 对象")
     data.pop("episodes", None)
@@ -216,7 +293,9 @@ def generate_episodes_for_assets(
     if repair_notes:
         user += f"\n上次校验失败，请按下列问题修正后重新输出完整 episodes JSON 数组：\n{repair_notes}\n"
     raw = draft(slug, user, system=PHASE2_SYSTEM)
-    data = extract_json_payload(raw)
+    if not str(raw or "").strip():
+        raise ValueError("LLM 返回空内容（Phase2 分镜数组）")
+    data = extract_json_payload(raw, phase="phase2", slug=slug)
     if isinstance(data, dict) and isinstance(data.get("episodes"), list):
         episodes = data["episodes"]
     elif isinstance(data, list):
@@ -232,7 +311,12 @@ def merge_series_pack(assets: dict[str, Any], episodes: list[dict[str, Any]]) ->
     merged = dict(assets)
     merged["schema_version"] = SCHEMA_VERSION
     merged["episodes"] = episodes
-    return assert_series_pack_valid(merged)
+    pack = loads_series_pack(merged)
+    issues = validate_series_pack(pack)
+    errors = [i for i in issues if i.level == "error"]
+    if errors:
+        raise ValueError(f"Phase2 校验失败：{_issues_text(errors)}")
+    return pack
 
 
 def generate_series_pack_from_premise(
@@ -242,7 +326,7 @@ def generate_series_pack_from_premise(
     title: str = "",
     episode_count: int = 1,
     seconds_per_episode: int = 60,
-    max_repairs: int = 1,
+    max_repairs: int = 2,
     draft_fn: _DraftFn | None = None,
     persist: bool = True,
 ) -> SeriesPack:
