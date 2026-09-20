@@ -13,13 +13,6 @@ from tools.drama_resume import (
 )
 
 
-def test_classify_identity_failure():
-    c = classify_failure("第3镜角色「愚公」身份相似度未达阈值（cosine=0.67），禁止自动重抽")
-    assert c["stage"] == "identity"
-    assert "scene" in c["dirty"]
-    assert "voice" not in c["dirty"]
-
-
 def test_classify_i2v_sensitive_needs_scene():
     c = classify_failure(
         "Shot 2 需要真 I2V，但得到 none（provider=seedance；HTTP 400: "
@@ -46,11 +39,10 @@ def test_classify_lip_failure():
     assert c["dirty"] == ["lip", "clip"]
 
 
-def test_diagnose_shot_narrows_to_motion_when_identity_ok():
+def test_diagnose_shot_narrows_to_motion():
     shot = {
         "n": 2,
         "assets": {"scene": "a.png", "voice": "a.mp3", "clip": "a.mp4"},
-        "identity": {"status": "ok", "pass": True, "cosine": 0.9},
         "i2v_source": "none",
         "qc": {
             "produce_ok": False,
@@ -63,49 +55,6 @@ def test_diagnose_shot_narrows_to_motion_when_identity_ok():
     assert plan["resume_from"] == "motion"
     assert "scene" not in plan["dirty"]
     assert "voice" not in plan["dirty"]
-
-
-def test_locked_scene_strips_scene_from_identity_dirty():
-    shot = {
-        "n": 4,
-        "locked": ["scene"],
-        "assets": {"scene": "s.png"},
-        "identity": {"status": "ok", "pass": False, "cosine": 0.5},
-        "qc": {
-            "produce_ok": False,
-            "produce_error": "第4镜角色「愚公」身份相似度未达阈值（cosine=0.5），禁止自动重抽",
-        },
-        "dirty": ["scene", "motion", "clip"],
-    }
-    plan = diagnose_shot(shot)
-    assert plan is not None
-    assert "scene" not in plan["dirty"]
-    assert plan["resume_from"] == "identity"
-    assert "锁定" in str(plan.get("hint") or "") or "定妆" in str(plan.get("hint") or "")
-
-
-def test_identity_fixed_manually_advances_to_motion():
-    """先前身份失败，人工改定妆后 identity.pass=True → 向后推进到运动。"""
-    shot = {
-        "n": 5,
-        "locked": ["scene"],
-        "assets": {"scene": "s.png", "voice": "v.mp3"},
-        "字幕": "愚公曰：我死了还有子。",
-        "identity": {"status": "ok", "pass": True, "cosine": 0.88, "required": True},
-        "i2v_source": "none",
-        "qc": {
-            "produce_ok": False,
-            "produce_error": "第5镜角色「愚公」身份相似度未达阈值（cosine=0.4），禁止自动重抽",
-            "produce_stage": "identity",
-        },
-        "dirty": ["scene", "motion", "clip"],
-    }
-    plan = diagnose_shot(shot)
-    assert plan is not None
-    assert plan["resolved_previous"] is True
-    assert plan["resume_from"] == "motion"
-    assert "scene" not in plan["dirty"]
-    assert "已解决" in str(plan.get("hint") or "")
 
 
 def test_strip_locked_dirty_helper():
@@ -126,23 +75,8 @@ def test_refine_plan_sensitive_with_locked_scene():
         },
     )
     assert "scene" not in plan["dirty"]
-    assert plan["resume_from"] == "identity"
-    assert "解锁" in str(plan.get("hint") or "")
-
-
-def test_advance_skips_resolved_identity():
-    shot = {
-        "n": 3,
-        "locked": ["scene"],
-        "assets": {"scene": "s.png", "voice": "v.mp3"},
-        "identity": {"status": "ok", "pass": True, "required": True},
-        "i2v_source": "none",
-    }
-    state = inspect_shot_state(shot)
-    plan = advance_from_failure(shot, state, previous_stage="identity")
-    assert plan is not None
     assert plan["resume_from"] == "motion"
-    assert plan.get("resolved_previous") is True
+    assert "解锁" in str(plan.get("hint") or "")
 
 
 def test_prepare_episode_resume_writes_narrow_dirty(tmp_path, monkeypatch):
@@ -181,39 +115,3 @@ def test_prepare_episode_resume_writes_narrow_dirty(tmp_path, monkeypatch):
     assert saved
     assert saved[0]["dirty"] == ["lip", "clip"]
     assert saved[0]["qc"]["resume_from"] == "lip"
-
-
-def test_prepare_episode_resume_keeps_locked_scene(tmp_path, monkeypatch):
-    doc = {
-        "shots": [
-            {
-                "n": 2,
-                "locked": ["scene"],
-                "assets": {"scene": "s.png"},
-                "identity": {"status": "ok", "pass": False, "cosine": 0.4, "required": True},
-                "qc": {
-                    "produce_ok": False,
-                    "produce_error": "第2镜角色「智叟」身份相似度未达阈值（cosine=0.4），禁止自动重抽",
-                },
-                "dirty": ["scene", "motion", "clip"],
-            }
-        ]
-    }
-    saved: list = []
-
-    monkeypatch.setattr("tools.drama_shots.load_doc", lambda slug, ep: doc)
-    monkeypatch.setattr("tools.drama_shots.find_shot", lambda d, n: next(s for s in d["shots"] if s["n"] == n))
-    monkeypatch.setattr(
-        "tools.drama_shots.merge_save_shot",
-        lambda slug, ep, shot: saved.append(dict(shot)),
-    )
-    monkeypatch.setattr("tools.drama_audio.load_mix", lambda slug, ep: {})
-    monkeypatch.setattr("tools.drama_audio.has_bgm", lambda mix: False)
-    monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: tmp_path / "missing.mp4")
-
-    report = prepare_episode_resume("demo", 1)
-    assert report["failed_count"] == 1
-    assert saved
-    assert "scene" not in saved[0]["dirty"]
-    assert saved[0]["locked"] == ["scene"]
-    assert saved[0]["qc"]["resume_from"] == "identity"

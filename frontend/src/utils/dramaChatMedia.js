@@ -901,6 +901,61 @@ export async function hydrateDramaTerminalFromQueue(messages, { sessionId } = {}
   return any
 }
 
+async function refreshStaleProduceJob(message, tool, data) {
+  const action = String(data?.action || data?.kind || '')
+  if (action !== 'produce_episode' && action !== 'create_from_premise') return false
+  const slug = String(data?.slug || '').trim()
+  if (!slug) return false
+  const episode = Number(data?.episode ?? 1) || 1
+  try {
+    const { listJobs } = await import('@/api/drama')
+    const res = await listJobs({ slug, active: false, limit: 50 })
+    const jobs = (res?.jobs || []).filter(
+      (j) => String(j.kind || '') === 'produce_episode' && Number(j.episode || 0) === episode,
+    )
+    if (!jobs.length) return false
+    const latest = jobs[0]
+    if (latest.status !== 'done') return false
+    const playUrl = latest.result?.play_url || ''
+    tool.status = 'done'
+    tool.result = JSON.stringify({
+      ...data,
+      job_id: latest.job_id,
+      ok: true,
+      status: 'done',
+      slug,
+      episode,
+      play_url: playUrl,
+      progress: latest.progress || {},
+    })
+    if (playUrl && isVideoUrl(playUrl)) {
+      attachDramaMedia(message, {
+        type: 'video',
+        url: playUrl,
+        slug,
+        episode,
+        title: dramaVideoTitle(action, slug, episode),
+        action,
+      })
+    }
+    setMessageDramaJob(message, {
+      state: 'done',
+      jobId: String(latest.job_id),
+      slug,
+      episode,
+      pct: 100,
+      line: '成片已就绪',
+      mediaReady: Boolean(playUrl),
+      error: '',
+    })
+    if (!String(message.content || '').trim()) message.content = '成片已就绪'
+    await persistDramaToolTerminal(message, tool, { sessionId: message.sessionId })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function resumeDramaProgressForMessages(messages, opts = {}) {
   let any = false
   for (const message of messages || []) {
@@ -913,7 +968,11 @@ export async function resumeDramaProgressForMessages(messages, opts = {}) {
       if (String(tool.name || '') !== 'tiktok_drama') continue
       try {
         const data = JSON.parse(tool.result || '')
-        if (data?.ok === false || data?.status === 'gone' || data?.status === 'error') continue
+        if (data?.ok === false || data?.status === 'gone' || data?.status === 'error') {
+          // 历史失败但可能已在工作台续跑成功：查最新 job 覆盖为成功，避免残留「分镜失败」
+          await refreshStaleProduceJob(message, tool, data)
+          continue
+        }
         if (data?.job_id && !data?.play_url) {
           tool.status = tool.status === 'error' ? 'error' : 'running'
           if (!message.dramaJob) {

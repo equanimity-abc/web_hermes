@@ -690,20 +690,6 @@ const selectedKey = computed(() => {
   const keys = props.selected?.keys || []
   return keys.find((k) => k.id === selectedKeyId.value) || keys[0] || null
 })
-const identityLabel = computed(() => {
-  const id = props.selected?.identity
-  if (!id) return props.selected?.identity_hint || '尚未抽检身份'
-  if (id.status === 'skipped') return id.hint || '身份未出分'
-  const score = id.cosine == null ? '—' : Number(id.cosine).toFixed(2)
-  return id.pass ? `身份 ${score} 通过` : `身份 ${score} 未通过`
-})
-const identityClass = computed(() => {
-  const id = props.selected?.identity
-  if (!id) return ''
-  if (id.status === 'skipped') return 'drama-qc-skip'
-  if (id.status === 'ok' && id.pass) return 'drama-qc-pass'
-  return 'drama-qc-fail'
-})
 const i2vSourceLabel = computed(() => i2vSourceLabelFor(props.selected))
 
 function i2vSourceLabelFor(shot) {

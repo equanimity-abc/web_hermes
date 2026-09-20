@@ -211,15 +211,11 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
         pub["lip_base_mismatch"] = bool(pub["lip_base_used"] and has_motion_asset)
         pub["route"] = estimate_i2v(slug, shot)
         from tools.drama_lip import estimate_lip
-        from tools.drama_qc import qc_passed
         from tools.drama_styles import estimate_image
 
         pub["image"] = estimate_image(slug, shot, episode=episode)
 
         pub["lip"] = estimate_lip(slug, shot)
-        pub["identity"] = shot.get("identity") if isinstance(shot.get("identity"), dict) else None
-        pub["identity_hint"] = str(shot.get("identity_hint") or "")
-        pub["identity_passed"] = qc_passed(pub["identity"])
         from tools.drama_keys import estimate_keys
 
         pub["keys"] = []
@@ -2023,16 +2019,15 @@ def qc_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     shot = find_shot(doc, shot_n)
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
-    from tools.drama_qc import qc_passed, qc_shot_identity
+    from tools.drama_qc import qc_shot_bundle, shot_can_pass
 
-    identity = qc_shot_identity(slug, n, shot, apply=True)
+    bundle = qc_shot_bundle(slug, n, shot, apply=True)
     save_doc(doc)
     return {
         "slug": slug,
         "episode": n,
         "n": shot_n,
-        "identity": identity,
-        "passed": qc_passed(identity),
+        "passed": shot_can_pass(bundle),
         "shot": enrich_shot(shot, slug=slug),
     }
 

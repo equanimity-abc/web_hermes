@@ -2177,12 +2177,7 @@ export function useDramaStudio() {
       const result = await dramaApi.qcShot(slug.value, episodeN.value, selectedN.value)
       bust.value = Date.now()
       await openEpisode(episodeN.value)
-      const id = result.identity || {}
-      if (id.status === 'skipped' || !result.passed) {
-        notice.value = id.hint || '身份抽检未出分或未通过，不得记为通过'
-      } else {
-        notice.value = `身份通过（余弦 ${id.cosine}）`
-      }
+      notice.value = result.passed ? '抽检通过' : '抽检未通过'
     } catch (e) {
       error.value = e.message || String(e)
     }

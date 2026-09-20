@@ -8,7 +8,7 @@ import pytest
 
 from tools.drama_characters import (
     enriched_look,
-    identity_ref_rel,
+    anchor_ref_rel,
     normalize_character,
     ref_face_rel,
     traits_incomplete,
@@ -58,11 +58,11 @@ def test_identity_ref_uses_body_only(tmp_path: Path, monkeypatch: pytest.MonkeyP
         "ref": body_rel,
         "ref_face": face_rel,
     }
-    assert identity_ref_rel(slug, char) == body_rel
+    assert anchor_ref_rel(slug, char) == body_rel
     assert generation_face_ref_rel(slug, char) == face_rel
 
     face_path.unlink()
-    assert identity_ref_rel(slug, char) == body_rel
+    assert anchor_ref_rel(slug, char) == body_rel
     assert generation_face_ref_rel(slug, char) == body_rel
 
 

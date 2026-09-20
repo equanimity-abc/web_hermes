@@ -29,7 +29,7 @@ def test_frame_memory_add_and_search(tmp_path, monkeypatch):
     shot = {
         "n": 1,
         "assets": {"scene": "dramas/demo/videos/ep01/shot01_scene.png"},
-        "spatial_plan": {"hash": "abc", "identity_subject_id": "c1", "slots": []},
+        "spatial_plan": {"hash": "abc", "subject_id": "c1", "slots": []},
     }
     identity = {
         "pass": True,
@@ -42,7 +42,7 @@ def test_frame_memory_add_and_search(tmp_path, monkeypatch):
         "demo",
         character_ids=["c1", "c2"],
         plan_hash="abc",
-        identity_subject_id="c1",
+        subject_id="c1",
         exclude_episode=1,
         exclude_shot=2,
         limit=2,

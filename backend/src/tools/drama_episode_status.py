@@ -13,7 +13,7 @@ def status_rel(slug: str, episode: int) -> str:
 
 def build_episode_status(slug: str, episode: int, doc: dict[str, Any] | None = None) -> str:
     from tools.drama_audio import has_bgm, load_mix
-    from tools.drama_produce_gates import identity_kpi, produce_blockers, series_continuity_blockers
+    from tools.drama_produce_gates import produce_blockers, series_continuity_blockers
     from tools.drama_shots import load_doc
 
     n = int(episode)
@@ -29,9 +29,6 @@ def build_episode_status(slug: str, episode: int, doc: dict[str, Any] | None = N
     voice_ok = sum(1 for s in shots if (s.get("assets") or {}).get("voice"))
     mix = load_mix(slug, n)
     intent = str(mix.get("bgm_intent") or (doc.get("meta") or {}).get("配乐") or "").strip()
-    kpi = identity_kpi(doc)
-    rate = kpi.get("pass_rate")
-    rate_s = f"{rate * 100:.0f}%" if isinstance(rate, float) else "n/a"
     blockers = produce_blockers(slug, n, doc=doc, force=False)
     series_notes = series_continuity_blockers(slug, n) if n > 1 else []
     lines = [
@@ -42,8 +39,6 @@ def build_episode_status(slug: str, episode: int, doc: dict[str, Any] | None = N
         f"- 已有配音: {voice_ok}/{len(shots)}",
         f"- 脏镜: {', '.join(str(x) for x in dirty) or '无'}",
         f"- 产线失败镜: {', '.join(str(x) for x in failed) or '无'}",
-        f"- 身份 KPI: 通过率 {rate_s}（{kpi.get('passed')}/{kpi.get('scored')}），"
-        f"最长连过 {kpi.get('consecutive_pass')} 镜",
         f"- QC: {(doc.get('qc') or {}).get('verdict') or '待修'}",
         f"- BGM: {'已挂' if has_bgm(mix) else '未挂'}"
         + (f"（意图：{intent}）" if intent else ""),

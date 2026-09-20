@@ -689,7 +689,7 @@ def _ark_image(
         return False
 
 
-def _seedance_identity_ref_rels(shot: Any) -> list[str]:
+def _seedance_anchor_ref_rels(shot: Any) -> list[str]:
     """本镜 Seedance 身份参考：主体大头照→全身照（最多 2）。"""
     if not isinstance(shot, dict):
         return []
@@ -702,20 +702,20 @@ def _seedance_identity_ref_rels(shot: Any) -> list[str]:
     try:
         from tools.drama_characters import (
             character_ark_pair_refs,
-            character_requires_face_identity,
+            character_requires_face,
             load_characters,
             resolve_shot_characters,
         )
-        from tools.drama_spatial import identity_subject_character
+        from tools.drama_spatial import subject_character
 
-        subject = identity_subject_character(slug, shot)
-        if subject and character_requires_face_identity(subject):
+        subject = subject_character(slug, shot)
+        if subject and character_requires_face(subject):
             pair = character_ark_pair_refs(slug, subject)
             if pair:
                 return pair[:_MAX_SEEDANCE_IDENTITY_REFS]
         cast = resolve_shot_characters(shot, load_characters(slug))
         for char in cast:
-            if not character_requires_face_identity(char):
+            if not character_requires_face(char):
                 continue
             pair = character_ark_pair_refs(slug, char)
             if pair:
@@ -743,7 +743,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     from tools.drama_i2v import _motion_prompt
 
     model = _resolve_seedance_model(getattr(config, "ARK_VIDEO_MODEL", ""))
-    identity_rels = _seedance_identity_ref_rels(shot)
+    identity_rels = _seedance_anchor_ref_rels(shot)
     scene_path = Path(scene)
     if not scene_path.is_file():
         if isinstance(shot, dict):

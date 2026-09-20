@@ -375,7 +375,7 @@ def ensure_character_refs(
     单次：生成全身+正脸 → 有全身定妆即锁定。身份/检脸硬校验已拆除。
     """
     from tools.drama_characters import (
-        character_requires_face_identity,
+        character_requires_face,
         find_character,
         load_characters,
         ref_exists,
@@ -384,7 +384,7 @@ def ensure_character_refs(
         upsert_character,
     )
     from tools.drama_common import parse_slug
-    from tools.drama_qc import validate_character_cast_ready
+    from tools.drama_face import validate_character_cast_ready
     from tools.drama_series import invalidate_character_embedding
     from tools.drama_studio import generate_character_ref
     from tools.drama_video import generate_character_face_portrait
@@ -400,7 +400,7 @@ def ensure_character_refs(
         if not cid:
             continue
         # 剪影/仅影子：不做 ArcFace 定妆闸（无人脸是预期，不是失败）。
-        if not character_requires_face_identity(rec):
+        if not character_requires_face(rec):
             continue
         if not str(rec.get("look") or "").strip():
             continue
@@ -421,8 +421,8 @@ def ensure_character_refs(
         cid_local = str(rec.get("id") or "")
         if check.get("ok"):
             try:
-                upsert_character(slug, {"id": cid_local, "identity_anchor": "body"})
-                rec = {**rec, "identity_anchor": "body"}
+                upsert_character(slug, {"id": cid_local, "anchor": "body"})
+                rec = {**rec, "anchor": "body"}
             except Exception:
                 pass
             if lock and not rec.get("ref_locked"):
@@ -434,8 +434,8 @@ def ensure_character_refs(
         # 校验已拆除：只要磁盘上有全身图仍放行；否则才 Fail Loud（缺资产，不是 QC）
         if ref_exists(slug, rec):
             try:
-                upsert_character(slug, {"id": cid_local, "identity_anchor": "body"})
-                rec = {**rec, "identity_anchor": "body"}
+                upsert_character(slug, {"id": cid_local, "anchor": "body"})
+                rec = {**rec, "anchor": "body"}
             except Exception:
                 pass
             if lock and not rec.get("ref_locked"):
@@ -564,27 +564,6 @@ def ensure_default_bgm(slug: str, episode: int, *, catalog_id: str = DEFAULT_CAT
     return True
 
 
-def _assert_identity_deps_ready(slug: str) -> None:
-    """专业档身份验收的前置依赖闸（仅 enforce 时 fail-before-burn）。
-
-    advisory/off：旁路打分或不打分，不因缺 buffalo_l 挡出图。
-    无角色（整集定场/标题，身份全部 n/a）则跳过。
-    """
-    from tools.drama_characters import character_requires_face_identity, load_characters
-    from tools.drama_qc import _arcface_ready, identity_blocks_pipeline
-
-    if not identity_blocks_pipeline(slug):
-        return
-    cards = load_characters(slug)
-    needs_identity = any(character_requires_face_identity(c) for c in cards)
-    if needs_identity and not _arcface_ready():
-        raise RuntimeError(
-            "身份模型 ArcFace 未就绪（insightface 未安装或 buffalo_l 模型未缓存），"
-            "专业档身份验收无法进行。请先运行 backend/scripts/fetch_arcface_model.py "
-            "或安装 insightface 并下载 buffalo_l 后再试。"
-        )
-
-
 def _mark_shot_produce_failed(slug: str, episode: int, shot_n: int, err: BaseException | str) -> None:
     """Persist per-shot failure so smart resume can continue from the failed step."""
     from tools.drama_resume import mark_shot_failure_layers, refine_plan_for_locks, strip_locked_dirty
@@ -656,23 +635,22 @@ def _resume_repair_mode(
     resume_from: str,
     i2v_src: str,
     scene_ok: bool,
-    id_ok: bool,
     clip_ok: bool,
     scene_locked: bool,
     flicker_pass: bool | None = None,
 ) -> str:
     """Decide smart-resume path for one shot.
 
-    Returns one of: already_ok | flicker | lip | voice | identity_recheck | full
-    ``flicker_pass`` only used when dirty is empty and clip/id look done.
+    Returns one of: already_ok | flicker | lip | voice | full
+    ``flicker_pass`` only used when dirty is empty and clip look done.
     """
     resume_from = str(resume_from or "").strip()
     i2v_src = str(i2v_src or "").strip()
-    if clip_ok and id_ok and not (dirty & {"motion", "clip", "scene", "lip", "voice", "overlay"}):
+    if clip_ok and not (dirty & {"motion", "clip", "scene", "lip", "voice", "overlay"}):
         if flicker_pass is True:
             return "already_ok"
         return "flicker"
-    if scene_ok and id_ok and (
+    if scene_ok and (
         resume_from in ("motion", "i2v", "flicker")
         or (
             dirty
@@ -682,7 +660,7 @@ def _resume_repair_mode(
         )
     ):
         return "flicker"
-    if scene_ok and id_ok and (
+    if scene_ok and (
         resume_from in ("lip",)
         or (
             dirty
@@ -692,7 +670,7 @@ def _resume_repair_mode(
         )
     ):
         return "lip"
-    if scene_ok and id_ok and (
+    if scene_ok and (
         resume_from == "voice"
         or (
             dirty
@@ -702,8 +680,6 @@ def _resume_repair_mode(
         )
     ):
         return "voice"
-    if scene_ok and scene_locked and not id_ok and "scene" not in dirty:
-        return "identity_recheck"
     return "full"
 
 
@@ -808,16 +784,11 @@ def _hq_process_one_shot(
         # 续跑：按失败点跳过已通过步骤
         if not force:
             assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
-            identity = shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
             dirty = set(shot.get("dirty") or [])
             qc = shot.get("qc") if isinstance(shot.get("qc"), dict) else {}
             resume_from = str(qc.get("resume_from") or "").strip()
             i2v_src = str(shot.get("i2v_source") or "")
             scene_ok = bool(assets.get("scene"))
-            from tools.drama_qc import check_allows_pass
-
-            # QC 已拆除：身份/抖动不再挡续跑；有成片且脏层为空即视为已通过
-            id_ok = check_allows_pass(identity) if identity else True
             clip_ok = bool(assets.get("clip"))
             locked = set(shot.get("locked") or [])
             scene_locked = "scene" in locked or "shot" in locked
@@ -831,7 +802,6 @@ def _hq_process_one_shot(
                 resume_from=resume_from,
                 i2v_src=i2v_src,
                 scene_ok=scene_ok,
-                id_ok=id_ok,
                 clip_ok=clip_ok,
                 scene_locked=scene_locked,
                 flicker_pass=flicker_pass,
@@ -853,8 +823,6 @@ def _hq_process_one_shot(
                 shot["_resume_lip_only"] = True
             elif mode == "voice":
                 shot["_resume_voice"] = True
-            elif mode == "identity_recheck":
-                shot["_identity_recheck_only"] = True
         else:
             shot = copy.deepcopy(shot)
 
@@ -874,21 +842,7 @@ def _hq_process_one_shot(
     # 已锁画面：绝不重绘 scene（即使 dirty 误含 scene / assets 缺失）
     if "scene" in locked_now or "shot" in locked_now:
         layers = [layer for layer in layers if layer != "scene"]
-    assets_now = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
-    dirty_now = set(shot.get("dirty") or [])
-    identity_recheck = bool(shot.pop("_identity_recheck_only", None))
-    if identity_recheck:
-        # 身份复检路径：不重生画面；仅当脏层点名时才重做配音/叠层
-        layers = [
-            layer
-            for layer in layers
-            if layer != "scene" and (layer in dirty_now or not (assets_now.get(layer)))
-        ]
-
     degrades: list[Any] = []
-    identity_last: dict[str, Any] = (
-        shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
-    )
     flicker_only = bool(shot.pop("_flicker_only_repair", None))
     resume_lip_only = bool(shot.pop("_resume_lip_only", None))
     resume_voice = bool(shot.pop("_resume_voice", None))
@@ -971,7 +925,7 @@ def _hq_process_one_shot(
         require_cast_for_shot(slug, shot)
         assert_hq_image_ready(slug, shot)
 
-        def _run_scene_and_qc() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        def _run_scene_and_qc() -> tuple[dict[str, Any], dict[str, Any]]:
             if cancel_check:
                 cancel_check()
             info_local = render_shot_layers(
@@ -989,14 +943,6 @@ def _hq_process_one_shot(
 
             apply_shot_class(shot, force=False)
             build_spatial_plan(slug, shot)
-            # 校验已拆除：不再跑身份/环境硬闸
-            identity_local = {
-                "status": "n/a",
-                "pass": True,
-                "required": False,
-                "reason": "qc_disabled",
-                "hint": "校验已关闭",
-            }
             env_local = {
                 "status": "n/a",
                 "pass": True,
@@ -1004,20 +950,13 @@ def _hq_process_one_shot(
                 "reason": "qc_disabled",
             }
             merge_save_shot(slug, n, shot)
-            return info_local, identity_local, env_local
+            return info_local, env_local
 
-        info, identity_last, _env_last = _run_scene_and_qc()
+        info, _env_last = _run_scene_and_qc()
         degrades = list(info.get("degrades") or [])
         # 正式输出：画面进 output/epNN/scenes/
         scene_rel = str((shot.get("assets") or {}).get("scene") or _shot_assets(slug, n, sn)["scene"])
         publish_scene_step(slug, n, sn, scene_rel)
-        # 身份硬闸已拆除；保留旁路记录钩子（无打分）
-        try:
-            from tools.drama_track import record_shot_identity_pass
-
-            record_shot_identity_pass(slug, n, shot, identity_last)
-        except Exception:
-            pass
         merge_save_shot(slug, n, shot)
     if cancel_check:
         cancel_check()
@@ -1112,6 +1051,10 @@ def _hq_process_one_shot(
     for k in ("produce_error", "produce_stage", "resume_from", "resume_hint"):
         qc_done.pop(k, None)
     shot["qc"] = qc_done
+    # 成片已产出即整镜完成：清空脏层（含 clip/lip 这类「组装/内生口型」虚层），
+    # 否则续跑会因残留 dirty 误判需重渲，导致「从头开始」。
+    shot["dirty"] = []
+    shot["status"] = "rendered"
     merge_save_shot(slug, n, shot)
 
     return {
@@ -1303,7 +1246,6 @@ def _produce_episode_hq_body(
     expanded_looks = ensure_character_looks_expanded(slug)
     trait_cids = ensure_character_traits(slug)
     anchored = ensure_character_anchors(slug)
-    _assert_identity_deps_ready(slug)
     ref_chars = ensure_character_refs(slug, on_progress=on_progress)
     from tools.drama_environment import ensure_environment_looks_expanded, ensure_environment_refs
 
@@ -1589,24 +1531,6 @@ def _produce_episode_hq_body(
         cancel_check()
 
     doc = load_doc(slug, n) or doc
-    from tools.drama_produce_gates import dirty_identity_kpi_fails, identity_kpi, identity_kpi_blocker
-    from tools.drama_shots import save_doc as _save_doc_kpi
-
-    kpi = identity_kpi(doc)
-    stages["identity_kpi"] = kpi
-    from tools.drama_qc import qc_gates_enabled
-
-    kpi_msg = identity_kpi_blocker(doc, slug=slug) if qc_gates_enabled() else ""
-    if kpi_msg and not allow_qc_fail_export:
-        touched = dirty_identity_kpi_fails(doc, slug=slug)
-        if touched:
-            try:
-                _save_doc_kpi(doc)
-            except Exception:
-                pass
-        raise ValueError(
-            kpi_msg + (f" 已标脏镜号：{','.join(str(x) for x in touched)}" if touched else "")
-        )
 
     snap = take_snapshot(slug, n, doc, tag="stage_pre_export")
     if snap:

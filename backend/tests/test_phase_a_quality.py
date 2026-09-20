@@ -7,14 +7,11 @@ import pytest
 from config import config
 from tools.drama_lip import QUALITY_CASCADE, lip_provider_cascade
 from tools.drama_models import DEFAULT_PRESET, default_models
-from tools.drama_qc import DEFAULT_IDENTITY_MIN
 from tools.drama_quality import assert_shots_qc_for_export, assert_studio_providers
 
 
 def test_phase_a_defaults():
     assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 1
-    assert DEFAULT_IDENTITY_MIN == 0.75
-    assert default_models()["qc"]["identity_min"] == 0.75
     assert DEFAULT_PRESET == "ark"
     assert QUALITY_CASCADE[0] == "seedance"
     assert default_models()["lip"]["provider"] == "seedance"
@@ -81,3 +78,38 @@ def test_export_qc_force_bypass(monkeypatch: pytest.MonkeyPatch):
     assert ok.get("qc_disabled") is True
     ok2 = assert_shots_qc_for_export("s", 1, doc, force=True)
     assert ok2["forced"] is True
+
+
+def test_qc_shot_bundle_preserves_produce_state(monkeypatch: pytest.MonkeyPatch):
+    """QC 打分不得覆盖产线失败标记（produce_ok/resume_from），否则续跑会误判从头重渲。"""
+    from tools.drama_qc import qc_shot_bundle
+
+    monkeypatch.setattr(
+        "tools.drama_qc.qc_shot_lip",
+        lambda slug, shot, apply=True: {"status": "ok", "pass": True},
+    )
+    monkeypatch.setattr(
+        "tools.drama_qc.qc_shot_flicker",
+        lambda slug, shot, apply=True: {"status": "ok", "pass": True},
+    )
+
+    shot = {
+        "n": 1,
+        "qc": {
+            "produce_ok": False,
+            "produce_error": "Shot 4 超时",
+            "produce_stage": "motion",
+            "resume_from": "motion",
+            "resume_hint": "重试 I2V",
+        },
+    }
+    bundle = qc_shot_bundle("s", 1, shot)
+
+    assert bundle["produce_ok"] is False
+    assert bundle["produce_error"] == "Shot 4 超时"
+    assert bundle["resume_from"] == "motion"
+    assert bundle["produce_stage"] == "motion"
+    assert bundle["resume_hint"] == "重试 I2V"
+    # 写回 shot 后同样保留
+    assert shot["qc"]["produce_ok"] is False
+    assert shot["qc"]["resume_from"] == "motion"

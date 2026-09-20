@@ -84,7 +84,7 @@ def add_passed_frame(
         "character_ids": cids,
         "cast_key": _cast_key(cids),
         "plan_hash": str((plan or {}).get("hash") or ""),
-        "identity_subject_id": str((plan or {}).get("identity_subject_id") or identity.get("character_id") or ""),
+        "subject_id": str((plan or {}).get("subject_id") or identity.get("character_id") or ""),
         "cosine": identity.get("cosine"),
         "ts": int(time.time()),
     }
@@ -106,7 +106,7 @@ def search_similar_frames(
     *,
     character_ids: list[str],
     plan_hash: str = "",
-    identity_subject_id: str = "",
+    subject_id: str = "",
     exclude_episode: int | None = None,
     exclude_shot: int | None = None,
     limit: int = 2,
@@ -117,7 +117,7 @@ def search_similar_frames(
     """
     want = set(str(c).strip() for c in character_ids if str(c).strip())
     cast_key = _cast_key(list(want))
-    subj = str(identity_subject_id or "").strip()
+    subj = str(subject_id or "").strip()
     scored: list[tuple[int, dict[str, Any]]] = []
     for frame in load_frame_index(slug).get("frames") or []:
         ep = int(frame.get("episode") or 0)
@@ -134,7 +134,7 @@ def search_similar_frames(
             score += 10 * len(overlap)
         if plan_hash and str(frame.get("plan_hash") or "") == plan_hash:
             score += 30
-        if subj and str(frame.get("identity_subject_id") or "") == subj and overlap:
+        if subj and str(frame.get("subject_id") or "") == subj and overlap:
             score += 20
         # 无角色交集则丢弃（防止串戏构图）
         if want and not overlap:

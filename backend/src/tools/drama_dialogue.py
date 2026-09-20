@@ -955,7 +955,17 @@ def normalize_hq_auto_split_doc(
         new_shots.extend(children)
 
     for i, shot in enumerate(new_shots, start=1):
+        old_n = int(shot.get("n") or 0)
         shot["n"] = i
+        # auto_split 拆分会导致后续镜头 n 顺移（如原 Shot 5 → 新 Shot 6），
+        # 必须同步重映射 assets 路径里的 shotNN 前缀，否则画面/配音/成片会错位一格。
+        if old_n and old_n != i and isinstance(shot.get("assets"), dict):
+            old_stem = f"shot{old_n:02d}"
+            new_stem = f"shot{i:02d}"
+            shot["assets"] = {
+                str(layer): (str(path).replace(old_stem, new_stem) if isinstance(path, str) else path)
+                for layer, path in shot["assets"].items()
+            }
         # Re-index turn indices after renumber
         tr = shot.get("dialogue_track") if isinstance(shot.get("dialogue_track"), dict) else None
         if tr and isinstance(tr.get("turns"), list):

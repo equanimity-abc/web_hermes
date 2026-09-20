@@ -48,13 +48,13 @@ def hq_image_provider_chain(primary: str, shot: dict[str, Any] | None = None) ->
 def assert_hq_image_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
     """Fail loud before scene gen when studio needs locked face refs."""
     from tools.drama_characters import (
-        character_requires_face_identity,
+        character_requires_face,
         load_characters,
         ref_exists,
         resolve_shot_characters,
     )
     from tools.drama_models import load_models, provider_usable
-    from tools.drama_qc import _arcface_ready, locked_face_refs_for_shot
+    from tools.drama_qc import locked_face_refs_for_shot
     from tools.drama_styles import image_route
 
     kind = str(shot.get("kind") or "").strip().lower()
@@ -77,7 +77,7 @@ def assert_hq_image_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
 
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
-    need_face = [c for c in cast if character_requires_face_identity(c)]
+    need_face = [c for c in cast if character_requires_face(c)]
     if not need_face:
         return {"ok": True, "faces_required": 0, "provider": pid}
 
@@ -97,15 +97,6 @@ def assert_hq_image_ready(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
     if not faces:
         raise ValueError(
             "专业档出图需要至少 1 张锁定定妆参考图传入模型，当前 refs 为空"
-        )
-
-    # 身份旁路模式不因 ArcFace 未就绪挡出图；enforce 才要求 buffalo_l
-    from tools.drama_qc import identity_blocks_pipeline
-
-    if identity_blocks_pipeline(slug) and not _arcface_ready():
-        raise ValueError(
-            "专业档身份依赖未就绪（insightface/buffalo_l）。"
-            "请先运行 backend/scripts/fetch_arcface_model.py。"
         )
 
     return {

@@ -445,7 +445,7 @@ def enriched_look(char: dict[str, Any] | None) -> str:
     return look
 
 
-def identity_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
+def anchor_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
     """角色一致性校验用的定妆锚：固定全身图。
 
     正脸特写只用于图生图参考，不参与 ArcFace / 身份闸。
@@ -460,7 +460,7 @@ def identity_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
 def generation_face_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
     """出图参考：优先正脸特写，缺失则退回全身。
 
-    与 ``identity_ref_rel`` 职责分离——校验只用全身，出图要脸部细节。
+    与 ``anchor_ref_rel`` 职责分离——校验只用全身，出图要脸部细节。
     """
     if not isinstance(char, dict):
         return ""
@@ -638,7 +638,7 @@ def is_shadow_stage_card(char: dict[str, Any] | None) -> bool:
     """是否为不应存在的「影子/剪影」角色卡（按名称判定，不看 look）。
 
     氛围局部（如「月亮背面的眼睛」）不算影子卡，可保留角色栏条目，但见
-    ``character_requires_face_identity``。
+    ``character_requires_face``。
     """
     if not isinstance(char, dict):
         return False
@@ -647,7 +647,7 @@ def is_shadow_stage_card(char: dict[str, Any] | None) -> bool:
     return role_token_face_exempt(str(char.get("name") or ""))
 
 
-def character_requires_face_identity(char: dict[str, Any] | None) -> bool:
+def character_requires_face(char: dict[str, Any] | None) -> bool:
     """是否需要定妆人脸 + ArcFace 身份闸。剪影/氛围局部返回 False。"""
     if not isinstance(char, dict):
         return False
@@ -970,7 +970,7 @@ def ensure_character_traits(slug: str) -> list[str]:
     for rec in load_characters(slug):
         if normalize_category(rec.get("category")) != "character":
             continue
-        if not character_requires_face_identity(rec):
+        if not character_requires_face(rec):
             continue
         cid = str(rec.get("id") or "")
         if not cid or not traits_incomplete(rec):
@@ -1020,7 +1020,7 @@ def ensure_character_anchors(slug: str) -> list[str]:
     for rec in cards:
         if normalize_category(rec.get("category")) != "character":
             continue
-        if not character_requires_face_identity(rec):
+        if not character_requires_face(rec):
             continue
         cid = str(rec.get("id") or "")
         if not cid:
@@ -1053,7 +1053,7 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
         cid = str(rec.get("id") or "")
         if not cid:
             continue
-        if not character_requires_face_identity(rec):
+        if not character_requires_face(rec):
             continue
         look = str(rec.get("look") or "")
         if not look_needs_expand(look):
@@ -1212,7 +1212,7 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "chosen_ref": chosen_ref,
         "candidates": candidates,
         "anchor_prompt": str(raw.get("anchor_prompt") or "").strip(),
-        "identity_anchor": str(raw.get("identity_anchor") or "").strip().lower(),
+        "anchor": str(raw.get("anchor") or "").strip().lower(),
     }
 
 
@@ -1461,7 +1461,7 @@ def match_character_token(token: str, characters: list[dict[str, Any]]) -> dict[
         """同名时优先可锁脸的实体卡（后羿 优于 后羿（仅影子））。"""
         if hit is None:
             return other
-        if character_requires_face_identity(other) and not character_requires_face_identity(hit):
+        if character_requires_face(other) and not character_requires_face(hit):
             return other
         return hit
 
@@ -1661,7 +1661,7 @@ def character_prompt_clause(characters: list[dict[str, Any]], *, slug: str = "")
     for char in characters:
         name = char.get("name") or char.get("id")
         look = enriched_look(char) or str(char.get("look") or "").strip() or "保持原作角色设计一致"
-        if not character_requires_face_identity(char):
+        if not character_requires_face(char):
             # 氛围/剪影：禁止被模型画成第二主角整脸，避免与主体定妆「拼图」。
             short = look[:72] + ("…" if len(look) > 72 else "")
             parts.append(

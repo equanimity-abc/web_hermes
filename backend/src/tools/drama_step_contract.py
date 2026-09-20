@@ -614,7 +614,7 @@ def publish_cast_step(slug: str, doc: dict[str, Any] | None = None) -> dict[str,
     Roles are taken from step1 shots when available (unique truth).
     """
     from tools.drama_characters import (
-        character_requires_face_identity,
+        character_requires_face,
         find_character,
         load_characters,
         normalize_category,
@@ -646,7 +646,7 @@ def publish_cast_step(slug: str, doc: dict[str, Any] | None = None) -> dict[str,
             char = find_character(cards, role)
             if char is None or normalize_category(char.get("category")) != "character":
                 continue
-            if not character_requires_face_identity(char):
+            if not character_requires_face(char):
                 continue
             cid = str(char.get("id") or "").strip()
             if cid:
@@ -713,7 +713,7 @@ def publish_cast_step(slug: str, doc: dict[str, Any] | None = None) -> dict[str,
 def require_cast_for_shot(slug: str, shot: dict[str, Any]) -> None:
     """Before scene gen: every face-need role must have formal cast in step2 output."""
     from tools.drama_characters import (
-        character_requires_face_identity,
+        character_requires_face,
         find_character,
         load_characters,
         normalize_category,
@@ -730,7 +730,7 @@ def require_cast_for_shot(slug: str, shot: dict[str, Any]) -> None:
         char = find_character(cards, role)
         if char is None or normalize_category(char.get("category")) != "character":
             continue
-        if not character_requires_face_identity(char):
+        if not character_requires_face(char):
             continue
         cid = str(char.get("id") or "").strip()
         try:

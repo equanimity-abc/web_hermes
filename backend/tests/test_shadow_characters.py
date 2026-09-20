@@ -7,7 +7,7 @@ import pytest
 from tools.drama_characters import (
     CharacterError,
     canonical_role_name,
-    character_requires_face_identity,
+    character_requires_face,
     is_shadow_stage_card,
     match_character_token,
     role_token_face_exempt,
@@ -28,8 +28,8 @@ def test_face_exempt_and_shadow_card():
     face = {"name": "后羿", "look": "玄色劲装", "category": "character"}
     assert is_shadow_stage_card(shadow) is True
     assert is_shadow_stage_card(face) is False
-    assert character_requires_face_identity(shadow) is False
-    assert character_requires_face_identity(face) is True
+    assert character_requires_face(shadow) is False
+    assert character_requires_face(face) is True
 
 
 def test_atmospheric_eyes_not_face_locked():
@@ -40,8 +40,8 @@ def test_atmospheric_eyes_not_face_locked():
     atm = {"name": "月亮背面的眼睛", "look": "红眼睛", "category": "character"}
     face = {"name": "嫦娥", "look": "月白宫装", "category": "character"}
     assert is_shadow_stage_card(atm) is False  # 可保留角色栏，但不锁脸
-    assert character_requires_face_identity(atm) is False
-    assert character_requires_face_identity(face) is True
+    assert character_requires_face(atm) is False
+    assert character_requires_face(face) is True
 
 
 def test_match_prefers_face_card_over_silhouette():

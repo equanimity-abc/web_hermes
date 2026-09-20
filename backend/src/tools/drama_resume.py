@@ -45,16 +45,10 @@ def refine_plan_for_locks(shot: dict[str, Any], plan: dict[str, Any]) -> dict[st
     dirty = strip_locked_dirty(shot, list(out.get("dirty") or []))
 
     if scene_plate_locked(shot) and scene_ok:
-        if stage in ("identity", "scene") or "scene" in (plan.get("dirty") or []):
+        if stage == "scene" or "scene" in (plan.get("dirty") or []):
             dirty = strip_locked_dirty(shot, dirty or ["motion", "clip"])
-            if stage == "identity":
-                out["resume_from"] = "identity"
-                out["hint"] = (
-                    "画面已锁定：不会重绘；续跑仅复检身份。"
-                    "若需换图请先解锁画面后再续跑"
-                )
-            elif stage == "scene":
-                out["resume_from"] = "identity"
+            if stage == "scene":
+                out["resume_from"] = "motion"
                 out["hint"] = (
                     "画面已锁定且触发敏感/真人等问题：不会自动重绘。"
                     "请先解锁画面并换图后再续跑"
@@ -116,14 +110,6 @@ def classify_failure(error: str) -> dict[str, Any]:
             "dirty": ["scene", "overlay", "motion", "clip"],
             "resume_from": "scene",
             "hint": "输入侧敏感/真人检测：需改分镜描述或换图后再续跑",
-        }
-
-    if _hit("身份", "identity", "cosine", "人脸", "定妆", "arcface", "no_face", "unmatched"):
-        return {
-            "stage": "identity",
-            "dirty": ["scene", "motion", "clip"],
-            "resume_from": "scene",
-            "hint": "身份未过：重做画面（不重配音）；改 look/构图后再续跑",
         }
 
     if _hit("闪烁", "flicker", "ssim", "相邻帧相似度", "画面抖动"):
@@ -198,14 +184,6 @@ def _file_ok(rel: Any) -> bool:
     return bool(path)
 
 
-def _identity_ok(identity: dict[str, Any] | None) -> bool:
-    from tools.drama_qc import check_allows_pass
-
-    if not isinstance(identity, dict) or not identity:
-        return False
-    return check_allows_pass(identity)
-
-
 def _needs_voice(shot: dict[str, Any]) -> bool:
     return bool(str(shot.get("字幕") or shot.get("对白") or "").strip())
 
@@ -259,14 +237,11 @@ def _flicker_ok(shot: dict[str, Any]) -> bool:
 def inspect_shot_state(shot: dict[str, Any]) -> dict[str, Any]:
     """Snapshot readiness from current shot record (no regeneration)."""
     assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
-    identity = shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
     scene_ok = _file_ok(assets.get("scene")) or bool(assets.get("scene"))
     voice_ok = (not _needs_voice(shot)) or _file_ok(assets.get("voice")) or bool(assets.get("voice"))
     clip_ok = _file_ok(assets.get("clip")) or bool(assets.get("clip"))
     return {
         "scene_ok": scene_ok,
-        "identity_ok": _identity_ok(identity),
-        "identity": identity,
         "voice_ok": voice_ok,
         "i2v_ok": _i2v_ok(shot),
         "lip_ok": _lip_ok(shot, assets),
@@ -288,7 +263,7 @@ def previous_failure_stage(shot: dict[str, Any]) -> str:
         stage = str(classify_failure(err).get("stage") or "")
         if stage:
             return stage
-    if stored in ("scene", "identity", "voice", "motion", "i2v", "lip", "flicker", "aborted", "export"):
+    if stored in ("scene", "voice", "motion", "i2v", "lip", "flicker", "aborted", "export"):
         return "motion" if stored == "i2v" else stored
     dirty = {str(x) for x in (shot.get("dirty") or []) if str(x).strip()}
     if dirty <= {"lip", "clip"} and dirty:
@@ -304,7 +279,6 @@ def _checkpoint_order(stage: str) -> list[str]:
     """Pipeline checkpoints to walk when advancing after a fix."""
     start = {
         "scene": "scene",
-        "identity": "identity",
         "voice": "voice",
         "motion": "motion",
         "i2v": "motion",
@@ -314,7 +288,7 @@ def _checkpoint_order(stage: str) -> list[str]:
         "export": "export",
         "unknown": "scene",
     }.get(str(stage or "unknown"), "scene")
-    full = ["scene", "identity", "voice", "motion", "lip", "flicker", "clip"]
+    full = ["scene", "voice", "motion", "lip", "flicker", "clip"]
     if start == "export":
         return ["export"]
     if start not in full:
@@ -331,21 +305,6 @@ def plan_for_checkpoint(shot: dict[str, Any], state: dict[str, Any], checkpoint:
             "resume_from": "scene",
             "hint": "画面缺失或需重做：基于当前状态重新出图",
         }
-    elif checkpoint == "identity":
-        if state.get("scene_locked"):
-            plan = {
-                "stage": "identity",
-                "dirty": ["motion", "clip"],
-                "resume_from": "identity",
-                "hint": "身份仍未过（画面已锁，不重绘）。请改定妆或解锁换图后再续跑",
-            }
-        else:
-            plan = {
-                "stage": "identity",
-                "dirty": ["scene", "motion", "clip"],
-                "resume_from": "scene",
-                "hint": "身份仍未过：将重做画面（不重配音）",
-            }
     elif checkpoint == "voice":
         plan = {
             "stage": "voice",
@@ -399,7 +358,7 @@ def advance_from_failure(
     """
     resolved: list[str] = []
     checkpoints = _checkpoint_order(previous_stage)
-    foundation = ["scene", "identity"]
+    foundation = ["scene"]
     walk = list(dict.fromkeys(foundation + checkpoints))
 
     for cp in walk:
@@ -408,12 +367,6 @@ def advance_from_failure(
                 resolved.append("scene")
                 continue
             return plan_for_checkpoint(shot, state, "scene")
-
-        if cp == "identity":
-            if state["identity_ok"]:
-                resolved.append("identity")
-                continue
-            return plan_for_checkpoint(shot, state, "identity")
 
         if cp == "voice":
             if state["voice_ok"]:
@@ -432,17 +385,12 @@ def advance_from_failure(
             plan = plan_for_checkpoint(
                 shot, state, "flicker" if state["i2v_ok"] and not state["flicker_ok"] else "motion"
             )
-            if previous_stage in ("scene", "identity", "voice", "aborted", "i2v", "flicker") and (
-                "identity" in resolved or state["identity_ok"]
-            ):
-                if previous_stage in ("scene", "identity", "voice", "aborted"):
+            if previous_stage in ("scene", "voice", "aborted", "i2v", "flicker"):
+                if previous_stage in ("scene", "voice", "aborted"):
                     plan["hint"] = (
-                        f"先前问题已解决（{'/'.join(resolved) or '身份/画面'}），继续运动/成片"
+                        f"先前问题已解决（{'/'.join(resolved) or '画面'}），继续运动/成片"
                     )
                     plan["resolved_previous"] = True
-                elif "identity" in resolved and previous_stage in ("i2v", "flicker", "aborted"):
-                    # 基础已确认，按当前缺口续跑
-                    pass
             return plan
 
         if cp == "lip":
@@ -464,9 +412,9 @@ def advance_from_failure(
             return plan_for_checkpoint(shot, state, "flicker")
 
         if cp == "clip":
-            if state["clip_ok"] and state["identity_ok"] and state["i2v_ok"] and state["lip_ok"]:
+            if state["clip_ok"] and state["i2v_ok"] and state["lip_ok"]:
                 return None
-            if state["clip_ok"] and state["identity_ok"] and state["lip_ok"]:
+            if state["clip_ok"] and state["lip_ok"]:
                 if state["i2v_ok"] or state["clip_ok"]:
                     return None
             return plan_for_checkpoint(shot, state, "clip")
@@ -474,35 +422,9 @@ def advance_from_failure(
         if cp == "export":
             return None
 
-    if state["clip_ok"] and state["identity_ok"]:
+    if state["clip_ok"]:
         return None
     return plan_for_checkpoint(shot, state, "clip")
-
-
-def refresh_identity_for_resume(slug: str, episode: int, shot: dict[str, Any]) -> dict[str, Any]:
-    """Live re-QC identity when resuming past an identity/scene failure or stale fail mark."""
-    from tools.drama_qc import qc_shot_identity
-
-    identity = qc_shot_identity(slug, int(episode), shot, apply=True)
-    shot["identity"] = identity
-    return identity
-
-
-def should_live_recheck_identity(shot: dict[str, Any], previous_stage: str) -> bool:
-    """Whether resume should spend a live ArcFace pass before deciding next step."""
-    assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
-    # Only when the plate is really on disk (skip placeholder paths in unit tests).
-    if not _disk_file_ok(assets.get("scene")):
-        return False
-    if previous_stage in ("identity", "scene", "unknown", "aborted"):
-        return True
-    identity = shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
-    if identity and not _identity_ok(identity):
-        return True
-    qc = shot.get("qc") if isinstance(shot.get("qc"), dict) else {}
-    if qc.get("produce_ok") is False and previous_stage in ("identity", "scene"):
-        return True
-    return False
 
 
 def diagnose_shot(
@@ -538,10 +460,6 @@ def diagnose_shot(
         needs = True
     if dirty:
         needs = True
-    identity = shot.get("identity") if isinstance(shot.get("identity"), dict) else {}
-    if assets.get("scene") and identity and not _identity_ok(identity) and identity.get("required") is not False:
-        needs = True
-        err = err or str(identity.get("hint") or "身份未过")
     if not assets.get("clip") and not ("shot" in set(shot.get("locked") or [])):
         if assets.get("scene") or produce_ok is False:
             needs = True
@@ -549,12 +467,6 @@ def diagnose_shot(
 
     if not needs:
         return None
-
-    if live_recheck and slug and episode is not None and should_live_recheck_identity(shot, prev_stage):
-        try:
-            refresh_identity_for_resume(str(slug), int(episode), shot)
-        except Exception as exc:
-            shot.setdefault("_resume_recheck_error", str(exc)[:200])
 
     state = inspect_shot_state(shot)
     plan = advance_from_failure(shot, state, previous_stage=prev_stage)
@@ -564,13 +476,6 @@ def diagnose_shot(
     note = ""
     if plan.get("resolved_previous"):
         note = str(plan.get("hint") or "")
-    elif prev_stage in ("identity", "scene") and state["identity_ok"] and plan.get("resume_from") not in (
-        "identity",
-        "scene",
-    ):
-        note = f"先前{prev_stage}问题已解决，继续{plan.get('resume_from')}"
-        plan["hint"] = note
-        plan["resolved_previous"] = True
 
     return {
         "shot": sn,
@@ -580,7 +485,6 @@ def diagnose_shot(
         "hint": plan.get("hint") or note or "",
         "error": err[:300],
         "scene_ok": state["scene_ok"],
-        "identity_ok": state["identity_ok"],
         "i2v_ok": state["i2v_ok"],
         "previous_stage": prev_stage,
         "resolved_previous": bool(plan.get("resolved_previous")),

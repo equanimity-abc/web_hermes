@@ -13,7 +13,7 @@ from typing import Any
 
 from tools.drama_characters import (
     ANIME_STYLE_GUARD,
-    character_requires_face_identity,
+    character_requires_face,
     load_characters,
 )
 from tools.drama_spatial import build_spatial_plan
@@ -128,7 +128,7 @@ def generate_layered_scene(
     for slot in slots:
         cid = str(slot.get("character_id") or "")
         char = _char_by_id(cards, cid)
-        if not char or not character_requires_face_identity(char):
+        if not char or not character_requires_face(char):
             continue
         ref = _char_ref_path(slug, char)
         if not ref or not ref_exists(slug, char):
@@ -331,7 +331,7 @@ def regenerate_failing_layers(
         plan = build_spatial_plan(slug, shot)
     fail_ids = set(_failing_character_ids(identity))
     if not fail_ids:
-        sid = str((plan or {}).get("identity_subject_id") or identity.get("character_id") or "")
+        sid = str((plan or {}).get("subject_id") or identity.get("character_id") or "")
         if sid:
             fail_ids.add(sid)
     if not fail_ids:

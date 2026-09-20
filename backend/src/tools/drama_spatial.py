@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from tools.drama_characters import (
-    character_requires_face_identity,
+    character_requires_face,
     load_characters,
     resolve_shot_characters,
 )
@@ -26,7 +26,7 @@ def _cname(char: dict[str, Any]) -> str:
     return str(char.get("name") or char.get("id") or "").strip()
 
 
-def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
+def subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any] | None:
     """在场角色优先：字幕说话人 > 对白轨/voice_turns > 画面特写锁 > speaker > 覆盖 > 角色栏首卡。
 
     双人「嫦娥拎玉兔」且字幕为玉兔时，绝不能因角色栏把嫦娥排第一就验嫦娥。
@@ -35,14 +35,14 @@ def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any
 
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
-    face_cast = [c for c in cast if character_requires_face_identity(c)]
+    face_cast = [c for c in cast if character_requires_face(c)]
 
     def _from_token(token: str) -> dict[str, Any] | None:
         raw = str(token or "").strip()
         if not raw:
             return None
         hit = find_character(cards, raw) or match_character_token(raw, cards)
-        if hit and character_requires_face_identity(hit):
+        if hit and character_requires_face(hit):
             return hit
         return None
 
@@ -89,13 +89,13 @@ def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any
         if hit:
             return hit
 
-    override = str(shot.get("identity_subject") or "").strip()
+    override = str(shot.get("subject") or "").strip()
     if override:
         for char in face_cast:
             if _cid(char) == override or _cname(char) == override:
                 return char
         if face_cast:
-            shot["identity_subject"] = ""
+            shot["subject"] = ""
         else:
             hit = _from_token(override)
             if hit:
@@ -109,7 +109,7 @@ def identity_subject_character(slug: str, shot: dict[str, Any]) -> dict[str, Any
         if hit:
             return hit
     for char in cast:
-        if character_requires_face_identity(char):
+        if character_requires_face(char):
             return char
     return None
 
@@ -119,7 +119,7 @@ def _default_slots(
     *,
     subject_id: str,
 ) -> list[dict[str, Any]]:
-    face_cast = [c for c in cast if character_requires_face_identity(c)]
+    face_cast = [c for c in cast if character_requires_face(c)]
     if not face_cast:
         return []
     # 主体置前
@@ -210,7 +210,7 @@ def build_spatial_plan(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     kind = infer_kind(shot)
-    subject = identity_subject_character(slug, shot)
+    subject = subject_character(slug, shot)
     subject_id = _cid(subject) if subject else ""
     speaker = infer_speaker(shot)
 
@@ -220,7 +220,7 @@ def build_spatial_plan(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
             "canvas": "9:16",
             "kind": kind,
             "speaker_id": "",
-            "identity_subject_id": "",
+            "subject_id": "",
             "slots": [],
             "occlusion": [],
             "hash": "",
@@ -235,7 +235,7 @@ def build_spatial_plan(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
         "canvas": "9:16",
         "kind": kind,
         "speaker_id": subject_id if speaker else subject_id,
-        "identity_subject_id": subject_id,
+        "subject_id": subject_id,
         "slots": slots,
         "occlusion": [],
         "hash": "",
@@ -256,11 +256,11 @@ def build_spatial_plan(slug: str, shot: dict[str, Any]) -> dict[str, Any]:
 
     plan["hash"] = plan_hash(plan)
     shot["spatial_plan"] = plan
-    # 始终回写与本镜一致的身份主体，覆盖跨镜串过来的脏 identity_subject
+    # 始终回写与本镜一致的身份主体，覆盖跨镜串过来的脏 subject
     if subject_id:
-        shot["identity_subject"] = subject_id
+        shot["subject"] = subject_id
     else:
-        shot["identity_subject"] = ""
+        shot["subject"] = ""
     return plan
 
 
@@ -276,7 +276,7 @@ def plan_hash(plan: dict[str, Any]) -> str:
             }
             for s in (plan.get("slots") or [])
         ],
-        "identity_subject_id": plan.get("identity_subject_id"),
+        "subject_id": plan.get("subject_id"),
         "speaker_id": plan.get("speaker_id"),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -296,7 +296,7 @@ def spatial_prompt_clause(plan: dict[str, Any] | None) -> str:
         role = str(slot.get("role") or "support")
         face = "主脸清晰可见" if role == "identity" else "外形可辨"
         bits.append(f"{name}位于{anchor}（{face}）")
-    subj = str(plan.get("identity_subject_id") or "")
+    subj = str(plan.get("subject_id") or "")
     subj_name = next(
         (str(s.get("character_name") or "") for s in slots if s.get("character_id") == subj),
         "",

@@ -108,7 +108,7 @@ def test_assert_hq_image_ready_missing_lock(monkeypatch):
         lambda shot, cards: cards,
     )
     monkeypatch.setattr(
-        "tools.drama_characters.character_requires_face_identity",
+        "tools.drama_characters.character_requires_face",
         lambda c: True,
     )
     monkeypatch.setattr(

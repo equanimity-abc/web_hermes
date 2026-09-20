@@ -205,14 +205,14 @@ def ensure_character_embedding(slug: str, cid: str) -> dict[str, Any]:
             "method": method or "arcface",
         }
 
-    from tools.drama_characters import find_character, identity_ref_rel, load_characters, ref_exists
-    from tools.drama_qc import _arcface_embedding
+    from tools.drama_characters import find_character, anchor_ref_rel, load_characters, ref_exists
+    from tools.drama_face import _arcface_embedding
 
     cards = load_characters(slug)
     char = find_character(cards, cid)
     if char is None or not ref_exists(slug, char):
         return {**empty, "method": "no_ref"}
-    rel = identity_ref_rel(slug, char)
+    rel = anchor_ref_rel(slug, char)
     try:
         path = resolve_safe(rel)
     except ValueError:

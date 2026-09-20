@@ -9,7 +9,7 @@ from tools.drama_dialogue import apply_turn_timings, infer_turn_timings_from_voi
 from tools.drama_director import refresh_coverage
 from tools.drama_episode_status import build_episode_status
 from tools.drama_karaoke import build_karaoke_from_turns
-from tools.drama_produce_gates import identity_kpi, produce_blockers
+from tools.drama_produce_gates import produce_blockers
 
 
 def _patch_ws(monkeypatch, tmp_path: Path):
@@ -28,23 +28,6 @@ def test_match_bgm_prefers_non_procedural():
         {"id": "real_suspense", "mood": "悬疑", "title": "暗涌真曲", "notes": "紧张", "procedural": False},
     ]
     assert match_bgm_by_intent("古风悬疑紧张", tracks) == "real_suspense"
-
-
-def test_identity_kpi_consecutive():
-    doc = {
-        "shots": [
-            {"n": 1, "identity": {"status": "ok", "pass": True}},
-            {"n": 2, "identity": {"status": "ok", "pass": True}},
-            {"n": 3, "identity": {"status": "ok", "pass": False}},
-            {"n": 4, "identity": {"status": "skipped"}},
-            {"n": 5, "identity": {"status": "ok", "pass": True}},
-        ]
-    }
-    kpi = identity_kpi(doc)
-    assert kpi["passed"] == 3
-    assert kpi["scored"] == 4
-    assert kpi["consecutive_pass"] == 2
-    assert 3 in kpi["failed"]
 
 
 def test_produce_blockers_no_script(monkeypatch, tmp_path):
@@ -95,20 +78,19 @@ def test_silence_suggestion_in_coverage():
     assert "silence" in types or "hook_3s" in types
 
 
-def test_episode_status_includes_identity_kpi():
+def test_episode_status_includes_dirty_shots():
     text = build_episode_status(
         "demo",
         1,
         {
             "shots": [
-                {"n": 1, "identity": {"status": "ok", "pass": True}, "assets": {"scene": "a"}},
-                {"n": 2, "identity": {"status": "ok", "pass": False}, "dirty": ["scene"]},
+                {"n": 1, "assets": {"scene": "a"}},
+                {"n": 2, "dirty": ["scene"]},
             ],
             "qc": {"verdict": "待修"},
             "meta": {"配乐": "悬疑"},
         },
     )
-    assert "身份 KPI" in text
     assert "脏镜: 2" in text
 
 

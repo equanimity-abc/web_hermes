@@ -11,7 +11,6 @@ def test_clip_only_dirty_is_flicker_not_lip():
         resume_from="",
         i2v_src="ai",
         scene_ok=True,
-        id_ok=True,
         clip_ok=True,
         scene_locked=False,
     )
@@ -24,7 +23,6 @@ def test_lip_clip_dirty_is_lip():
         resume_from="",
         i2v_src="ai",
         scene_ok=True,
-        id_ok=True,
         clip_ok=True,
         scene_locked=False,
     )
@@ -37,7 +35,6 @@ def test_resume_from_motion_beats_lip_dirty():
         resume_from="motion",
         i2v_src="ai",
         scene_ok=True,
-        id_ok=True,
         clip_ok=True,
         scene_locked=False,
     )

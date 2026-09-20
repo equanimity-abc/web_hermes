@@ -48,7 +48,7 @@ def test_layered_reuses_locked_location_plate(monkeypatch, tmp_path):
     }
 
     monkeypatch.setattr(layers, "load_characters", lambda s: [char, loc])
-    monkeypatch.setattr(layers, "character_requires_face_identity", lambda c: c.get("id") == "change")
+    monkeypatch.setattr(layers, "character_requires_face", lambda c: c.get("id") == "change")
     monkeypatch.setattr(layers, "build_spatial_plan", lambda slug, shot: shot["spatial_plan"])
     monkeypatch.setattr(
         layers,

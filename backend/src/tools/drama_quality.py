@@ -109,13 +109,12 @@ def assert_studio_providers(slug: str) -> dict[str, Any]:
 
 
 def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
-    """Block export unless every shot passes identity/lip/flicker (unless force)."""
+    """Block export unless every shot passes lip/flicker (unless force)."""
     from tools.drama_qc import qc_gates_enabled
 
     if force or not qc_gates_enabled():
         return {"ok": True, "forced": bool(force), "block_reason": "", "qc_disabled": not qc_gates_enabled()}
 
-    from tools.drama_produce_gates import dirty_identity_kpi_fails, identity_kpi, identity_kpi_blocker
     from tools.drama_qc import qc_shot_bundle, shot_can_pass
     from tools.drama_shots import ordered_shots_from_doc, save_doc
 
@@ -142,15 +141,8 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
         reason = str(bundle.get("block_reason") or "QC 未通过")
         blockers.append(f"Shot {sn}: {reason}")
 
-    kpi_msg = identity_kpi_blocker(doc, slug=slug)
-    if kpi_msg:
-        touched = dirty_identity_kpi_fails(doc, slug=slug)
-        if touched:
-            lip_meta_fixed = True
-        blockers.append(kpi_msg)
-
     if lip_meta_fixed:
-        # Persist recovered lip_source / KPI dirty marks.
+        # Persist recovered lip_source.
         try:
             save_doc(doc)
         except Exception:
@@ -166,7 +158,6 @@ def assert_shots_qc_for_export(slug: str, episode: int, doc: dict[str, Any], *, 
         "ok": True,
         "forced": False,
         "block_reason": "",
-        "identity_kpi": identity_kpi(doc),
     }
 
 def assert_studio_lip_shot(slug: str, shot: dict[str, Any]) -> None:

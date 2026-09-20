@@ -593,16 +593,16 @@ def _scene_prompt(
     speaker = ""
     plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
     if plan:
-        sid = str(plan.get("identity_subject_id") or "").strip()
+        sid = str(plan.get("subject_id") or "").strip()
         for slot in plan.get("slots") or []:
             if str(slot.get("character_id") or "") == sid:
                 speaker = str(slot.get("character_name") or "").strip()
                 break
     if not speaker and slug:
         try:
-            from tools.drama_spatial import identity_subject_character
+            from tools.drama_spatial import subject_character
 
-            subj = identity_subject_character(slug, shot)
+            subj = subject_character(slug, shot)
             if subj:
                 speaker = str(subj.get("name") or subj.get("id") or "").strip()
         except Exception:
@@ -1333,7 +1333,7 @@ def generate_shot_candidates(
             slug,
             character_ids=cids,
             plan_hash=str(plan.get("hash") or ""),
-            identity_subject_id=str(plan.get("identity_subject_id") or ""),
+            subject_id=str(plan.get("subject_id") or ""),
             exclude_episode=episode,
             exclude_shot=int(shot.get("n") or 0),
             limit=2,
@@ -2569,20 +2569,6 @@ def render_shot_layers(
             if not _path_for(shot, "scene").is_file():
                 apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
-        # 身份闸：校验开启时才打分标脏；关闭时跳过
-        if used_ai:
-            from tools.drama_qc import qc_gates_enabled, qc_shot_identity
-
-            if qc_gates_enabled():
-                identity = qc_shot_identity(slug, episode, shot, apply=True)
-                if str(identity.get("status") or "") == "ok" and not identity.get("pass"):
-                    degrades.append(
-                        {
-                            "shot": int(shot.get("n") or 0),
-                            "layer": "identity",
-                            "reason": f"身份余弦 {identity.get('cosine')} 低于阈值，已标脏（请手工重抽）",
-                        }
-                    )
 
     if "overlay" in wanted:
         _draw_subtitle_overlay(shot, overlay)

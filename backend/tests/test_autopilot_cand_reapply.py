@@ -40,10 +40,6 @@ def test_render_shot_layers_autopilot_skips_reapply_candidate(tmp_path, monkeypa
     monkeypatch.setattr(dv, "_path_for", lambda shot_obj, layer: scene if layer == "scene" else tmp_path / layer)
     monkeypatch.setattr(dv, "load_characters", lambda slug: [])
     monkeypatch.setattr(dv, "resolve_shot_characters", lambda shot_obj, cards: [])
-    monkeypatch.setattr(
-        "tools.drama_qc.qc_shot_identity",
-        lambda *a, **k: {"status": "skipped", "pass": False, "enforcement": "advisory", "required": False},
-    )
 
     # Only rebuild scene layer; avoid voice/motion side effects.
     info = dv.render_shot_layers(

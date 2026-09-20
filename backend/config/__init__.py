@@ -107,7 +107,7 @@ class Config:
     I2V_API_URL: str = os.getenv("I2V_API_URL", "")
     I2V_API_KEY: str = os.getenv("I2V_API_KEY", "")
     I2V_POLL_INTERVAL: float = float(os.getenv("I2V_POLL_INTERVAL", "2.0"))
-    I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "300.0"))
+    I2V_POLL_TIMEOUT: float = float(os.getenv("I2V_POLL_TIMEOUT", "600.0"))
     I2V_SECONDS: float = float(os.getenv("I2V_SECONDS", "2.5"))
 
     LIP_PROVIDER: str = os.getenv("LIP_PROVIDER", "seedance")

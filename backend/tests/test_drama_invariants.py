@@ -68,20 +68,6 @@ def test_retry_call_success_stops_early():
     assert calls["n"] == 2
 
 
-# ---------------------------------------------------------------- P1-7 identity
-def test_proxy_identity_cannot_pass():
-    from tools.drama_qc import check_allows_pass
-
-    proxy = {"status": "degraded", "reason": "proxy_identity", "method": "proxy", "cosine": 0.9}
-    assert check_allows_pass(proxy) is False  # 0.9 也不通过
-
-
-def test_arcface_identity_ok_and_pass_wins():
-    from tools.drama_qc import check_allows_pass
-
-    ok = {"status": "ok", "pass": True, "method": "arcface"}
-    assert check_allows_pass(ok) is True
-
 
 # ---------------------------------------------------------------- P0-5 overrides
 def test_models_with_overrides_deep_merges_episode_and_shot():

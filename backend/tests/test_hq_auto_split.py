@@ -118,3 +118,63 @@ def test_normalize_hq_auto_split_doc_renumbers(monkeypatch):
     out2 = normalize_hq_auto_split_doc("demo", 1, out["doc"])
     assert out2["changed"] is False
     assert len(out2["doc"]["shots"]) == 3
+
+
+def test_normalize_hq_auto_split_doc_remaps_assets(monkeypatch):
+    """拆分会把后续镜头 n 顺移；assets 里的 shotNN 前缀必须同步重映射。"""
+    doc = {
+        "shots": [
+            {
+                "n": 1,
+                "duration": 3,
+                "字幕": "旁白",
+                "kind": "establishing",
+                "dialogue_track": {"mode": "single", "turns": []},
+                "assets": {"scene": "dramas/demo/videos/ep01/shot01_scene.png"},
+            },
+            {
+                "n": 2,
+                "duration": 6,
+                "字幕": "甲：「a」乙：「b」",
+                "角色": ["甲", "乙"],
+                "kind": "dialogue",
+                "dialogue_track": {
+                    "mode": "multi",
+                    "turns": [
+                        {"speaker": "甲", "character_id": "c1", "character_name": "甲", "text": "a"},
+                        {"speaker": "乙", "character_id": "c2", "character_name": "乙", "text": "b"},
+                    ],
+                },
+                "assets": {"scene": "dramas/demo/videos/ep01/shot02_scene.png"},
+            },
+            {
+                "n": 3,
+                "duration": 4,
+                "字幕": "丙：「c」",
+                "角色": ["丙"],
+                "kind": "dialogue",
+                "dialogue_track": {
+                    "mode": "single",
+                    "turns": [
+                        {"speaker": "丙", "character_id": "c3", "character_name": "丙", "text": "c"}
+                    ],
+                },
+                "assets": {
+                    "scene": "dramas/demo/videos/ep01/shot03_scene.png",
+                    "motion": "dramas/demo/videos/ep01/shot03_motion.mp4",
+                    "clip": "dramas/demo/videos/ep01/shot03.mp4",
+                },
+            },
+        ],
+        "timeline": {"order": [1, 2, 3], "fade_sec": 0.2},
+    }
+    monkeypatch.setattr("tools.drama_characters.load_characters", lambda slug: [])
+    out = normalize_hq_auto_split_doc("demo", 1, doc)
+    shots = out["doc"]["shots"]
+    assert [s["n"] for s in shots] == [1, 2, 3, 4]
+    # 原 Shot 3 顺移为 Shot 4：assets 必须重映射到 shot04
+    assert shots[3]["assets"]["scene"] == "dramas/demo/videos/ep01/shot04_scene.png"
+    assert shots[3]["assets"]["motion"] == "dramas/demo/videos/ep01/shot04_motion.mp4"
+    assert shots[3]["assets"]["clip"] == "dramas/demo/videos/ep01/shot04.mp4"
+    # 未顺移的 Shot 1 保持不变
+    assert shots[0]["assets"]["scene"] == "dramas/demo/videos/ep01/shot01_scene.png"

@@ -555,8 +555,6 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         if isinstance(raw.get("dialogue_track"), dict)
         else None,
         "keys": _normalize_shot_keys(slug, episode, raw),
-        "identity": raw.get("identity") if isinstance(raw.get("identity"), dict) else None,
-        "identity_hint": str(raw.get("identity_hint") or ""),
         "qc": _normalize_shot_qc(raw),
         "locked": locked,
         "dirty": dirty,
@@ -1349,8 +1347,6 @@ def public_shot(shot: dict[str, Any]) -> dict[str, Any]:
         if isinstance(shot.get("dialogue_track"), dict)
         else None,
         "keys": list(shot.get("keys") or []),
-        "identity": shot.get("identity") if isinstance(shot.get("identity"), dict) else None,
-        "identity_hint": shot.get("identity_hint") or "",
         "qc": shot.get("qc") if isinstance(shot.get("qc"), dict) else None,
         "locked": shot.get("locked") or [],
         "dirty": shot.get("dirty") or [],

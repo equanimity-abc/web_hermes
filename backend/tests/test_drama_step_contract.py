@@ -117,7 +117,7 @@ def test_publish_and_require_cast_step2(tmp_path, monkeypatch):
         "tools.drama_characters.find_character",
         lambda cards_, role: cards_[0] if role in ("a", "阿明") else None,
     )
-    monkeypatch.setattr("tools.drama_characters.character_requires_face_identity", lambda c: True)
+    monkeypatch.setattr("tools.drama_characters.character_requires_face", lambda c: True)
     monkeypatch.setattr("tools.drama_characters.ref_exists", lambda s, c: True)
     monkeypatch.setattr("tools.drama_characters.ref_face_exists", lambda s, c: True)
     monkeypatch.setattr("tools.drama_characters.normalize_category", lambda c: "character")
@@ -146,7 +146,7 @@ def test_require_cast_fails_loud(tmp_path, monkeypatch):
         lambda s: [{"id": "a", "name": "阿明", "category": "character"}],
     )
     monkeypatch.setattr("tools.drama_characters.find_character", lambda cards, role: cards[0])
-    monkeypatch.setattr("tools.drama_characters.character_requires_face_identity", lambda c: True)
+    monkeypatch.setattr("tools.drama_characters.character_requires_face", lambda c: True)
     monkeypatch.setattr("tools.drama_characters.normalize_category", lambda c: "character")
     monkeypatch.setattr("tools.drama_shots.normalize_roles", lambda x: list(x or []))
 

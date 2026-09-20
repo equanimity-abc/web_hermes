@@ -827,7 +827,7 @@ def _arcface_embed_bgr(img_bgr) -> tuple[list[float] | None, str]:
     except ImportError:
         return None, "no_insightface"
     try:
-        from tools.drama_qc import _arcface_singleton
+        from tools.drama_face import _arcface_singleton
 
         app = _arcface_singleton()
         if app is None:
@@ -914,7 +914,7 @@ def _identity_layout_lock(
     falls back to the color heuristic. This is the production fix for 口型错位.
     """
     try:
-        from tools.drama_qc import _arcface_singleton, _cosine
+        from tools.drama_face import _arcface_singleton, _cosine
     except Exception:
         return {}
 
@@ -1009,7 +1009,7 @@ def _ref_head_patch(ref_path: Path):
 
 
 def _box_hist_match_score(frame_arr, box: tuple[float, float, float, float], ref_vec: list[float]) -> float:
-    from tools.drama_qc import _cosine
+    from tools.drama_face import _cosine
 
     h, w = frame_arr.shape[:2]
     x, y, bw, bh = box
@@ -1236,7 +1236,7 @@ def _speaker_face_crop_box(
 
     # --- Preferred: ArcFace identity match ---
     try:
-        from tools.drama_qc import _arcface_embedding, _arcface_singleton, _cosine
+        from tools.drama_face import _arcface_embedding, _arcface_singleton, _cosine
         import numpy as np
         from PIL import Image
 
@@ -1353,7 +1353,7 @@ def _mouth_center_in_box(frame_bgr, box: tuple[float, float, float, float]) -> t
     if side < 8:
         return (0.5, 0.72)
     try:
-        from tools.drama_qc import _arcface_singleton
+        from tools.drama_face import _arcface_singleton
 
         app = _arcface_singleton()
         faces = app.get(frame_bgr)
