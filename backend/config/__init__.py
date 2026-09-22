@@ -31,6 +31,8 @@ class Config:
     ARK_TEXT_MODEL_ALT: str = os.getenv("ARK_TEXT_MODEL_ALT", "glm-5-2-260617")
     ARK_IMAGE_MODEL: str = os.getenv("ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
     ARK_VIDEO_MODEL: str = os.getenv("ARK_VIDEO_MODEL", "doubao-seedance-2-5-260628")
+    # 方案 A 开关：默认走原图生视频流程；仅当输出撞「疑似真人/敏感内容」时自动降级方案 A 重试
+    ARK_I2V_REFERENCE_ONLY: str = os.getenv("ARK_I2V_REFERENCE_ONLY", "0")
     ARK_AUDIO_MODEL: str = os.getenv("ARK_AUDIO_MODEL", "doubao-seed-audio-1-0")
 
     # 阿里云百炼（DashScope）：出图 / 图生视频 / 高拟真配音
@@ -84,7 +86,8 @@ class Config:
     CONTEXT_KEEP_RECENT: int = int(os.getenv("CONTEXT_KEEP_RECENT", "12"))
 
     DRAMA_MAX_WORKERS: int = int(os.getenv("DRAMA_MAX_WORKERS", "1"))
-    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "1"))
+    DRAMA_SHOT_CONCURRENCY: int = int(os.getenv("DRAMA_SHOT_CONCURRENCY", "2"))
+    DRAMA_CAST_CONCURRENCY: int = int(os.getenv("DRAMA_CAST_CONCURRENCY", "4"))
     # 0=关闭全部 QC 硬闸（已永久关闭，见 drama_qc.qc_gates_enabled）
     DRAMA_QC_ENABLED: str = os.getenv("DRAMA_QC_ENABLED", "0")
     DRAMA_RPM_DEFAULT: int = int(os.getenv("DRAMA_RPM_DEFAULT", "0"))

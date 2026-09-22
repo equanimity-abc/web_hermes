@@ -158,16 +158,35 @@ def build_seedance_i2v_prompt(
     generate_audio: bool = True,
     manual_voice: bool = False,
     identity_ref_clause: str = "",
+    reference_only: bool = False,
 ) -> str:
-    """Seedance 图生视频：优先 motion（SeriesPack），否则回退 画面。"""
+    """Seedance 图生视频：优先 motion（SeriesPack），否则回退 画面。
+
+    reference_only=True（方案 A）：不传「含人脸的图生图分镜」首帧，只用大头照
+    reference_image 锁脸；构图/场景/动作全交给 Prompt 文本 + 非人像参考图。
+    """
     motion = str(shot.get("motion") or "").strip()
     scene = _clean_scene(motion or str(shot.get("画面") or ""))
     size = str(shot.get("shot_size") or shot.get("size") or "").strip()
+    # 面部大特写/近景 → 中近景（胸像）：降低 Seedance 输出「疑似真人」风控（Ark 建议）。
+    # 对象特写(insert)/定场(establishing)/群像(crowd) 不受影响。
+    if size.upper() in ("ECU", "CU") and str(shot.get("kind") or "").strip().lower() not in (
+        "insert",
+        "establishing",
+        "crowd",
+    ):
+        size = "MCU"
     camera = camera_motion_zh(shot.get("camera"))
-    bits: list[str] = [
-        "基于首帧参考图生成竖屏9:16短剧镜头",
-        "生成视频中的主体必须与首帧参考图中的主体完全一致，五官、发型、服装与体态不变",
-    ]
+    if reference_only:
+        bits: list[str] = [
+            "基于锁脸参考图生成竖屏9:16短剧镜头",
+            "生成视频中的主体必须与锁脸参考图完全一致，五官、发型、服装与体态不变",
+        ]
+    else:
+        bits: list[str] = [
+            "基于首帧参考图生成竖屏9:16短剧镜头",
+            "生成视频中的主体必须与首帧参考图中的主体完全一致，五官、发型、服装与体态不变",
+        ]
     if identity_ref_clause:
         bits.insert(1, identity_ref_clause)
     if look_clause:

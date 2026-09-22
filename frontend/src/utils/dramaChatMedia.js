@@ -124,7 +124,6 @@ export function formatDramaJobProgress(job) {
     if (failed > 0) parts.push(`失败 ${failed}`)
     if (doneN === 0) parts.push(`进行中 0/${total} 镜`)
   }
-  if (shot != null) parts.push(`第 ${shot} 镜`)
   if (stage && stage !== 'shot' && stage !== 'done') parts.push(stage)
   if (message) parts.push(message)
   let head = '成片生成中'

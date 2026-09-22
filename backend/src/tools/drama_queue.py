@@ -543,11 +543,6 @@ class DramaQueue:
                     job.touch(status="cancelled", result=None, error=None)
                 else:
                     err = str(e)
-                    prog = job.progress or {}
-                    if prog.get("shot") and f"Shot {prog['shot']}" not in err and f"第{prog['shot']}镜" not in err:
-                        # 整集汇总失败不要再挂「第X镜：」，避免误读成单镜根因
-                        if not re.search(r"HQ 有\s*\d+\s*镜失败", err):
-                            err = f"第{prog['shot']}镜：{err}"
                     job.touch(status="error", error=err, result=None)
                     self._progress(job, message=err)
                     # 一任务失败：同项目待跑的不再开启；已在跑的收到取消信号，完成当前步骤后停

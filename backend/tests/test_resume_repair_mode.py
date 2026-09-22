@@ -39,3 +39,16 @@ def test_resume_from_motion_beats_lip_dirty():
         scene_locked=False,
     )
     assert mode == "flicker"
+
+
+def test_scene_dirty_but_scene_ok_skips_redraw():
+    """画面已存在时，即使 dirty 含 scene 也不重画（只补缺，不再回 full）。"""
+    mode = _resume_repair_mode(
+        dirty={"scene", "clip"},
+        resume_from="",
+        i2v_src="",
+        scene_ok=True,
+        clip_ok=False,
+        scene_locked=False,
+    )
+    assert mode == "flicker"  # 而非 "full"（full 会重画画面）

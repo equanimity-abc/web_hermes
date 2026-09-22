@@ -39,7 +39,8 @@ def test_classify_lip_failure():
     assert c["dirty"] == ["lip", "clip"]
 
 
-def test_diagnose_shot_narrows_to_motion():
+def test_diagnose_shot_narrows_to_motion(monkeypatch):
+    monkeypatch.setattr("tools.drama_resume._disk_file_ok", lambda rel: True)
     shot = {
         "n": 2,
         "assets": {"scene": "a.png", "voice": "a.mp3", "clip": "a.mp4"},
@@ -108,10 +109,38 @@ def test_prepare_episode_resume_writes_narrow_dirty(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("tools.drama_audio.load_mix", lambda slug, ep: {})
     monkeypatch.setattr("tools.drama_audio.has_bgm", lambda mix: False)
-    monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: tmp_path / "missing.mp4")
+    for name in ("s.png", "v.mp3", "c.mp4"):
+        (tmp_path / name).write_bytes(b"x" * 200)
+    monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: tmp_path / str(rel))
 
     report = prepare_episode_resume("demo", 1)
     assert report["failed_count"] == 1
     assert saved
     assert saved[0]["dirty"] == ["lip", "clip"]
     assert saved[0]["qc"]["resume_from"] == "lip"
+
+
+def test_classify_step_scene_contract():
+    c = classify_failure("[step:scene] 缺少正式输出：dramas/x/videos/ep01/shot01_scene.png")
+    assert c["stage"] == "scene"
+    assert "scene" in c["dirty"]
+    assert c["resume_from"] == "scene"
+
+
+def test_diagnose_shot_missing_scene_demands_scene(monkeypatch):
+    # 曾记录 assets.scene 但磁盘文件已缺失：续跑必须重出画面，而不是被非空
+    # 字符串误导跳过、再到正式发布时才报 [step:scene] 缺少正式输出。
+    monkeypatch.setattr("tools.drama_resume._disk_file_ok", lambda rel: False)
+    shot = {
+        "n": 1,
+        "assets": {"scene": "missing.png", "clip": "missing.mp4"},
+        "qc": {
+            "produce_ok": False,
+            "produce_error": "[step:scene] 缺少正式输出：missing.png",
+        },
+        "dirty": ["motion", "clip"],
+    }
+    plan = diagnose_shot(shot)
+    assert plan is not None
+    assert plan["resume_from"] == "scene"
+    assert "scene" in plan["dirty"]

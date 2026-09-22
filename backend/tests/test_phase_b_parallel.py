@@ -8,6 +8,7 @@ from config import config
 from tools.drama_parallel import (
     ProgressClock,
     acquire_lane,
+    cast_concurrency,
     lane_for_provider,
     parallel_map,
     rpm_for_lane,
@@ -16,8 +17,10 @@ from tools.drama_parallel import (
 
 
 def test_shot_concurrency_default():
-    assert shot_concurrency() == 1
-    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 1
+    assert shot_concurrency() == 2
+    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 2
+    assert cast_concurrency() == 4
+    assert int(getattr(config, "DRAMA_CAST_CONCURRENCY", 0) or 0) == 4
 
 
 def test_provider_lanes():

@@ -496,11 +496,19 @@ def ensure_character_refs(
         return cid
 
     if pending:
-        # 定妆串行：一角完成再下一角，避免并发写 characters.json / 争用出图配额
-        for item in pending:
-            cid = _one(item)
-            if cid:
-                generated.append(cid)
+        # 定妆并行：多角色同时出图；写 characters.json 由 _characters_file_lock 串行兜底
+        from tools.drama_parallel import cast_concurrency, parallel_map
+
+        generated.extend(
+            cid
+            for cid in parallel_map(
+                pending,
+                _one,
+                max_workers=cast_concurrency(),
+                fail_fast=True,
+            )
+            if cid
+        )
     return generated
 
 
@@ -564,6 +572,26 @@ def ensure_default_bgm(slug: str, episode: int, *, catalog_id: str = DEFAULT_CAT
     return True
 
 
+_SAFETY_DESC_KEYS = ("画面", "motion", "camera", "角色", "地点", "道具")
+
+
+def _safety_desc_fingerprint(shot: dict[str, Any]) -> str:
+    """内容安全相关的描述指纹：这些字段没变，重试大概率命中同样的审核。"""
+    return "\n".join(f"{k}={str(shot.get(k) or '')}" for k in _SAFETY_DESC_KEYS)
+
+
+def _is_content_safety_error(err: str) -> bool:
+    s = str(err or "")
+    low = s.lower()
+    return (
+        "sensitive" in low
+        or "敏感" in s
+        or "内容安全" in s
+        or "隐私" in s
+        or "policyviolation" in low
+    )
+
+
 def _mark_shot_produce_failed(slug: str, episode: int, shot_n: int, err: BaseException | str) -> None:
     """Persist per-shot failure so smart resume can continue from the failed step."""
     from tools.drama_resume import mark_shot_failure_layers, refine_plan_for_locks, strip_locked_dirty
@@ -584,6 +612,8 @@ def _mark_shot_produce_failed(slug: str, episode: int, shot_n: int, err: BaseExc
         qc["produce_stage"] = str(classified.get("stage") or "unknown")
         qc["resume_from"] = str(classified.get("resume_from") or "scene")
         qc["resume_hint"] = str(classified.get("hint") or "")
+        if _is_content_safety_error(err_s):
+            qc["safety_fingerprint"] = _safety_desc_fingerprint(shot)
         shot["qc"] = qc
         dirty_layers = strip_locked_dirty(
             shot, [str(x) for x in (classified.get("dirty") or []) if str(x).strip()]
@@ -680,6 +710,9 @@ def _resume_repair_mode(
         )
     ):
         return "voice"
+    # 画面已存在则不重画（只补缺）；仅当画面缺失才全量重做。复杂场景交人工手动修改。
+    if scene_ok:
+        return "flicker"
     return "full"
 
 
@@ -788,8 +821,30 @@ def _hq_process_one_shot(
             qc = shot.get("qc") if isinstance(shot.get("qc"), dict) else {}
             resume_from = str(qc.get("resume_from") or "").strip()
             i2v_src = str(shot.get("i2v_source") or "")
-            scene_ok = bool(assets.get("scene"))
-            clip_ok = bool(assets.get("clip"))
+
+            # 内容安全拦截防重试：描述未变 → 禁止再次调用，避免重复浪费
+            if _is_content_safety_error(str(qc.get("produce_error") or "")):
+                _fp = str(qc.get("safety_fingerprint") or "")
+                if _fp and _fp == _safety_desc_fingerprint(shot):
+                    raise RuntimeError(
+                        f"Shot {sn} 内容安全拦截且描述未变，禁止原样重试；"
+                        "请先改「运镜/构图」描述（或换画面参考图）后再重做"
+                    )
+
+            def _disk_ok(rel: Any) -> bool:
+                p = str(rel or "").strip()
+                if not p:
+                    return False
+                try:
+                    from tools.workspace import resolve_safe
+
+                    f = resolve_safe(p)
+                    return f.is_file() and f.stat().st_size > 100
+                except Exception:
+                    return False
+
+            scene_ok = _disk_ok(assets.get("scene"))
+            clip_ok = _disk_ok(assets.get("clip"))
             locked = set(shot.get("locked") or [])
             scene_locked = "scene" in locked or "shot" in locked
 
@@ -858,12 +913,25 @@ def _hq_process_one_shot(
         publish_scene_step(slug, n, sn, scene_rel)
         require_scene_step(slug, n, sn)
         kind = infer_kind(shot)
-        if cancel_check:
-            shot["_cancel_check"] = cancel_check
+        # 只补缺：运动视频已存在则跳过 I2V（口型已内含，不重生成已有视频）
+        _motion_rel = str((shot.get("assets") or {}).get("motion") or _sa(slug, n, sn)["motion"])
+        _motion_exists = False
         try:
-            i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
-        finally:
-            shot.pop("_cancel_check", None)
+            from tools.workspace import resolve_safe as _rs_m
+
+            _mp = _rs_m(_motion_rel)
+            _motion_exists = _mp.is_file() and _mp.stat().st_size > 100
+        except Exception:
+            _motion_exists = False
+        if _motion_exists:
+            i2v = {"tried": False, "i2v_source": shot.get("i2v_source") or "ai", "reason": "motion_exists"}
+        else:
+            if cancel_check:
+                shot["_cancel_check"] = cancel_check
+            try:
+                i2v = generate_shot_i2v(slug, n, shot, force=True, allow_locked=True, strict=True)
+            finally:
+                shot.pop("_cancel_check", None)
         src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
         if src in ("ai", "keys"):
             motion_rel = str((shot.get("assets") or {}).get("motion") or _sa(slug, n, sn)["motion"])
@@ -987,8 +1055,24 @@ def _hq_process_one_shot(
         finally:
             shot.pop("_cancel_check", None)
 
-    # 校验已拆除：闪烁续跑也直接重跑运动（不再复检 SSIM）
-    i2v = _run_i2v()
+    # 只补缺：续跑时运动视频文件已存在则跳过 I2V（不重生成已有视频）
+    motion_rel = str(
+        (shot.get("assets") or {}).get("motion") or (_shot_assets2(slug, n, sn) or {}).get("motion") or ""
+    )
+    motion_exists = False
+    if motion_rel:
+        try:
+            from tools.workspace import resolve_safe as _resolve_motion
+
+            _mp = _resolve_motion(motion_rel)
+            motion_exists = _mp.is_file() and _mp.stat().st_size > 100
+        except Exception:
+            motion_exists = False
+
+    if not force and motion_exists:
+        i2v = {"tried": False, "i2v_source": shot.get("i2v_source") or "ai", "reason": "motion_exists"}
+    else:
+        i2v = _run_i2v()
     src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
     kind = infer_kind(shot)
     if planned not in ("L0",) and kind not in ("establishing", "insert", "crowd", "title"):
@@ -1393,7 +1477,7 @@ def _produce_episode_hq_body(
             failed=fail_count,
             ok=ok_count,
             failure_media=media,
-            message=f"Shot {sn} 失败，串行产线已停止",
+            message=f"Shot {sn} 失败，其余镜继续",
         )
 
     def _raise_hq_failures() -> None:
@@ -1411,83 +1495,59 @@ def _produce_episode_hq_body(
         raise RuntimeError(str(bundle.get("text") or "HQ 产线失败")) from None
 
     clock.start("shots")
-    try:
-        for sn in shot_ns:
-            if cancel_check:
-                cancel_check()
-            _progress(
-                on_progress,
-                stage="shot",
-                shot=sn,
-                total=total,
-                current=ok_count,
-                finished=done_count,
-                message=f"Shot {sn} 串行：画面→视频→声音→成片（{done_count}/{total} 已处理）",
-            )
-            try:
-                result = _hq_process_one_shot(
-                    slug,
-                    n,
-                    sn,
-                    ep_title=ep_title,
-                    force=force,
-                    cancel_check=cancel_check,
-                )
-            except BaseException as exc:
-                done_count += 1
-                _record_shot_failure(sn, exc)
-                _raise_hq_failures()
+    from tools.drama_parallel import parallel_map, shot_concurrency
 
-            shot_results.append(result)
-            done_count += 1
-            if isinstance(result, dict) and result.get("skipped"):
-                if result.get("formal_ok"):
-                    ok_count += 1
-                    _progress(
-                        on_progress,
-                        stage="shot",
-                        shot=sn,
-                        current=ok_count,
-                        total=total,
-                        finished=done_count,
-                        failed=fail_count,
-                        ok=ok_count,
-                        message=f"Shot {sn} 已通过，跳过 ({ok_count}/{total})",
-                    )
-                else:
-                    _progress(
-                        on_progress,
-                        stage="shot",
-                        shot=sn,
-                        current=ok_count,
-                        total=total,
-                        finished=done_count,
-                        failed=fail_count,
-                        ok=ok_count,
-                        message=f"Shot {sn} 跳过（无有效成片）",
-                    )
-                continue
-            if isinstance(result, dict) and result.get("ok") is False:
-                _record_shot_failure(sn, result)
-                _raise_hq_failures()
-            ok_count += 1
-            _progress(
-                on_progress,
-                stage="shot",
-                shot=sn,
-                current=ok_count,
-                total=total,
-                finished=done_count,
-                failed=fail_count,
-                ok=ok_count,
-                message=f"Shot {sn} 完成 ({ok_count}/{total} 成功，已结束 {done_count}/{total})",
-            )
-    except RuntimeError:
-        raise
-    except Exception:
+    def _shot_worker(sn: int) -> dict[str, Any]:
+        return _hq_process_one_shot(
+            slug,
+            n,
+            sn,
+            ep_title=ep_title,
+            force=force,
+            cancel_check=cancel_check,
+        )
+
+    def _on_shot_done(_idx: int, sn: int, result: Any) -> None:
+        nonlocal done_count
+        done_count += 1
+        if isinstance(result, BaseException):
+            _record_shot_failure(sn, result)
+            return
+        _progress(
+            on_progress,
+            stage="shot",
+            shot=sn,
+            total=total,
+            finished=done_count,
+            failed=fail_count,
+            message=f"Shot {sn} 完成（并发）",
+        )
+
+    if cancel_check:
+        cancel_check()
+    try:
+        results = parallel_map(
+            shot_ns,
+            _shot_worker,
+            max_workers=shot_concurrency(),
+            cancel_check=cancel_check,
+            on_done=_on_shot_done,
+            fail_fast=False,
+        )
+    except BaseException:
         if failed_shots:
             _raise_hq_failures()
         raise
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        shot_results.append(result)
+        if result.get("skipped"):
+            if result.get("formal_ok"):
+                ok_count += 1
+            continue
+        ok_count += 1
     clock.end("shots", count=len(shot_results), failed=len(failed_shots))
 
     stages["shots_failed"] = list(failed_shots)

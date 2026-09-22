@@ -165,22 +165,6 @@ def enrich_shot(shot: dict[str, Any], *, slug: str = "", episode: int | None = N
     pub["files"] = {layer: _asset_meta(str(rel or "")) for layer, rel in assets.items()}
     clip = pub["files"].get("clip") or {}
     pub["preview_url"] = clip.get("url") or (pub["files"].get("scene") or {}).get("url")
-    pub["chosen"] = shot.get("chosen") or ""
-    pub["candidates"] = []
-    for item in shot.get("candidates") or []:
-        meta = _asset_meta(str(item.get("path") or ""), probe_image=False)
-        pub["candidates"].append(
-            {
-                "id": item.get("id"),
-                "path": item.get("path"),
-                "source": item.get("source"),
-                "seed": item.get("seed") or 0,
-                "url": meta.get("url"),
-                "exists": meta["exists"],
-                "bytes": meta.get("bytes") or 0,
-                "chosen": item.get("id") == shot.get("chosen"),
-            }
-        )
     if slug:
         cards = load_characters(slug)
         cast = resolve_shot_characters(shot, cards)
@@ -1014,36 +998,6 @@ def rerender_one_shot(slug: str, episode: int, shot_n: int, layers: list[str] | 
     return rerender_shot(slug, n, shot_n, layers=layers)
 
 
-def generate_candidates(slug: str, episode: int, shot_n: int, count: int | None = None) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    _assert_budget(slug, n)
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    if "shot" in (shot.get("locked") or []):
-        raise DramaBadRequest("整镜已锁定，不能重抽出图")
-    if "scene" in (shot.get("locked") or []):
-        raise DramaBadRequest("画面已锁定，不能重抽出图")
-    _take_snapshot(slug, n, doc, tag="candidates")
-    from tools.drama_video import generate_shot_candidates
-
-    ep_title = str(doc.get("title") or f"第{n}集")
-    created = generate_shot_candidates(slug, n, shot, title=ep_title, count=count or 4)
-    from tools.drama_shots import merge_save_shot
-
-    merge_save_shot(slug, n, shot)
-    return {
-        "slug": slug,
-        "episode": n,
-        "shot": enrich_shot(shot, slug=slug),
-        "created": [c.get("id") for c in created],
-        "chosen": shot.get("chosen") or "",
-    }
-
-
 def _rebuild_clip_keep_voice(
     slug: str,
     episode: int,
@@ -1075,94 +1029,6 @@ def _rebuild_clip_keep_voice(
     return rerender_shot(slug, episode, shot_n, layers=["clip"])
 
 
-def choose_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    _take_snapshot(slug, n, doc, tag="scene")
-    from tools.drama_video import choose_shot_candidate
-
-    try:
-        cand = choose_shot_candidate(shot, cid)
-    except ValueError as e:
-        raise DramaBadRequest(str(e)) from e
-    set_shot_locks(shot, lock=["scene"])
-    result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot, sync=False)
-    payload = {
-        "slug": slug,
-        "episode": n,
-        "shot": enrich_shot(find_shot(load_doc(slug, n) or doc, shot_n) or shot, slug=slug),
-        "chosen": cand.get("id"),
-        "voice_rebuilt": False,
-        "rebuilt_layers": result.get("rebuilt_layers") or result.get("rebuilt") or [],
-    }
-    payload.update({k: result[k] for k in ("assemble", "hint") if k in result})
-    return payload
-
-
-def delete_candidate(slug: str, episode: int, shot_n: int, cid: str) -> dict[str, Any]:
-    """Remove one candidate from the shot's candidate wall."""
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    cid = str(cid or "").strip()
-    if not cid:
-        raise DramaBadRequest("需要候选 id")
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    if "shot" in (shot.get("locked") or []):
-        raise DramaBadRequest("整镜已锁定，不能删除候选")
-    if "scene" in (shot.get("locked") or []) and str(shot.get("chosen") or "") == cid:
-        raise DramaBadRequest("画面已锁定，不能删除当前选用图（请先解锁）")
-    before = list(shot.get("candidates") or [])
-    hit = next((c for c in before if str(c.get("id") or "") == cid), None)
-    if hit is None:
-        raise DramaNotFound(f"找不到候选 {cid}")
-    try:
-        _take_snapshot(slug, n, doc, tag="candidate_delete")
-    except Exception:
-        # 快照失败不挡删除（大图集磁盘满/占用时常见）
-        pass
-    shot["candidates"] = [c for c in before if str(c.get("id") or "") != cid]
-    if str(shot.get("chosen") or "") == cid:
-        # 保留 scene.png 与 scene 锁；仅清 chosen，不自动解锁
-        shot["chosen"] = ""
-    # 优先删记录里的 path；再兜底规范路径（Windows 占用时忽略）
-    from tools.drama_shots import candidate_rel
-
-    rels = []
-    rel_hit = str((hit or {}).get("path") or "").strip()
-    if rel_hit:
-        rels.append(rel_hit)
-    rels.append(candidate_rel(slug, n, shot_n, cid))
-    seen_rel: set[str] = set()
-    for rel in rels:
-        if not rel or rel in seen_rel:
-            continue
-        seen_rel.add(rel)
-        try:
-            path = resolve_safe(rel)
-        except ValueError:
-            continue
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    save_doc(doc)
-    return {
-        "slug": slug,
-        "episode": n,
-        "shot": enrich_shot(shot, slug=slug),
-        "deleted": cid,
-    }
-
-
 def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict[str, Any]:
     slug = parse_slug(slug)
     n = parse_episode(episode)
@@ -1172,19 +1038,28 @@ def upload_shot_scene(slug: str, episode: int, shot_n: int, data: bytes) -> dict
     if shot is None:
         raise DramaNotFound(f"找不到 Shot {shot_n}")
     _take_snapshot(slug, n, doc, tag="scene")
-    from tools.drama_video import upload_shot_candidate
+    if "shot" in (shot.get("locked") or []):
+        raise DramaBadRequest("整镜已锁定，不能覆盖画面")
+    if "scene" in (shot.get("locked") or []):
+        raise DramaBadRequest("画面已锁定，不能覆盖画面（请先解锁）")
+    if not data:
+        raise DramaBadRequest("图片不能为空")
+    from tools.drama_shots import shot_assets
+    from tools.drama_video import _write_scene_png
 
+    scene_rel = str((shot.get("assets") or {}).get("scene") or shot_assets(slug, n, shot_n)["scene"])
+    shot.setdefault("assets", {}).setdefault("scene", scene_rel)
     try:
-        cand = upload_shot_candidate(slug, n, shot, data)
-    except ValueError as e:
-        raise DramaBadRequest(str(e)) from e
+        _write_scene_png(data, resolve_safe(scene_rel))
+    except Exception as e:
+        raise DramaBadRequest("无法读取图片") from e
+    shot["scene_source"] = "upload"
     set_shot_locks(shot, lock=["scene"])
     result = _rebuild_clip_keep_voice(slug, n, shot_n, doc, shot)
     payload = {
         "slug": slug,
         "episode": n,
         "shot": enrich_shot(find_shot(load_doc(slug, n) or doc, shot_n) or shot, slug=slug),
-        "chosen": cand.get("id"),
         "voice_rebuilt": False,
         "rebuilt_layers": result.get("rebuilt_layers") or result.get("rebuilt") or [],
     }
@@ -2509,18 +2384,6 @@ def enrich_character(slug: str, char: dict[str, Any]) -> dict[str, Any]:
     pub["ref_face_url"] = face_meta.get("url")
     pub["ref_plate_exists"] = bool(plate_meta["exists"])
     pub["ref_plate_url"] = plate_meta.get("url")
-    chosen = str(char.get("chosen_ref") or "")
-    pub["candidates"] = []
-    for item in char.get("candidates") or []:
-        cand_meta = _asset_meta(str(item.get("path") or ""))
-        pub["candidates"].append(
-            {
-                **item,
-                "exists": bool(cand_meta["exists"]),
-                "url": cand_meta.get("url"),
-                "chosen": str(item.get("id") or "") == chosen,
-            }
-        )
     return pub
 
 
@@ -2981,30 +2844,6 @@ def refine_shot(
     result["reply"] = reply
     result["patched"] = patch
     return result
-
-
-def choose_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
-    load_project(slug)
-    slug = parse_slug(slug)
-    from tools.drama_characters import CharacterError, choose_char_candidate
-
-    try:
-        rec = choose_char_candidate(slug, cid, cand_id)
-    except CharacterError as e:
-        raise DramaBadRequest(str(e)) from e
-    return enrich_character(slug, rec)
-
-
-def delete_character_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
-    load_project(slug)
-    slug = parse_slug(slug)
-    from tools.drama_characters import CharacterError, delete_char_candidate
-
-    try:
-        rec = delete_char_candidate(slug, cid, cand_id)
-    except CharacterError as e:
-        raise DramaBadRequest(str(e)) from e
-    return enrich_character(slug, rec)
 
 
 # 高内聚工作台文件：创意 SSOT + 壳 + 资产运行态 + 分集生产态（含 mix）

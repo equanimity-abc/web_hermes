@@ -873,10 +873,12 @@ def _action_resume_produce(args: dict) -> str:
             "summary": report.get("summary"),
             "hints": report.get("hints") or [],
             "prepared": report.get("prepared") or [],
+            "regenerate_plan": report.get("regenerate_plan") or [],
         },
         hint=(
-            f"智能续跑已提交：{report.get('summary') or ''}。"
-            "已先复检失败点是否人工修好；已解决则向后推进，否则按当前状态继续直至导出。"
+            f"智能续跑已提交：{report.get('summary') or ''}。\n"
+            + "\n".join(report.get("regenerate_plan") or [])
+            + "\n已先复检失败点是否人工修好；已解决则向后推进，否则按当前状态继续直至导出。"
             "不要循环狂刷 poll_job。"
         ),
     )

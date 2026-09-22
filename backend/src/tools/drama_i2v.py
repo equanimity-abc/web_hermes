@@ -130,6 +130,7 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
             face_index=face_i,
             body_index=body_i if body_i >= 1 and body_i != face_i else None,
         )
+    reference_only = bool(shot.get("_seedance_reference_only"))
 
     return build_seedance_i2v_prompt(
         shot,
@@ -138,6 +139,7 @@ def _motion_prompt(shot: dict[str, Any]) -> str:
         generate_audio=gen_audio,
         manual_voice=manual,
         identity_ref_clause=identity_clause,
+        reference_only=reference_only,
     )
 
 
@@ -642,10 +644,18 @@ def _run_i2v_with_same_tier_alt(
     models: dict[str, Any] | None,
     planned: str,
 ) -> bool:
-    """Primary provider only — no same-tier alternate hop."""
+    """Primary provider only — no same-tier alternate hop.
+
+    例外：撞「疑似真人/敏感内容」输出时，降级方案 A（不传首帧、只用大头照锁脸）重试一次。
+    """
     del models, planned  # reserved for call-site compatibility
     shot["i2v_provider"] = provider
-    return _run_i2v_provider(provider, scene, dest, shot, sec)
+    ok = _run_i2v_provider(provider, scene, dest, shot, sec)
+    if not ok and shot.get("_safety_retry_needed"):
+        shot["_force_reference_only"] = True
+        shot.pop("_safety_retry_needed", None)
+        ok = _run_i2v_provider(provider, scene, dest, shot, sec)
+    return ok
 
 def try_generate_i2v(
     scene: Path,

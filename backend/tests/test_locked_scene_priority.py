@@ -122,7 +122,7 @@ def test_generate_shot_candidates_hard_skips_locked_scene(monkeypatch):
         raise AssertionError("must not generate when scene locked")
 
     monkeypatch.setattr("tools.drama_video.load_characters", boom)
-    shot = {"n": 1, "locked": ["scene"], "candidates": [{"id": "c1"}], "assets": {}}
+    shot = {"n": 1, "locked": ["scene"], "assets": {}}
     out = generate_shot_candidates("demo", 1, shot, count=4)
-    assert out == [{"id": "c1"}]
+    assert out == []
     assert called["n"] == 0

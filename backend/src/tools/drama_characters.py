@@ -19,9 +19,11 @@ _SPEAKER = re.compile(r"^[\s【\[]*([^:：\]】\s]{1,16})\s*[]】]?\s*[:：]")
 _SPLIT = re.compile(r"[,，、/|]+")
 
 # 出图风格锚：压低写实摄影感，降低 Seedance/Kling/Wanx「疑似真人」拒图
+# （Ark 官方建议：强调赛璐璐/二渲染、动漫五官比例、禁止真人比例人脸与写实皮肤）
 ANIME_STYLE_GUARD = (
-    "二次元动漫插画风，赛璐璐上色，清晰线稿与色块，非写实，"
-    "禁止写实摄影、真人照片、超写实皮肤毛孔、镜头景深与照片颗粒"
+    "二次元动漫插画风，赛璐璐二渲染上色，清晰线稿与平涂色块，非写实，"
+    "眼睛偏大、下巴偏尖、五官简化动漫比例，"
+    "禁止写实摄影、真人照片、真人比例人脸、超写实皮肤纹理与毛孔、镜头景深与照片颗粒"
 )
 
 # 多角色定妆串行写 characters.json，避免后写覆盖先写。
@@ -239,7 +241,6 @@ def voice_hint_to_gender(hint: str) -> str:
 def default_tts_voices() -> list[dict[str, str]]:
     return [{"id": vid, "label": label} for vid, label in DEFAULT_VOICES]
 VALID_CATEGORIES = frozenset({"character", "prop", "scene"})
-CHAR_CANDIDATE_MAX = 4
 
 # ---------------------------------------------------------------------------
 # 火山 Ark 角色一致性契约（Seedream 定妆 + Seedance 参考）
@@ -541,10 +542,6 @@ def environment_ref_rel(slug: str, char: dict[str, Any] | None) -> str:
     if ref_exists(slug, char):
         return str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     return ""
-
-
-def candidate_ref_rel(slug: str, cid: str, cand_id: str) -> str:
-    return f"dramas/{slug}/characters/{cid}/candidates/{cand_id}.png"
 
 
 def parse_character_id(raw: str) -> str:
@@ -1086,58 +1083,6 @@ def ensure_character_looks_expanded(slug: str) -> list[str]:
     return updated
 
 
-def _prune_char_candidates(rows: list[dict[str, Any]], chosen: str = "") -> list[dict[str, Any]]:
-    keep = list(rows[:CHAR_CANDIDATE_MAX])
-    if chosen and not any(str(c.get("id") or "") == chosen for c in keep):
-        hit = next((c for c in rows if str(c.get("id") or "") == chosen), None)
-        if hit:
-            keep = ([hit] + [c for c in keep if str(c.get("id") or "") != chosen])[:CHAR_CANDIDATE_MAX]
-    return keep
-
-
-def normalize_char_candidates(
-    slug: str,
-    cid: str,
-    raw: Any,
-    chosen: str = "",
-) -> list[dict[str, Any]]:
-    rows = raw if isinstance(raw, list) else []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        cand_id = str(item.get("id") or "").strip()
-        if not cand_id or cand_id in seen:
-            continue
-        seen.add(cand_id)
-        rel = str(item.get("path") or candidate_ref_rel(slug, cid, cand_id)).replace("\\", "/")
-        try:
-            resolve_safe(rel)
-        except ValueError:
-            rel = candidate_ref_rel(slug, cid, cand_id)
-        out.append(
-            {
-                "id": cand_id,
-                "path": rel,
-                "source": str(item.get("source") or "ai"),
-            }
-        )
-    return _prune_char_candidates(out, str(chosen or ""))
-
-
-def next_char_candidate_ids(char: dict[str, Any], count: int = 1) -> list[str]:
-    used = {str(c.get("id") or "") for c in (char.get("candidates") or [])}
-    out: list[str] = []
-    i = 1
-    while len(out) < max(0, int(count)):
-        cid = f"c{i}"
-        i += 1
-        if cid not in used:
-            out.append(cid)
-    return out
-
-
 def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
     cid = parse_character_id(str(raw.get("id") or ""))
     name = str(raw.get("name") or cid).strip() or cid
@@ -1166,8 +1111,6 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         resolve_safe(ref)
     except ValueError:
         ref = canonical
-    chosen_ref = str(raw.get("chosen_ref") or "").strip()
-    candidates = normalize_char_candidates(slug, cid, raw.get("candidates"), chosen_ref)
     ref_image_provider, ref_image_model = normalize_ref_image_route(
         raw.get("ref_image_provider"), raw.get("ref_image_model")
     )
@@ -1209,8 +1152,6 @@ def normalize_character(slug: str, raw: dict[str, Any]) -> dict[str, Any]:
         "ref_face": ref_face,
         "ref_plate": ref_plate,
         "ref_locked": bool(raw.get("ref_locked")),
-        "chosen_ref": chosen_ref,
-        "candidates": candidates,
         "anchor_prompt": str(raw.get("anchor_prompt") or "").strip(),
         "anchor": str(raw.get("anchor") or "").strip().lower(),
     }
@@ -1539,83 +1480,6 @@ def resolve_shot_characters(shot: dict[str, Any], characters: list[dict[str, Any
         seen.add(hit["id"])
         out.append(hit)
     return out
-
-
-def find_char_candidate(char: dict[str, Any], cand_id: str) -> dict[str, Any] | None:
-    needle = str(cand_id or "").strip()
-    for item in char.get("candidates") or []:
-        if str(item.get("id") or "") == needle:
-            return item
-    return None
-
-
-def append_char_candidate(slug: str, cid: str, data: bytes, *, source: str = "upload") -> dict[str, Any]:
-    cid = parse_character_id(cid)
-    cards = load_characters(slug)
-    rec = find_character(cards, cid)
-    if rec is None:
-        raise CharacterError(f"找不到资产：{cid}，请先保存")
-    if rec.get("ref_locked") and ref_exists(slug, rec):
-        raise CharacterError("参考图已锁定，解锁后才能添加候选")
-    if len(rec.get("candidates") or []) >= CHAR_CANDIDATE_MAX:
-        raise CharacterError(f"候选图最多 {CHAR_CANDIDATE_MAX} 张，请先删除旧候选")
-    cand_ids = next_char_candidate_ids(rec, 1)
-    if not cand_ids:
-        raise CharacterError("无法分配候选 id")
-    cand_id = cand_ids[0]
-    rel = candidate_ref_rel(slug, cid, cand_id)
-    dest = resolve_safe(rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _write_ref_png(data, dest)
-    rec["candidates"] = list(rec.get("candidates") or []) + [{"id": cand_id, "path": rel, "source": source}]
-    rec["candidates"] = _prune_char_candidates(rec["candidates"], str(rec.get("chosen_ref") or ""))
-    if not ref_exists(slug, rec):
-        rec["ref"] = rel
-        rec["chosen_ref"] = cand_id
-    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
-    return rec
-
-
-def choose_char_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
-    cid = parse_character_id(cid)
-    cand_id = str(cand_id or "").strip()
-    cards = load_characters(slug)
-    rec = find_character(cards, cid)
-    if rec is None:
-        raise CharacterError(f"找不到资产：{cid}")
-    cand = find_char_candidate(rec, cand_id)
-    if cand is None:
-        raise CharacterError(f"找不到候选：{cand_id}")
-    rel = str(cand.get("path") or candidate_ref_rel(slug, cid, cand_id))
-    if not resolve_safe(rel).is_file():
-        raise CharacterError("候选图文件不存在")
-    rec["ref"] = rel
-    rec["chosen_ref"] = cand_id
-    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
-    return rec
-
-
-def delete_char_candidate(slug: str, cid: str, cand_id: str) -> dict[str, Any]:
-    cid = parse_character_id(cid)
-    cand_id = str(cand_id or "").strip()
-    cards = load_characters(slug)
-    rec = find_character(cards, cid)
-    if rec is None:
-        raise CharacterError(f"找不到资产：{cid}")
-    if rec.get("ref_locked") and str(rec.get("chosen_ref") or "") == cand_id:
-        raise CharacterError("当前参考图已锁定，先解锁再删除候选")
-    rec["candidates"] = [c for c in (rec.get("candidates") or []) if str(c.get("id") or "") != cand_id]
-    if str(rec.get("chosen_ref") or "") == cand_id:
-        rec["chosen_ref"] = ""
-        remaining = rec.get("candidates") or []
-        if remaining:
-            last = remaining[-1]
-            rec["ref"] = str(last.get("path") or ref_rel(slug, cid))
-            rec["chosen_ref"] = str(last.get("id") or "")
-        else:
-            rec["ref"] = ref_rel(slug, cid)
-    save_characters(slug, [rec if c.get("id") == cid else c for c in cards])
-    return rec
 
 
 def primary_voice(characters: list[dict[str, Any]], *, slug: str | None = None) -> str:

@@ -499,9 +499,15 @@ def ensure_environment_refs(
         return cat, cid
 
     if pending:
-        # 环境资产串行：一地点/道具完成再下一个
-        for rec in pending:
-            cat, cid = _one(rec)
+        # 环境资产并行：地点底板/道具图同时出图；写卡由 _characters_file_lock 串行兜底
+        from tools.drama_parallel import cast_concurrency, parallel_map
+
+        for cat, cid in parallel_map(
+            pending,
+            _one,
+            max_workers=cast_concurrency(),
+            fail_fast=True,
+        ):
             if cat == "prop":
                 props_ok.append(cid)
             else:

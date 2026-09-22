@@ -89,9 +89,6 @@ const {
   generateAllVideo,
   generateAllVoice,
   setManualVoice,
-  generateShotCandidates,
-  chooseShotCandidate,
-  deleteCandidate,
   uploadShotScene,
   generateShotI2v,
   generateShotLip,
@@ -652,9 +649,6 @@ async function onResumeDramaJob(payload) {
       @generate-all-voice="generateAllVoice"
       @set-manual-voice="setManualVoice"
       @toggle-role="toggleShotRole"
-      @generate-candidates="generateShotCandidates"
-      @choose-candidate="chooseShotCandidate"
-      @delete-candidate="deleteCandidate"
       @upload-scene="uploadShotScene"
       @generate-i2v="generateShotI2v"
       @generate-lip="generateShotLip"

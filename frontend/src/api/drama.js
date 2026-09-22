@@ -217,20 +217,6 @@ export function refineShot(slug, episode, shot, instruction, stage = 'video') {
   )
 }
 
-export function chooseCharacterCandidate(slug, cid, candId) {
-  return request(
-    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/candidates/${encodeURIComponent(candId)}/choose`,
-    { method: 'POST', body: JSON.stringify({}) },
-  )
-}
-
-export function deleteCharacterCandidate(slug, cid, candId) {
-  return request(
-    `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/candidates/${encodeURIComponent(candId)}`,
-    { method: 'DELETE' },
-  )
-}
-
 export function lockCharacterRef(slug, cid, locked) {
   return request(
     `/api/drama/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(cid)}/lock-ref`,
@@ -257,27 +243,6 @@ export async function uploadCharacterRef(slug, cid, file) {
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   }
   return data
-}
-
-export function generateCandidates(slug, episode, shot, count = 1) {
-  return request(
-    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/candidates`,
-    { method: 'POST', body: JSON.stringify({ count }) },
-  )
-}
-
-export function chooseCandidate(slug, episode, shot, cid) {
-  return request(
-    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/choose/${encodeURIComponent(cid)}`,
-    { method: 'POST', body: JSON.stringify({}) },
-  )
-}
-
-export function deleteCandidate(slug, episode, shot, cid) {
-  return request(
-    `/api/drama/projects/${encodeURIComponent(slug)}/episodes/${episode}/shots/${shot}/candidates/${encodeURIComponent(cid)}`,
-    { method: 'DELETE' },
-  )
 }
 
 export async function uploadShotScene(slug, episode, shot, file) {

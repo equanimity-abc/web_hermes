@@ -1765,115 +1765,6 @@ export function useDramaStudio() {
     }
   }
 
-  async function generateShotCandidates(count = 1) {
-    const shotN = selectedN.value
-    if (!slug.value || !episodeN.value || !shotN) return
-    if (generatingCandidateNs.value.includes(shotN) || busyShotNs.value.includes(Number(shotN))) return
-    generatingCandidateNs.value = [...generatingCandidateNs.value, shotN]
-    markShotBusy(shotN)
-    error.value = ''
-    notice.value = ''
-    try {
-      const result = await dramaApi.generateCandidates(slug.value, episodeN.value, shotN, count)
-      if (result.shot) mergeEpisodeShot(result.shot)
-      bust.value = Date.now()
-      notice.value = `Shot ${shotN} 已生成 ${(result.created || []).length} 张候选`
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      finishCandidateGeneration(shotN)
-    }
-  }
-
-  const choosingCandidate = ref(null)
-
-  function patchShotChosen(shots, idx, cid) {
-    const shot = shots[idx]
-    if (!shot) return
-    const next = {
-      ...shot,
-      chosen: cid,
-      candidates: (shot.candidates || []).map((c) => ({
-        ...c,
-        chosen: String(c.id) === String(cid),
-      })),
-      locked: [...new Set([...(shot.locked || []), 'scene'])],
-      dirty: (shot.dirty || []).filter((layer) => layer !== 'scene'),
-    }
-    shots.splice(idx, 1, next)
-  }
-
-  async function chooseShotCandidate(cid) {
-    if (!slug.value || !episodeN.value || !selectedN.value || !cid) return
-    if (choosingCandidate.value) return
-    choosingCandidate.value = cid
-    const idx = episode.value?.shots?.findIndex((s) => s.n === selectedN.value) ?? -1
-    let snapshot = null
-    if (idx >= 0) {
-      snapshot = JSON.parse(JSON.stringify(episode.value.shots[idx]))
-      patchShotChosen(episode.value.shots, idx, cid)
-    }
-    error.value = ''
-    notice.value = ''
-    try {
-      const result = await dramaApi.chooseCandidate(slug.value, episodeN.value, selectedN.value, cid)
-      if (result.shot) {
-        mergeEpisodeShot(result.shot)
-      } else {
-        await openEpisode(episodeN.value)
-      }
-      bust.value = Date.now()
-      const rebuilt = (result.rebuilt_layers || []).join(' / ') || '无'
-      notice.value = `已锁定 ${cid}（只换画面，配音保留；重建：${rebuilt}）`
-    } catch (e) {
-      if (snapshot != null && idx >= 0) {
-        episode.value.shots.splice(idx, 1, snapshot)
-      }
-      error.value = e.message || String(e)
-    } finally {
-      choosingCandidate.value = null
-    }
-  }
-
-  async function deleteCandidate(cid) {
-    const shotN = selectedN.value
-    if (!slug.value || !episodeN.value || !shotN || !cid) return
-    if (isShotBusy(shotN)) {
-      error.value = `Shot ${shotN} 正在处理中，请稍后再删除候选图`
-      return
-    }
-    markShotBusy(shotN)
-    error.value = ''
-    notice.value = ''
-    // 乐观更新：先从墙上去掉，避免大图删除接口慢时「点了没反应」
-    const ep = episode.value
-    const idx = ep?.shots?.findIndex((s) => s.n === shotN) ?? -1
-    let snapshot = null
-    if (idx >= 0) {
-      snapshot = JSON.parse(JSON.stringify(ep.shots[idx]))
-      const shot = ep.shots[idx]
-      const next = {
-        ...shot,
-        candidates: (shot.candidates || []).filter((c) => String(c.id) !== String(cid)),
-        chosen: String(shot.chosen || '') === String(cid) ? '' : shot.chosen,
-      }
-      ep.shots.splice(idx, 1, next)
-    }
-    try {
-      const result = await dramaApi.deleteCandidate(slug.value, episodeN.value, shotN, cid)
-      if (result.shot) mergeEpisodeShot(result.shot)
-      bust.value = Date.now()
-      notice.value = `已删除候选 ${cid}`
-    } catch (e) {
-      if (snapshot != null && idx >= 0) {
-        episode.value.shots.splice(idx, 1, snapshot)
-      }
-      error.value = e.message || String(e)
-    } finally {
-      markShotIdle(shotN)
-    }
-  }
-
   async function uploadShotScene(file) {
     const shotN = selectedN.value
     if (!slug.value || !episodeN.value || !shotN || !file) return
@@ -2723,36 +2614,6 @@ export function useDramaStudio() {
     }
   }
 
-  async function chooseCharacterCandidate(cid, candId) {
-    if (!slug.value || !cid || !candId) return
-    saving.value = true
-    error.value = ''
-    try {
-      await dramaApi.chooseCharacterCandidate(slug.value, cid, candId)
-      bust.value = Date.now()
-      await refreshCast()
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      saving.value = false
-    }
-  }
-
-  async function deleteCharacterCandidate(cid, candId) {
-    if (!slug.value || !cid || !candId) return
-    saving.value = true
-    error.value = ''
-    try {
-      await dramaApi.deleteCharacterCandidate(slug.value, cid, candId)
-      bust.value = Date.now()
-      await refreshCast()
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      saving.value = false
-    }
-  }
-
   async function generateAllScenes() {
     const ep = episodeN.value
     if (!slug.value || !ep) return
@@ -2784,7 +2645,7 @@ export function useDramaStudio() {
       await runPool(
         targets,
         async (s) => {
-          const result = await dramaApi.generateCandidates(slug.value, ep, s.n, 4)
+          const result = await dramaApi.rerenderShot(slug.value, ep, s.n, ['scene'])
           if (result.shot) mergeEpisodeShot(result.shot)
           bust.value = Date.now()
           return result
@@ -3137,15 +2998,10 @@ export function useDramaStudio() {
     shotChatMessages,
     refineShotChat,
     generateAllCharacterRefs,
-    chooseCharacterCandidate,
-    deleteCharacterCandidate,
     generateAllScenes,
     generateAllVideo,
     generateAllVoice,
     setManualVoice,
-    generateShotCandidates,
-    chooseShotCandidate,
-    deleteCandidate,
     uploadShotScene,
     generateShotI2v,
     generateShotLip,

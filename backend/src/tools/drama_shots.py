@@ -83,8 +83,6 @@ LAYERS = ("scene", "overlay", "voice", "clip")
 EXTRA_LAYERS = ("motion", "lip", "mix", "assemble")
 RENDER_LAYERS = (*LAYERS, "assemble", "motion", "lip")
 LOCK_TOKENS = (*LAYERS, "shot", "kind", "motion", "lip")
-CANDIDATE_COUNT = 4
-WALL_MAX = 4
 LAYER_LABELS = {
     "scene": "画面",
     "overlay": "字幕叠层",
@@ -261,79 +259,6 @@ def shot_assets(slug: str, episode: int, n: int) -> dict[str, str]:
         "motion": f"{base}/{stem}_motion.mp4",
         "lip": f"{base}/{stem}_lip.mp4",
     }
-
-
-def candidate_rel(slug: str, episode: int, n: int, cid: str) -> str:
-    return f"{work_rel(slug, episode)}/{shot_stem(n)}_cand_{cid}.png"
-
-
-def _prune_candidate_rows(rows: list[dict[str, Any]], chosen: str) -> list[dict[str, Any]]:
-    if len(rows) <= WALL_MAX:
-        return rows
-    keep: list[dict[str, Any]] = []
-    extras: list[dict[str, Any]] = []
-    for item in rows:
-        if item.get("id") == chosen or item.get("source") == "upload":
-            keep.append(item)
-        else:
-            extras.append(item)
-    need = max(0, WALL_MAX - len(keep))
-    return keep + extras[-need:]
-
-
-def normalize_candidates(
-    slug: str,
-    episode: int,
-    n: int,
-    raw: Any,
-    chosen: str = "",
-) -> list[dict[str, Any]]:
-    rows = raw if isinstance(raw, list) else []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        cid = str(item.get("id") or "").strip()
-        if not cid or cid in seen:
-            continue
-        seen.add(cid)
-        rel = str(item.get("path") or candidate_rel(slug, episode, n, cid)).replace("\\", "/")
-        out.append(
-            {
-                "id": cid,
-                "path": rel,
-                "source": str(item.get("source") or "ai"),
-                "seed": int(item.get("seed") or 0),
-            }
-        )
-    return _prune_candidate_rows(out, str(chosen or ""))
-
-
-def find_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any] | None:
-    needle = str(cid or "").strip()
-    for item in shot.get("candidates") or []:
-        if str(item.get("id") or "") == needle:
-            return item
-    return None
-
-
-def next_candidate_ids(shot: dict[str, Any], count: int) -> list[str]:
-    used = {str(c.get("id") or "") for c in (shot.get("candidates") or [])}
-    out: list[str] = []
-    i = 1
-    while len(out) < max(0, int(count)):
-        cid = f"c{i}"
-        i += 1
-        if cid not in used:
-            out.append(cid)
-    return out
-
-
-def prune_candidates(shot: dict[str, Any]) -> None:
-    rows = list(shot.get("candidates") or [])
-    chosen = str(shot.get("chosen") or "")
-    shot["candidates"] = _prune_candidate_rows(rows, chosen)
 
 
 def load_doc(slug: str, episode: int) -> dict[str, Any] | None:
@@ -560,8 +485,6 @@ def normalize_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, An
         "dirty": dirty,
         "status": status,
         "scene_source": scene_source,
-        "chosen": str(raw.get("chosen") or ""),
-        "candidates": normalize_candidates(slug, episode, n, raw.get("candidates"), str(raw.get("chosen") or "")),
         "assets": assets,
     }
     apply_shot_class(shot)
@@ -625,8 +548,6 @@ def empty_shot(slug: str, episode: int, raw: dict[str, Any]) -> dict[str, Any]:
         "dirty": list(LAYERS),
         "status": "pending",
         "scene_source": str(raw.get("scene_source") or ""),
-        "chosen": str(raw.get("chosen") or ""),
-        "candidates": normalize_candidates(slug, episode, n, raw.get("candidates"), str(raw.get("chosen") or "")),
         "trim_in": 0.0,
         "trim_out": 0.0,
         "volume": 1.0,
@@ -1175,8 +1096,6 @@ def merge_from_parsed(
             rec["camera"] = str(old.get("camera") or rec["camera"])
             rec["scene_source"] = str(old.get("scene_source") or "")
             rec["assets"] = {**rec["assets"], **(old.get("assets") or {})}
-            rec["candidates"] = normalize_candidates(slug, episode, rec["n"], old.get("candidates"))
-            rec["chosen"] = str(old.get("chosen") or "")
             for key in ("trim_in", "trim_out", "volume", "transition", "i2v", "i2v_source", "i2v_ladder", "kind", "size", "speaker", "voice"):
                 if key in old:
                     rec[key] = old[key]

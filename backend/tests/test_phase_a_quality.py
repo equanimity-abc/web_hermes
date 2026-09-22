@@ -11,7 +11,7 @@ from tools.drama_quality import assert_shots_qc_for_export, assert_studio_provid
 
 
 def test_phase_a_defaults():
-    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 1
+    assert int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 0) or 0) == 2
     assert DEFAULT_PRESET == "ark"
     assert QUALITY_CASCADE[0] == "seedance"
     assert default_models()["lip"]["provider"] == "seedance"

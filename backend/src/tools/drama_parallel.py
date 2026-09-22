@@ -41,6 +41,11 @@ def shot_concurrency() -> int:
     return max(1, int(getattr(config, "DRAMA_SHOT_CONCURRENCY", 1) or 1))
 
 
+def cast_concurrency() -> int:
+    """Max concurrent cast/ref image generations (定妆/底板/道具图). Default 4."""
+    return max(1, int(getattr(config, "DRAMA_CAST_CONCURRENCY", 4) or 4))
+
+
 def lane_for_provider(provider_id: str) -> str:
     pid = str(provider_id or "").strip().lower()
     if not pid:

@@ -74,6 +74,22 @@ def classify_failure(error: str) -> dict[str, Any]:
     def _hit(*keys: str) -> bool:
         return any(k.lower() in low or k in err for k in keys)
 
+    if _hit("[step:scene]"):
+        return {
+            "stage": "scene",
+            "dirty": ["scene", "overlay", "motion", "clip"],
+            "resume_from": "scene",
+            "hint": "画面正式输出缺失：重新出图（画面已锁请先解锁）",
+        }
+
+    if _hit("[step:cast]"):
+        return {
+            "stage": "cast",
+            "dirty": ["scene", "overlay", "motion", "clip"],
+            "resume_from": "scene",
+            "hint": "定妆门禁未过：先补齐并锁定角色参考图",
+        }
+
     if _hit("加速收尾", "其它镜头失败", "peerabort", "未继续昂贵"):
         return {
             "stage": "aborted",
@@ -175,13 +191,13 @@ def _disk_file_ok(rel: Any) -> bool:
 
 
 def _file_ok(rel: Any) -> bool:
-    path = str(rel or "").strip()
-    if not path:
-        return False
-    if _disk_file_ok(path):
-        return True
-    # Unit tests often pass placeholder paths; treat non-empty as present.
-    return bool(path)
+    """True only when the workspace file really exists (fail closed).
+
+    A stale non-empty ``assets.*`` path string must NOT be treated as present,
+    otherwise resume skips regeneration and later fails at the formal publish
+    step with ``[step:*] 缺少正式输出``.
+    """
+    return _disk_file_ok(rel)
 
 
 def _needs_voice(shot: dict[str, Any]) -> bool:
@@ -237,9 +253,9 @@ def _flicker_ok(shot: dict[str, Any]) -> bool:
 def inspect_shot_state(shot: dict[str, Any]) -> dict[str, Any]:
     """Snapshot readiness from current shot record (no regeneration)."""
     assets = shot.get("assets") if isinstance(shot.get("assets"), dict) else {}
-    scene_ok = _file_ok(assets.get("scene")) or bool(assets.get("scene"))
-    voice_ok = (not _needs_voice(shot)) or _file_ok(assets.get("voice")) or bool(assets.get("voice"))
-    clip_ok = _file_ok(assets.get("clip")) or bool(assets.get("clip"))
+    scene_ok = _file_ok(assets.get("scene"))
+    voice_ok = (not _needs_voice(shot)) or _file_ok(assets.get("voice"))
+    clip_ok = _file_ok(assets.get("clip"))
     return {
         "scene_ok": scene_ok,
         "voice_ok": voice_ok,
@@ -539,6 +555,17 @@ def diagnose_episode(
         next_action = "export"
         summary = "无失败镜，续跑将完成配乐/导出"
 
+    # 清晰的重新生成计划：逐镜列出 图片/视频 是否需要重新生成
+    regen_plan: list[str] = []
+    for shot in shots:
+        sn = int(shot.get("n") or 0)
+        if sn < 1:
+            continue
+        st = inspect_shot_state(shot)
+        img = "需要" if not st["scene_ok"] else "不需要"
+        vid = "需要" if not st["i2v_ok"] else "不需要"
+        regen_plan.append(f"图片shot{sn}{img}重新生成；视频shot{sn}{vid}重新生成")
+
     return {
         "slug": slug,
         "episode": n,
@@ -550,6 +577,7 @@ def diagnose_episode(
         "next_action": next_action,
         "summary": summary,
         "hints": [f"Shot {p['shot']}: {p.get('hint')}" for p in plans[:8]],
+        "regenerate_plan": regen_plan,
     }
 
 
@@ -576,7 +604,7 @@ def prepare_episode_resume(slug: str, episode: int) -> dict[str, Any]:
         qc = shot.get("qc") if isinstance(shot.get("qc"), dict) else {}
         if qc.get("produce_ok") is False or shot.get("dirty"):
             state = inspect_shot_state(shot)
-            if state["identity_ok"] and state["clip_ok"]:
+            if state["scene_ok"] and state["clip_ok"]:
                 qc = dict(qc)
                 qc["produce_ok"] = True
                 for k in ("produce_error", "produce_stage", "resume_from", "resume_hint"):

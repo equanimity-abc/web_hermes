@@ -46,3 +46,32 @@ def test_dialogue_rise_prompt_forbids_extreme_low_angle():
     prompt = _scene_prompt("EP", shot, chars)
     assert "禁止极端低角度仰拍遮脸" in prompt
     assert "低角度仰拍，高耸建筑" not in prompt
+
+
+def test_face_closeup_scene_downgraded_to_bust():
+    """面部大特写/特写首帧 → 中近景胸像，避免 Seedance 图生视频被「疑似真人」拦截。"""
+    shot = {
+        "n": 1,
+        "kind": "reaction",
+        "speaker": "嫦娥",
+        "画面": "竖屏面部大特写，嫦娥惊恐地瞪大眼",
+    }
+    chars = [{"id": "a", "name": "嫦娥", "look": "白裙"}]
+    prompt = _scene_prompt("EP01", shot, chars)
+    assert "竖屏面部大特写" not in prompt  # 原始特写文案被改写
+    assert "中近景" in prompt
+    assert "半身或胸像" in prompt
+    assert "禁止面部大特写" in prompt  # 但仍显式禁止大特写
+
+
+def test_plain_closeup_word_downgraded_to_bust():
+    shot = {
+        "n": 2,
+        "kind": "dialogue",
+        "speaker": "玉兔",
+        "画面": "近景，玉兔凑近镜头低语",
+    }
+    chars = [{"id": "b", "name": "玉兔", "look": "兔耳髻"}]
+    prompt = _scene_prompt("EP01", shot, chars)
+    assert "中近景" in prompt
+    assert "半身或胸像" in prompt

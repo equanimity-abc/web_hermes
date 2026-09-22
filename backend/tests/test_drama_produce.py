@@ -3,12 +3,36 @@
 from __future__ import annotations
 
 from tools.drama_produce import (
+    _is_content_safety_error,
+    _safety_desc_fingerprint,
     ensure_characters_from_shots,
     ensure_default_bgm,
     extract_single_episode_markdown,
     parse_series_spec,
     suggest_project_slug,
 )
+
+
+def test_is_content_safety_error():
+    assert _is_content_safety_error("OutputVideoSensitiveContentDetected.PolicyViolation")
+    assert _is_content_safety_error("供应商输出侧内容安全拦截（生成后的视频帧未过审）")
+    assert _is_content_safety_error("疑似真人肖像（隐私拦截）")
+    assert not _is_content_safety_error("需要真 I2V，但得到 none（provider 未产出可用图）")
+
+
+def test_safety_desc_fingerprint_changes_with_fields():
+    base = {
+        "画面": "海面巨浪",
+        "motion": "巨浪向镜头猛推",
+        "camera": "推",
+        "角色": ["龙王"],
+        "地点": "东海龙宫",
+        "道具": [],
+    }
+    fp1 = _safety_desc_fingerprint(base)
+    assert _safety_desc_fingerprint(dict(base)) == fp1  # 字段不变 → 指纹稳定
+    assert _safety_desc_fingerprint({**base, "motion": "镜头缓慢拉远"}) != fp1  # 改运镜
+    assert _safety_desc_fingerprint({**base, "画面": "平静海面"}) != fp1  # 改画面
 
 
 def test_suggest_slug_from_ascii_title():

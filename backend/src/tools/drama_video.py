@@ -35,21 +35,16 @@ from tools.drama_dialogue import (
     track_to_voice_turns,
 )
 from tools.drama_shots import (
-    CANDIDATE_COUNT,
     LAYERS,
     apply_patch,
-    candidate_rel,
     clip_list,
-    find_candidate,
     find_shot,
     json_rel,
     layers_for_patch,
     load_doc,
     merge_from_parsed,
-    next_candidate_ids,
     output_rel,
     parse_layers,
-    prune_candidates,
     public_shot,
     save_doc,
     script_rel,
@@ -86,35 +81,6 @@ _POSTPRODUCTION_CUES = (
     "切到",
     "切回",
 )
-_CANDIDATE_VARIATIONS = (
-    "主分镜构图，画面均衡",
-    "备用机位角度，人物站位略有变化",
-    "构图略宽，环境细节更多",
-    "构图略紧，突出面部与手部",
-)
-
-
-def _candidate_index(cid: str, fallback: int = 0) -> int:
-    m = re.match(r"c(\d+)$", str(cid or "").strip())
-    if not m:
-        return max(0, int(fallback))
-    try:
-        return max(0, int(m.group(1)))
-    except ValueError:
-        return max(0, int(fallback))
-
-
-def _candidate_seed(base_seed: int, cid: str, batch_index: int = 0) -> int:
-    cand_idx = _candidate_index(cid, batch_index + 1)
-    return (int(base_seed) + cand_idx * 9973 + int(batch_index) * 97) & 0x7FFFFFFF
-
-
-def _candidate_prompt(prompt: str, cid: str, batch_index: int = 0) -> str:
-    cand_idx = _candidate_index(cid, batch_index + 1)
-    variation = _CANDIDATE_VARIATIONS[(cand_idx - 1) % len(_CANDIDATE_VARIATIONS)]
-    return f"{prompt}，{variation}，候选方案{cand_idx}"
-
-
 def _scene_text_for_prompt(raw: str) -> str:
     """Strip post-production / editing directions that are not drawable keyframes."""
     scene = str(raw or "").strip()
@@ -616,16 +582,25 @@ def _scene_prompt(
         scene = re.sub(r"(?<![中近])远景", "中近景", scene)
         scene = re.sub(r"(?<![中近])全景", "中近景", scene)
         scene = re.sub(r"镜头拉远", "镜头保持主体中近景、面部清晰可辨", scene)
+        # 面部大特写/特写/近景 → 中近景胸像：把首帧从脸部大特写拉回胸像/半身，
+        # 降低 Seedance 图生视频被「疑似真人/版权」风控拦截的概率（Ark 官方建议）。
+        scene = re.sub(r"面部大特写|脸部特写|大特写", "中近景", scene)
+        scene = re.sub(r"(?<![中近])特写", "中近景", scene)
+        scene = re.sub(r"(?<![中近])近景", "中近景", scene)
         if style == "pull_out":
             style = "punch_in"
-        # 全幅参考生图默认强调可检脸（身份 QC / 口型前置），不依赖失败后再 boost
+        # 全幅参考生图默认强调可检脸（身份 QC / 口型前置），但锁在胸像/半身而非面部大特写
         if speaker:
             scene = (
                 f"{scene}，身份锁角色「{speaker}」正面或四分之三正面，"
-                "面部清晰可辨、占画面足够大，禁止遮脸背影与极端俯仰"
+                "半身或胸像构图、脸部约占画面三分之一到二分之一，"
+                "禁止面部大特写、遮脸背影与极端俯仰"
             )
         else:
-            scene = f"{scene}，主要角色面部清晰可辨、正面或四分之三正面"
+            scene = (
+                f"{scene}，主要角色正面或四分之三正面，"
+                "半身或胸像构图、脸部约占画面三分之一到二分之一，禁止面部大特写"
+            )
     kinetic_map = {
         "punch_in": "动态姿态，隐含运动感，衣摆飘动",
         "punch_shake": "激烈动作，飞溅碎片，冲击瞬间，戏剧性角度",
@@ -931,28 +906,19 @@ def _image_provider_chain(
         add("seedream")
         add("ark")
         add("doubao-image")
-        add("kling-image")
-        add("kling")
-        add("jimeng")
     else:
         add(primary)
     if kind == "character_ref":
         from tools.drama_styles import default_character_ref_image_route
 
         add(str(default_character_ref_image_route().get("provider") or ""))
-        add("kling-image")
-        add("kling")
-        add("wanx")
-        add("dashscope")
-        fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-        add(fb)
-        if fb != "pollinations":
-            add("pollinations")
+        add("seedream")
+        add("ark")
+        add("doubao-image")
     elif not refs:
-        fb = (config.IMAGE_GEN_PROVIDER or "pollinations").strip().lower()
-        add(fb)
-        if fb != "pollinations":
-            add("pollinations")
+        add("seedream")
+        add("ark")
+        add("doubao-image")
     return chain
 
 
@@ -1279,39 +1245,19 @@ def _write_scene_png(data: bytes, dest: Path) -> None:
     img.save(dest, "PNG")
 
 
-def apply_candidate_to_scene(shot: dict[str, Any], cand: dict[str, Any]) -> None:
-    src = resolve_safe(str(cand.get("path") or ""))
-    dest = _path_for(shot, "scene")
-    if not src.is_file():
-        raise FileNotFoundError(f"候选图不存在：{cand.get('path')}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
-    shot["chosen"] = str(cand.get("id") or "")
-    shot["scene_source"] = str(cand.get("source") or shot.get("scene_source") or "ai")
-    dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
-    if "clip" not in dirty and "clip" not in (shot.get("locked") or []):
-        dirty.append("clip")
-    shot["dirty"] = dirty
-    shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
-
-
 def generate_shot_candidates(
     slug: str,
     episode: int,
     shot: dict[str, Any],
     *,
     title: str = "",
-    count: int = CANDIDATE_COUNT,
+    count: int = 1,
 ) -> list[dict[str, Any]]:
-    """Fill the candidate wall. Does not overwrite a locked scene.png.
-
-    Autopilot 用 count=1 单图；工作台手工重抽用默认候选墙。禁止自动换种子重试。
-    """
-    count = max(1, min(int(count or CANDIDATE_COUNT), 4))
+    """生成单张分镜画面，直接写入 scene.png（无候选墙、无自动重抽）。"""
     locked = set(shot.get("locked") or [])
     # 已锁画面：绝对禁止再出图（缺文件也不自动补，需先手动解锁）
     if "shot" in locked or "scene" in locked:
-        return list(shot.get("candidates") or [])
+        return []
     cards = load_characters(slug)
     cast = resolve_shot_characters(shot, cards)
     # Full project cards for alias → name/voice/face match (N speakers)
@@ -1347,10 +1293,7 @@ def generate_shot_candidates(
     shot.pop("_episode", None)
     shot.pop("_memory_hits", None)
     shot["prompt"] = prompt
-    base_seed = character_seed(slug, cast, int(shot.get("n") or 1)) & 0x7FFFFFFF
-    ids = next_candidate_ids(shot, count)
-    created: list[dict[str, Any]] = []
-    used_ai = False
+    seed = character_seed(slug, cast, int(shot.get("n") or 1)) & 0x7FFFFFFF
     n = int(shot.get("n") or 0)
 
     # R4: feed locked character reference sheets into the image provider.
@@ -1373,175 +1316,51 @@ def generate_shot_candidates(
 
     from tools.drama_retry import retry_call
 
-    def _render_one(i: int, cid: str) -> dict[str, Any]:
-        """Generate one candidate (thread-safe; writes its own dest file)."""
-        seed = _candidate_seed(base_seed, cid, i)
-        # 单图+定妆锁脸：不要再叠「候选方案」风格扰动，否则和身份锚打架。
-        if refs and count <= 1:
-            varied_prompt = prompt
-        else:
-            varied_prompt = _candidate_prompt(prompt, cid, i)
-        rel = candidate_rel(slug, episode, n, cid)
-        dest = resolve_safe(rel)
-        dest.parent.mkdir(parents=True, exist_ok=True)
+    dest = _path_for(shot, "scene")
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
-        ai_ok = False
-        source = "fallback"
-        # 专业做法：全幅参考生图（环境底板 + 定妆脸进 Seedream/Kling），一次成片。
-        # 旧「底板 + bbox 贴角色层」光影/比例易穿帮且易检不到脸，默认关闭；仅 DRAMA_LAYERED_SCENE=1 启用。
-        plan = shot.get("spatial_plan") if isinstance(shot.get("spatial_plan"), dict) else None
-        allow_layered = str(getattr(config, "DRAMA_LAYERED_SCENE", "") or os.getenv("DRAMA_LAYERED_SCENE", "0")).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
+    ai_ok = bool(
+        retry_call(
+            _generate_scene_image,
+            prompt,
+            dest,
+            seed=seed,
+            refs=refs,
+            slug=slug,
+            shot=shot,
+            episode=episode,
+            attempts=1 if hq else 3,
+            ok=lambda r: bool(r),
         )
-        if (
-            allow_layered
-            and not hq
-            and refs
-            and count <= 1
-            and plan
-            and (plan.get("slots") or [])
-        ):
-            try:
-                from tools.drama_layers import generate_layered_scene
-
-                layered = generate_layered_scene(
-                    slug, episode, shot, dest, title=title, seed=seed
-                )
-                if layered.get("ok") and dest.is_file() and dest.stat().st_size > 1000:
-                    ai_ok = True
-                    source = "layered"
-            except Exception:
-                ai_ok = False
-        if not ai_ok:
-            ai_ok = bool(
-                retry_call(
-                    _generate_scene_image,
-                    varied_prompt,
-                    dest,
-                    seed=seed,
-                    refs=refs,
-                    slug=slug,
-                    shot=shot,
-                    episode=episode,
-                    attempts=1 if hq else 3,
-                    ok=lambda r: bool(r),
-                )
+    )
+    if not ai_ok:
+        if hq:
+            detail = str(shot.get("_image_error") or "").strip()
+            raise RuntimeError(
+                f"第{n}镜专业档出图失败"
+                + (f"：{detail}" if detail else "（provider 未产出可用图）")
+                + "；禁止静图/免费链兜底"
             )
-            source = "ai" if ai_ok else "fallback"
-        if not ai_ok:
-            if hq:
-                detail = str(shot.get("_image_error") or "").strip()
-                raise RuntimeError(
-                    f"第{n}镜专业档出图失败"
-                    + (f"：{detail}" if detail else "（provider 未产出可用图）")
-                    + "；禁止静图/免费链兜底"
-                )
-            _draw_fallback_scene(shot, dest, cast, seed=seed)
-            source = "fallback"
-        return {"id": cid, "path": rel, "source": source, "seed": seed, "ai": ai_ok or source == "layered"}
+        _draw_fallback_scene(shot, dest, cast, seed=seed)
+        source = "fallback"
+    else:
+        source = "ai"
 
-    # S4: 候选墙也串行出图（一份完成再下一份）
-    rendered = [_render_one(i, cid) for i, cid in enumerate(ids)]
-    for rec in rendered:
-        created.append({"id": rec["id"], "path": rec["path"], "source": rec["source"], "seed": rec["seed"]})
-        used_ai = used_ai or rec["ai"]
-
-    # Autopilot（count=1）：只落 scene.png，绝不往候选墙追加——否则产线/续跑会把用户删掉的墙又填回来。
-    # 工作台手工墙（count>1）才追加并 prune。
-    if count > 1:
-        shot["candidates"] = list(shot.get("candidates") or []) + created
-        prune_candidates(shot)
-        if "shot" not in locked and "scene" not in locked and created:
-            apply_candidate_to_scene(shot, created[0])
-            if used_ai:
-                shot["scene_source"] = str(created[0].get("source") or "ai")
-            shot["dirty"] = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
-            if "clip" not in (shot.get("dirty") or []) and "clip" not in locked:
-                shot.setdefault("dirty", []).append("clip")
-                shot["status"] = "dirty"
-    elif created and "shot" not in locked and "scene" not in locked:
-        # 单图直写 scene，不登记 candidates / chosen（保留用户已清空的候选墙）
-        try:
-            src = resolve_safe(str(created[0].get("path") or ""))
-            dest = _path_for(shot, "scene")
-            if src.is_file():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dest)
-                if used_ai:
-                    shot["scene_source"] = str(created[0].get("source") or "ai")
-                dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
-                if "clip" not in dirty and "clip" not in locked:
-                    dirty.append("clip")
-                shot["dirty"] = dirty
-                shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
-                # 临时 cand 文件可删，避免工作台又扫到
-                try:
-                    src.unlink(missing_ok=True)
-                except OSError:
-                    pass
-        except (ValueError, OSError, FileNotFoundError):
-            # 直写失败时再走 apply；若临时 cand 已不在但 scene 已落盘，视为成功。
-            cand_path = str(created[0].get("path") or "")
-            scene_dest = _path_for(shot, "scene")
-            try:
-                src = resolve_safe(cand_path)
-            except ValueError:
-                src = None
-            if src is not None and src.is_file():
-                apply_candidate_to_scene(shot, created[0])
-                if used_ai:
-                    shot["scene_source"] = str(created[0].get("source") or "ai")
-            elif scene_dest.is_file() and scene_dest.stat().st_size > 1000:
-                if used_ai:
-                    shot["scene_source"] = str(created[0].get("source") or "ai")
-                dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
-                if "clip" not in dirty and "clip" not in locked:
-                    dirty.append("clip")
-                shot["dirty"] = dirty
-                shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
-            else:
-                apply_candidate_to_scene(shot, created[0])
-                if used_ai:
-                    shot["scene_source"] = str(created[0].get("source") or "ai")
-    return created
-
-
-def choose_shot_candidate(shot: dict[str, Any], cid: str) -> dict[str, Any]:
-    locked = set(shot.get("locked") or [])
-    if "shot" in locked:
-        raise ValueError("整镜已锁定，不能换图")
-    if "scene" in locked:
-        raise ValueError("画面已锁定，不能换图")
-    cand = find_candidate(shot, cid)
-    if cand is None:
-        raise ValueError(f"找不到候选 {cid}")
-    apply_candidate_to_scene(shot, cand)
-    return cand
-
-
-def upload_shot_candidate(slug: str, episode: int, shot: dict[str, Any], data: bytes) -> dict[str, Any]:
-    locked = set(shot.get("locked") or [])
-    if "shot" in locked:
-        raise ValueError("整镜已锁定，不能换图")
-    if "scene" in locked:
-        raise ValueError("画面已锁定，不能换图")
-    if not data:
-        raise ValueError("图片不能为空")
-    cid = next_candidate_ids(shot, 1)[0]
-    rel = candidate_rel(slug, episode, int(shot.get("n") or 0), cid)
-    dest = resolve_safe(rel)
-    try:
-        _write_scene_png(data, dest)
-    except Exception as e:
-        raise ValueError("无法读取图片") from e
-    rec = {"id": cid, "path": rel, "source": "upload", "seed": 0}
-    shot["candidates"] = list(shot.get("candidates") or []) + [rec]
-    prune_candidates(shot)
-    apply_candidate_to_scene(shot, rec)
-    return rec
+    shot["scene_source"] = source
+    dirty = [layer for layer in (shot.get("dirty") or []) if layer != "scene"]
+    if "clip" not in dirty and "clip" not in locked:
+        dirty.append("clip")
+    shot["dirty"] = dirty
+    shot["status"] = "dirty" if dirty else shot.get("status") or "rendered"
+    return [
+        {
+            "id": "scene",
+            "path": str((shot.get("assets") or {}).get("scene") or ""),
+            "source": source,
+            "seed": seed,
+            "ai": ai_ok,
+        }
+    ]
 
 
 def _shot_overlay_duration(shot: dict[str, Any]) -> float:
@@ -2494,6 +2313,18 @@ def sync_shots_doc(
     return doc
 
 
+def _asset_exists(shot: dict[str, Any], layer: str) -> bool:
+    """True when the layer's output file already exists（只补缺：已存在则跳过重画）。"""
+    rel = (shot.get("assets") or {}).get(layer)
+    if not rel:
+        return False
+    try:
+        p = resolve_safe(str(rel))
+        return p.is_file() and p.stat().st_size > 100
+    except Exception:
+        return False
+
+
 def _path_for(shot: dict[str, Any], layer: str) -> Path:
     """Resolve a shot asset path with a readable error on missing/illegal value."""
     rel = (shot.get("assets") or {}).get(layer)
@@ -2557,17 +2388,10 @@ def render_shot_layers(
     # Full project cards for alias → name/voice/face match (N speakers)
 
     if "scene" in wanted:
-        wall_n = CANDIDATE_COUNT if candidate_count is None else max(1, min(int(candidate_count), 4))
-        generated = generate_shot_candidates(slug, episode, shot, title=title, count=wall_n)
+        generated = generate_shot_candidates(slug, episode, shot, title=title, count=1)
         used_ai = any(item.get("source") == "ai" for item in generated)
         if not used_ai:
             degrades.append({"shot": int(shot.get("n") or 0), "layer": "scene", "reason": "AI 出图失败，使用降级静图"})
-        # Autopilot (count=1)：generate_shot_candidates 已直写 scene.png，并可能删掉临时 cand；
-        # 禁止再 apply_candidate（否则必报「候选图不存在」）。
-        # 手工候选墙 (count>1)：仅当 scene 缺失时用首候选补种。
-        if generated and "scene" not in locked and wall_n > 1:
-            if not _path_for(shot, "scene").is_file():
-                apply_candidate_to_scene(shot, generated[0])
         rebuilt.append("scene")
 
     if "overlay" in wanted:
@@ -2992,6 +2816,8 @@ def rerender_shot(
 
     if not wanted:
         wanted = list(shot.get("dirty") or []) or layers_for_patch(patch, shot.get("locked")) or ["clip"]
+        # 只补缺：已有图片/视频的层跳过重画（去掉脏层传播；复杂场景交人工手动修改）
+        wanted = [layer for layer in wanted if not _asset_exists(shot, layer)]
     if "clip" not in wanted and any(layer in wanted for layer in ("scene", "overlay", "voice", "lip", "motion")):
         if "clip" not in locked:
             wanted = [*wanted, "clip"]

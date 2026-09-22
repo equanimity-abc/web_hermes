@@ -91,6 +91,22 @@ def test_motion_prompt_wired():
     assert ANIME_STYLE_GUARD in text
 
 
+def test_seedance_i2v_downgrades_face_closeup_size():
+    """ECU/CU 面部镜 → 景别 MCU（胸像）；对象特写 insert 不动。"""
+    face = build_seedance_i2v_prompt(
+        {"kind": "reaction", "size": "CU", "画面": "特写", "camera": "punch_in"},
+        generate_audio=False,
+    )
+    assert "景别：MCU" in face
+    assert "景别：CU" not in face
+
+    insert = build_seedance_i2v_prompt(
+        {"kind": "insert", "size": "CU", "画面": "玉佩特写", "camera": "punch_in"},
+        generate_audio=False,
+    )
+    assert "景别：CU" in insert
+
+
 def test_motion_prompt_includes_identity_when_indexed():
     text = _motion_prompt(
         {

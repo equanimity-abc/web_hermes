@@ -97,13 +97,10 @@ const emit = defineEmits([
   'save-character',
   'lock-ref',
   'delete-character',
-  'delete-candidate',
   'generate-character-ref',
   'generate-all-refs',
   'generate-all-scenes',
   'toggle-role',
-  'generate-candidates',
-  'choose-candidate',
   'upload-scene',
   'generate-i2v',
   'generate-all-video',
@@ -338,75 +335,13 @@ watch(
   },
 )
 
-// 画面候选图轮播
-const currentCandidateIndex = ref(0)
-const sceneCandidatesList = computed(() => props.selected?.candidates || [])
-const currentCandidate = computed(() => sceneCandidatesList.value[currentCandidateIndex.value] || null)
-/** 当前轮播图是否为已锁定的那一张（仅一张可为锁定态） */
-const currentCandidateIsLocked = computed(() => {
-  const cand = currentCandidate.value
-  if (!cand || !props.selected) return false
-  if (String(cand.id || '') !== String(props.selected.chosen || '').trim()) return false
-  return (props.selected.locked || []).includes('scene')
-})
-
-/** 新 series_pack 流程：单图出画面（files.scene），无候选墙。候选为空时回退显示这张真实画面。 */
+// 单图出画面（files.scene），无候选墙。
 const sceneFallbackUrl = computed(() => {
   const scene = props.selected?.files?.scene
   if (!scene?.exists || !scene?.url) return ''
   const url = String(scene.url)
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 })
-
-function prevCandidate() {
-  const len = sceneCandidatesList.value.length
-  if (!len) return
-  currentCandidateIndex.value = (currentCandidateIndex.value - 1 + len) % len
-}
-
-function nextCandidate() {
-  const len = sceneCandidatesList.value.length
-  if (!len) return
-  currentCandidateIndex.value = (currentCandidateIndex.value + 1) % len
-}
-
-function onCandidateLockClick() {
-  if (selectedShotBusy.value || shotFrozen.value) return
-  const cand = currentCandidate.value
-  if (!cand?.id) return
-  const chosen = String(props.selected?.chosen || '').trim()
-  // 正在看已选中那张 → 切换 scene 锁；看其它张 → 选中并锁定为唯一一张
-  if (String(cand.id) === chosen) {
-    emit('toggle-lock', 'scene')
-    return
-  }
-  onChooseCandidate(cand.id)
-}
-
-watch(
-  () => props.selectedN,
-  () => {
-    currentCandidateIndex.value = 0
-  },
-)
-
-watch(
-  () => [props.selected?.chosen, sceneCandidatesList.value.length, props.selectedN],
-  () => {
-    const list = sceneCandidatesList.value
-    if (!list.length) {
-      currentCandidateIndex.value = 0
-      return
-    }
-    if (currentCandidateIndex.value >= list.length) {
-      currentCandidateIndex.value = list.length - 1
-    }
-    const chosen = String(props.selected?.chosen || '').trim()
-    if (!chosen) return
-    const idx = list.findIndex((c) => String(c.id) === chosen)
-    if (idx >= 0) currentCandidateIndex.value = idx
-  },
-)
 
 watch(castCategory, () => {
   const ids = new Set(castAssets.value.map((c) => c.id))
@@ -583,41 +518,17 @@ function withBust(url) {
   if (!url) return ''
   return `${url}${url.includes('?') ? '&' : '?'}_=${props.bust || 0}`
 }
-function candUrl(cand) {
-  return withBust(assetThumb(cand?.url || ''))
-}
-function chosenCandidate(shot) {
-  if (!shot) return null
-  const chosenId = String(shot.chosen || '').trim()
-  if (!chosenId) return null
-  return (shot.candidates || []).find((c) => String(c.id) === chosenId) || null
-}
 function shotThumb(shot) {
   if (!shot) return ''
-  const chosen = chosenCandidate(shot)
-  if (chosen?.url) return withBust(assetThumb(chosen.url))
   const sceneUrl = shot?.files?.scene?.url
   if (sceneUrl && shot?.files?.scene?.exists) {
     return withBust(assetThumb(sceneUrl))
-  }
-  const cands = shot.candidates || []
-  if (cands.length) {
-    const last = cands[cands.length - 1]
-    if (last?.url) return withBust(assetThumb(last.url))
   }
   return withBust(assetThumb(shot?.preview_url || ''))
 }
 function shotThumbKey(shot) {
   if (!shot) return ''
-  return `${shot.n}-${shot.chosen || ''}-${shot.files?.scene?.bytes || 0}`
-}
-function isCandidateChosen(cand, shot) {
-  return String(cand?.id || '') === String(shot?.chosen || '').trim()
-}
-function onChooseCandidate(cid) {
-  if (shotFrozen.value || !cid) return
-  if (isCandidateChosen({ id: cid }, props.selected)) return
-  emit('choose-candidate', cid)
+  return `${shot.n}-${shot.files?.scene?.bytes || 0}`
 }
 function isGeneratingCandidates(n) {
   return (props.generatingCandidateNs || []).includes(n)
@@ -631,9 +542,6 @@ function isShotBusy(n) {
 }
 const selectedCharacterBusy = computed(() => isCharacterBusy(props.selectedCharacterId))
 const selectedShotBusy = computed(() => isShotBusy(props.selectedN))
-function candidateUrls(shot) {
-  return (shot?.candidates || []).map((c) => candUrl(c)).filter(Boolean)
-}
 function preloadImage(url) {
   if (!url || preloaded.has(url)) return
   preloaded.add(url)
@@ -641,21 +549,20 @@ function preloadImage(url) {
   img.decoding = 'async'
   img.src = url
 }
-function preloadShotCandidates(shot) {
-  for (const url of candidateUrls(shot)) preloadImage(url)
-}
 function sceneLocked(shot) {
   return (shot?.locked || []).includes('scene')
 }
-function sceneLayerDirty(shot) {
-  return (shot?.dirty || []).includes('scene')
+const sceneFileInput = ref(null)
+function onSceneFile(e) {
+  const file = e.target?.files?.[0]
+  if (file) emit('upload-scene', file)
+  if (e.target) e.target.value = ''
 }
 function shotStatusLabel(shot) {
   if (isShotBusy(shot.n)) return '…'
   const locked = shot.locked || []
   if (locked.includes('shot')) return '锁'
-  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return '锁'
-  if ((shot.dirty || []).length) return '脏'
+  if (sceneLocked(shot)) return '锁'
   if (shot.files?.clip?.exists) return '成'
   if (shot.files?.scene?.exists) return '图'
   return '待'
@@ -664,8 +571,7 @@ function shotStatusClass(shot) {
   if (isShotBusy(shot.n)) return 'is-busy'
   const locked = shot.locked || []
   if (locked.includes('shot')) return 'is-locked'
-  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return 'is-locked'
-  if ((shot.dirty || []).length) return 'is-dirty'
+  if (sceneLocked(shot)) return 'is-locked'
   if (shot.files?.clip?.exists) return 'is-done'
   if (shot.files?.scene?.exists) return 'is-scene'
   return 'is-todo'
@@ -674,8 +580,6 @@ function isLocked(layer) {
   return (props.selected?.locked || []).includes(layer)
 }
 const shotFrozen = computed(() => isLocked('shot'))
-const candidatesFull = computed(() => (props.selected?.candidates || []).length >= 4)
-const selectedGeneratingCandidates = computed(() => isGeneratingCandidates(props.selectedN))
 const canGenerateI2v = computed(() => {
   const shot = props.selected
   if (!shot) return false
@@ -768,9 +672,7 @@ function shotVideoStatusLabel(shot) {
   if (src === 'fallback') return '运'
   if (shot.files?.clip?.exists) return '成'
   if (shot.files?.motion?.exists) return '动'
-  const dirty = shot.dirty || []
-  if (dirty.includes('motion') || dirty.includes('clip')) return '脏'
-  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return '图'
+  if (sceneLocked(shot)) return '图'
   if (shot.files?.scene?.exists) return '图'
   return '待'
 }
@@ -783,9 +685,7 @@ function shotVideoStatusClass(shot) {
   if (src === 'ai' || src === 'keys') return 'is-done'
   if (shot.files?.clip?.exists) return 'is-done'
   if (shot.files?.motion?.exists) return 'is-scene'
-  const dirty = shot.dirty || []
-  if (dirty.includes('motion') || dirty.includes('clip')) return 'is-dirty'
-  if (sceneLocked(shot) && !sceneLayerDirty(shot)) return 'is-locked'
+  if (sceneLocked(shot)) return 'is-locked'
   if (shot.files?.scene?.exists) return 'is-scene'
   return 'is-todo'
 }
@@ -839,24 +739,12 @@ watch(
   () => props.shots,
   (rows) => {
     for (const shot of rows || []) {
-      preloadShotCandidates(shot)
       const thumb = shotThumb(shot)
       if (thumb) preloadImage(thumb)
     }
   },
   { deep: true },
 )
-watch(
-  () => props.selected,
-  (shot) => {
-    if (shot) preloadShotCandidates(shot)
-  },
-  { immediate: true },
-)
-
-function onGenerateCandidate() {
-  emit('generate-candidates', 1)
-}
 
 function onGenerateVideo() {
   emit('generate-i2v')
@@ -939,8 +827,6 @@ function shotVoiceStatusLabel(shot) {
   if (locked.includes('shot') || locked.includes('voice')) return '锁'
   if (shotHasLip(shot)) return '口'
   if (shotHasVoice(shot)) return '音'
-  const dirty = shot.dirty || []
-  if (dirty.includes('voice') || dirty.includes('lip')) return '脏'
   if ((shot.字幕 || shot.对白 || '').trim()) return '待'
   return '—'
 }
@@ -951,8 +837,6 @@ function shotVoiceStatusClass(shot) {
   if (locked.includes('shot') || locked.includes('voice')) return 'is-locked'
   if (shotHasLip(shot)) return 'is-done'
   if (shotHasVoice(shot)) return 'is-scene'
-  const dirty = shot.dirty || []
-  if (dirty.includes('voice') || dirty.includes('lip')) return 'is-dirty'
   return 'is-todo'
 }
 
@@ -1878,7 +1762,6 @@ const statusBar = computed(() => {
                   class="drama-scene-row"
                   :class="{ active: shot.n === selectedN, locked: (shot.locked || []).includes('scene') }"
                   @click="emit('select-shot', shot.n)"
-                  @mouseenter="preloadShotCandidates(shot)"
                 >
                   <div class="drama-scene-thumb">
                     <DramaThumbImg
@@ -1908,27 +1791,35 @@ const statusBar = computed(() => {
                 <button
                   type="button"
                   class="btn-tiny"
-                  :disabled="selectedShotBusy || shotFrozen || !currentCandidate"
-                  @click="onCandidateLockClick"
+                  :disabled="selectedShotBusy || shotFrozen"
+                  @click="emit('toggle-lock', 'scene')"
                 >
-                  {{ currentCandidateIsLocked ? '解锁' : '锁定' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn-tiny btn-tiny-danger"
-                  :disabled="selectedShotBusy || !currentCandidate"
-                  @click="emit('delete-candidate', currentCandidate && currentCandidate.id)"
-                >
-                  删除
+                  {{ sceneLocked(selected) ? '解锁画面' : '锁定画面' }}
                 </button>
                 <button
                   type="button"
                   class="btn-primary btn-sm"
-                  :disabled="selectedShotBusy || shotFrozen || candidatesFull"
-                  @click="onGenerateCandidate"
+                  :disabled="selectedShotBusy || shotFrozen"
+                  @click="emit('rerender-layer', 'scene')"
                 >
-                  {{ selectedGeneratingCandidates ? '生成中…' : selectedShotBusy ? '处理中…' : '生成' }}
+                  {{ selectedShotBusy ? '处理中…' : '重做画面' }}
                 </button>
+                <button
+                  type="button"
+                  class="btn-tiny"
+                  :disabled="selectedShotBusy || shotFrozen"
+                  @click="sceneFileInput && sceneFileInput.click()"
+                >
+                  上传画面
+                </button>
+                <input
+                  ref="sceneFileInput"
+                  class="drama-file"
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  @change="onSceneFile"
+                />
               </div>
             </div>
 
@@ -1958,7 +1849,7 @@ const statusBar = computed(() => {
           </div>
 
           <div v-else class="drama-cast-empty">
-            <p>从左侧选择一镜，查看画面描述并生成候选图。</p>
+            <p>从左侧选择一镜，查看画面描述并重做画面。</p>
           </div>
         </div>
       </section>

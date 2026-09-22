@@ -85,7 +85,6 @@ function jobMessage(j) {
       const sideBit = side ? side[1].trim() : ''
       return `根因镜 Shot ${root[1]}${sideBit ? ` · ${sideBit}` : ''}（详见下方全文与 curl）`
     }
-    if (j.shot != null) return `问题镜头：第 ${j.shot} 镜（详见下方）`
   }
   // progress bar is single-line; keep short
   const one = line.split('\n').find((x) => x.trim()) || '就绪'

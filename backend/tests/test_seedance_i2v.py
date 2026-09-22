@@ -87,6 +87,7 @@ def test_ark_i2v_payload_uses_first_frame_and_min_duration(tmp_path, monkeypatch
             return _Poll()
 
     monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "0")  # 走图生视频首帧路径
     monkeypatch.setattr(ap.httpx, "Client", _Client)
     monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "idle")
 
@@ -153,6 +154,7 @@ def test_ark_i2v_attaches_face_body_reference_images(tmp_path, monkeypatch):
             return _Poll()
 
     monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "0")  # 旧路径：首帧 + 大头/全身 reference_image
     monkeypatch.setattr(ap.httpx, "Client", _Client)
     monkeypatch.setattr(
         di2v,
@@ -180,6 +182,188 @@ def test_ark_i2v_attaches_face_body_reference_images(tmp_path, monkeypatch):
     assert shot.get("_seedance_body_image_index") == 3
     assert shot.get("i2v_identity_ref_count") == 2
     assert "face=2" in content[0]["text"] and "body=3" in content[0]["text"]
+
+
+def test_ark_i2v_reference_only_drops_first_frame(tmp_path, monkeypatch):
+    """方案 A：不传首帧（含人脸图生图分镜），只用大头照 reference_image 锁脸。"""
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    face = tmp_path / "hero_face.png"
+    Image.new("RGB", (512, 512), (200, 100, 80)).save(face)
+    dest = tmp_path / "out.mp4"
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"id": "task-1"}
+
+    class _Poll:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"status": "failed", "error": "stop"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["body"] = json
+            return _Resp()
+
+        def get(self, url, headers=None):
+            return _Poll()
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "1")  # 方案 A
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(
+        di2v,
+        "_motion_prompt",
+        lambda shot: (
+            f"idle face={shot.get('_seedance_face_image_index')} "
+            f"body={shot.get('_seedance_body_image_index')}"
+        ),
+    )
+    monkeypatch.setattr(
+        ap,
+        "_local_ref_to_data_uri",
+        lambda rel, max_side=1536: f"data:image/jpeg;base64,{Path(rel).name}",
+    )
+
+    face_rel = str(face).replace("\\", "/")
+    shot: dict = {"_seedance_identity_refs": [face_rel]}
+    assert ap._ark_i2v(tmp_path / "scene.png", dest, shot, 4) == "none"
+    content = captured["body"]["content"]
+    roles = [c.get("role") for c in content if isinstance(c, dict)]
+    assert roles.count("first_frame") == 0
+    assert roles.count("reference_image") == 1
+    assert shot.get("_seedance_face_image_index") == 1
+    assert shot.get("_seedance_body_image_index") == 0
+    assert shot.get("_seedance_reference_only") is True
+    assert shot.get("i2v_identity_ref_count") == 1
+    assert "face=1" in content[0]["text"] and "body=0" in content[0]["text"]
+
+
+def test_ark_i2v_marks_safety_retry_on_sensitive_poll(tmp_path, monkeypatch):
+    """输出侧内容安全（疑似真人）→ 标记 _safety_retry_needed，供上层降级方案 A 重试。"""
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    scene = tmp_path / "scene.png"
+    face = tmp_path / "hero_face.png"
+    Image.new("RGB", (540, 960), (40, 40, 80)).save(scene)
+    Image.new("RGB", (512, 512), (200, 100, 80)).save(face)
+    dest = tmp_path / "out.mp4"
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"id": "task-1"}
+
+    class _Poll:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"status": "failed", "error": "OutputVideoSensitiveContentDetected: blocked"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            return _Resp()
+
+        def get(self, url, headers=None):
+            return _Poll()
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "0")  # 原流程
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "idle")
+    monkeypatch.setattr(
+        ap,
+        "_local_ref_to_data_uri",
+        lambda rel, max_side=1536: f"data:image/jpeg;base64,{Path(rel).name}",
+    )
+
+    face_rel = str(face).replace("\\", "/")
+    shot: dict = {"_seedance_identity_refs": [face_rel]}
+    assert ap._ark_i2v(scene, dest, shot, 4) == "none"
+    assert shot.get("_safety_retry_needed") is True
+    assert shot.get("_force_reference_only") is not True
+
+
+def test_format_ark_http_error_429_quota():
+    from tools.providers import ark_providers as ap
+
+    msg = ap.format_ark_http_error(429, '{"error":{"code":"QuotaExceeded","message":"quota"}}')
+    assert "429" in msg and "配额" in msg
+
+
+def test_ark_i2v_429_quota_fails_fast_with_clear_error(tmp_path, monkeypatch):
+    """429 配额硬满：不重试，快速失败并报清晰错误（避免拖延「加速收尾」连累其它镜）。"""
+    from tools.providers import ark_providers as ap
+    import tools.drama_i2v as di2v
+
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (540, 960), (40, 40, 80)).save(scene)
+    dest = tmp_path / "out.mp4"
+    posts = {"n": 0}
+
+    class _Resp429:
+        status_code = 429
+        text = '{"error":{"code":"QuotaExceeded","message":"quota","type":"TooManyRequests"}}'
+
+        def json(self):
+            return {"error": {"code": "QuotaExceeded"}}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            posts["n"] += 1
+            return _Resp429()
+
+        def get(self, url, headers=None):
+            return _Resp429()
+
+    monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "0")
+    monkeypatch.setattr(ap.httpx, "Client", _Client)
+    monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "idle")
+
+    shot: dict = {}
+    assert ap._ark_i2v(scene, dest, shot, 4) == "none"
+    assert posts["n"] == 1  # 不再退避重试，快速失败
+    assert "配额" in shot.get("i2v_error", "")
 
 
 def test_ark_i2v_attaches_tts_as_reference_audio(tmp_path, monkeypatch):
@@ -233,6 +417,7 @@ def test_ark_i2v_attaches_tts_as_reference_audio(tmp_path, monkeypatch):
             return _Poll()
 
     monkeypatch.setattr(ap, "_ark_key", lambda: "test-key")
+    monkeypatch.setattr(ap.config, "ARK_I2V_REFERENCE_ONLY", "0")  # 首帧 + TTS reference_audio 路径
     monkeypatch.setattr(ap.httpx, "Client", _Client)
     monkeypatch.setattr(di2v, "_motion_prompt", lambda shot: "idle talk")
     monkeypatch.setattr(ap, "_probe_voice_seconds", lambda path: 4.2)

@@ -25,8 +25,6 @@ from tools.drama_studio import (
     generate_character_ref,
     refine_character_ref,
     refine_shot,
-    choose_character_candidate,
-    delete_character_candidate,
     generate_episode_script,
     generate_scripts_from_premise,
     lock_character_ref,
@@ -50,9 +48,6 @@ from tools.drama_studio import (
     save_script_workspace,
     upload_character_ref,
     upload_shot_scene,
-    choose_candidate,
-    delete_candidate,
-    generate_candidates,
     generate_i2v_shot,
     generate_lip_shot,
     generate_keys_shot,
@@ -161,10 +156,6 @@ class ShotsPatch(BaseModel):
     shots: list[int]
     field: str
     value: Any
-
-
-class CandidateCount(BaseModel):
-    count: int | None = Field(default=4, ge=1, le=4)
 
 
 class ScriptBody(BaseModel):
@@ -517,31 +508,6 @@ async def drama_rerender_shot(slug: str, episode: int, shot: int, body: Rerender
     try:
         layers = (body.layers if body else None) or None
         return rerender_one_shot(slug, episode, shot, layers)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/candidates")
-async def drama_generate_candidates(slug: str, episode: int, shot: int, body: CandidateCount | None = None):
-    try:
-        count = (body.count if body else None) or 4
-        return generate_candidates(slug, episode, shot, count)
-    except (DramaNotFound, DramaBadRequest, ValueError, KeyError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/choose/{cid}")
-async def drama_choose_candidate(slug: str, episode: int, shot: int, cid: str):
-    try:
-        return choose_candidate(slug, episode, shot, cid)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
-        raise _http(e) from e
-
-
-@router.delete("/projects/{slug}/episodes/{episode}/shots/{shot}/candidates/{cid}")
-async def drama_delete_candidate(slug: str, episode: int, shot: int, cid: str):
-    try:
-        return delete_candidate(slug, episode, shot, cid)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError, KeyError) as e:
         raise _http(e) from e
 
@@ -1079,21 +1045,5 @@ def drama_generate_character_ref(slug: str, cid: str):
 def drama_refine_character_ref(slug: str, cid: str, body: RefineRefBody):
     try:
         return refine_character_ref(slug, cid, body.instruction)
-    except (DramaNotFound, DramaBadRequest, ValueError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/characters/{cid}/candidates/{cand_id}/choose")
-def drama_choose_character_candidate(slug: str, cid: str, cand_id: str):
-    try:
-        return choose_character_candidate(slug, cid, cand_id)
-    except (DramaNotFound, DramaBadRequest, ValueError) as e:
-        raise _http(e) from e
-
-
-@router.delete("/projects/{slug}/characters/{cid}/candidates/{cand_id}")
-def drama_delete_character_candidate(slug: str, cid: str, cand_id: str):
-    try:
-        return delete_character_candidate(slug, cid, cand_id)
     except (DramaNotFound, DramaBadRequest, ValueError) as e:
         raise _http(e) from e

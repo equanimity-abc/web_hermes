@@ -849,8 +849,6 @@ def split_shot_auto(
             child["角色"] = [name]
         # Fresh media layers — scene/i2v/lip regenerated per beat under HQ.
         child["assets"] = {}
-        child["candidates"] = []
-        child["chosen"] = ""
         child["identity"] = None
         child["qc"] = None
         child["lip_source"] = ""

@@ -120,6 +120,14 @@ def format_ark_http_error(status: int, body: str, *, model: str = "") -> str:
         if model:
             return f"模型 {model} 不支持 Agent Plan。{hint} 原始：{detail[:180]}"
         return f"模型不支持 Agent Plan。{hint} 原始：{detail[:180]}"
+    low = detail.lower()
+    if status == 429 or "quotaexceeded" in low or "too many requests" in low or "请求过多" in detail or "配额" in detail:
+        return (
+            "Seedance 请求配额已用尽或触发限流（HTTP 429 QuotaExceeded）。"
+            "若是 RPM 限流约 1 分钟自动恢复，可稍候重试；"
+            "若持续出现，请检查套餐配额或升级套餐。"
+            f"原始：{detail[:120]}"
+        )
     return f"HTTP {status}: {detail[:240]}"
 
 
@@ -740,37 +748,76 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
     except Exception:
         pass
 
-    from tools.drama_i2v import _motion_prompt
+    from tools.drama_i2v import _is_sensitive_i2v_error, _motion_prompt
 
     model = _resolve_seedance_model(getattr(config, "ARK_VIDEO_MODEL", ""))
     identity_rels = _seedance_anchor_ref_rels(shot)
-    scene_path = Path(scene)
-    if not scene_path.is_file():
-        if isinstance(shot, dict):
-            shot["i2v_error"] = "missing_scene"
-        return "none"
+    slug = str(shot.get("_slug") or "").strip() if isinstance(shot, dict) else ""
+    cfg_ref_only = str(getattr(config, "ARK_I2V_REFERENCE_ONLY", "0") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    force_ref_only = bool(shot.get("_force_reference_only")) if isinstance(shot, dict) else False
+    reference_only = cfg_ref_only or force_ref_only
 
-    # 与 Seedream refs 相同：JPEG 压缩，避免 4K PNG base64 撑爆 / 超时。
-    image_url = _image_path_to_data_uri(scene_path, max_side=1536)
-    if not image_url:
-        if isinstance(shot, dict):
-            shot["i2v_error"] = "scene_encode_failed"
-        return "none"
+    image_url = ""
+    ref_uris: list[tuple[str, str]] = []
+    face_i = body_i = 0
 
-    # 先编码身份参考，再按实际挂载数写 @图片N（首帧=1）
-    identity_uris: list[tuple[str, str]] = []
-    for rel in identity_rels[:_MAX_SEEDANCE_IDENTITY_REFS]:
-        uri = _local_ref_to_data_uri(rel, max_side=1536)
-        if uri:
-            identity_uris.append((rel, uri))
+    if reference_only:
+        # 方案 A：只用原始文生图大头照锁脸（图片1），不再上传「含人脸的图生图分镜」作首帧；
+        # 场景/动作交给 Prompt 文本 + 非人像参考图（场景底板、道具图）。
+        if identity_rels:
+            uri = _local_ref_to_data_uri(identity_rels[0], max_side=1536)
+            if uri:
+                ref_uris.append((identity_rels[0], uri))
+                face_i = 1
+        if slug:
+            try:
+                from tools.drama_qc import locked_env_refs_for_shot
+
+                seen = {r for r, _ in ref_uris}
+                for rel in locked_env_refs_for_shot(slug, shot):
+                    if rel in seen:
+                        continue
+                    uri = _local_ref_to_data_uri(rel, max_side=1536)
+                    if uri:
+                        ref_uris.append((rel, uri))
+                        seen.add(rel)
+            except Exception:
+                pass
+    else:
+        scene_path = Path(scene)
+        if not scene_path.is_file():
+            if isinstance(shot, dict):
+                shot["i2v_error"] = "missing_scene"
+            return "none"
+        # 与 Seedream refs 相同：JPEG 压缩，避免 4K PNG base64 撑爆 / 超时。
+        image_url = _image_path_to_data_uri(scene_path, max_side=1536)
+        if not image_url:
+            if isinstance(shot, dict):
+                shot["i2v_error"] = "scene_encode_failed"
+            return "none"
+        # 先编码身份参考，再按实际挂载数写 @图片N（首帧=1）
+        for rel in identity_rels[:_MAX_SEEDANCE_IDENTITY_REFS]:
+            uri = _local_ref_to_data_uri(rel, max_side=1536)
+            if uri:
+                ref_uris.append((rel, uri))
+        face_i = 2 if ref_uris else 0
+        body_i = 3 if len(ref_uris) >= 2 else (2 if len(ref_uris) == 1 else 0)
+
     if isinstance(shot, dict):
-        shot["_seedance_identity_refs"] = [r for r, _ in identity_uris]
-        face_i = 2 if identity_uris else 0
-        body_i = 3 if len(identity_uris) >= 2 else (2 if len(identity_uris) == 1 else 0)
+        shot["_seedance_identity_refs"] = [r for r, _ in ref_uris]
         shot["_seedance_face_image_index"] = face_i
-        shot["_seedance_body_image_index"] = (
-            body_i if len(identity_uris) >= 2 else (face_i if identity_uris else 0)
-        )
+        if reference_only:
+            shot["_seedance_body_image_index"] = 0
+        else:
+            shot["_seedance_body_image_index"] = (
+                body_i if len(ref_uris) >= 2 else (face_i if ref_uris else 0)
+            )
+        shot["_seedance_reference_only"] = reference_only
 
     prompt = _motion_prompt(shot)
     duration = _seedance_duration(seconds)
@@ -797,16 +844,17 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 voice_sec,
             )
 
-    content: list[dict[str, Any]] = [
-        {"type": "text", "text": prompt},
-        {
-            "type": "image_url",
-            "image_url": {"url": image_url},
-            "role": "first_frame",
-        },
-    ]
-    # Ark：首帧后挂大头照+全身照为 reference_image，强化脸/服一致性
-    for _rel, uri in identity_uris:
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if not reference_only and image_url:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": image_url},
+                "role": "first_frame",
+            }
+        )
+    # reference_image：方案 A 时为大头照(图片1)+场景底板/道具；否则为 首帧后的 大头照+全身照
+    for _rel, uri in ref_uris:
         content.append(
             {
                 "type": "image_url",
@@ -837,7 +885,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         shot["i2v_audio_ref"] = bool(used_ref_audio)
         shot["i2v_generate_audio"] = bool(gen_audio)
         shot["manual_voice"] = bool(_manual_voice_enabled(shot))
-        shot["i2v_identity_ref_count"] = len(identity_uris)
+        shot["i2v_identity_ref_count"] = len(ref_uris)
 
     def _remember_error(msg: str) -> None:
         if isinstance(shot, dict):
@@ -867,9 +915,9 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
         return format_ark_http_error(resp.status_code, resp.text or "", model=model)
 
     def _strip_identity_refs_for_retry() -> None:
-        """首帧任务若拒收 reference_image：去掉身份图并清掉 @图片认领文案，保留首帧。"""
+        """首帧/参考图任务若拒收 reference_image：去掉身份图并清掉 @图片认领文案。"""
         nonlocal content, body, prompt
-        if not identity_uris:
+        if not ref_uris:
             return
         content = [
             c
@@ -898,7 +946,7 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                 headers=_ark_headers(),
                 json=body,
             )
-            if submit.status_code >= 400 and identity_uris:
+            if submit.status_code >= 400 and ref_uris:
                 err_txt = (submit.text or "").lower()
                 if any(
                     k in err_txt
@@ -921,8 +969,11 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                         json=body,
                     )
             if submit.status_code >= 400:
-                _remember_error(f"model={model}; {_format_http_error(submit)}")
+                err = f"model={model}; {_format_http_error(submit)}"
+                _remember_error(err)
                 log.warning("ark i2v submit failed model=%s: %s", model, submit.text[:500])
+                if _is_sensitive_i2v_error(err) and not reference_only and isinstance(shot, dict):
+                    shot["_safety_retry_needed"] = True
                 return "none"
             job = submit.json()
             task_id = str(job.get("id") or job.get("task_id") or "").strip()
@@ -1007,9 +1058,11 @@ def _ark_i2v(scene, dest, shot, seconds) -> str:
                     _remember_error("succeeded_but_no_video_url")
                     return "none"
                 if status in ("failed", "error", "cancelled"):
-                    err = info.get("error") or info.get("message") or info
+                    err = str(info.get("error") or info.get("message") or info or "")
                     log.warning("ark i2v task failed: %s", info)
                     _remember_error(f"task_{status}: {err}"[:240])
+                    if _is_sensitive_i2v_error(err) and not reference_only and isinstance(shot, dict):
+                        shot["_safety_retry_needed"] = True
                     return "none"
             log.warning("ark i2v timeout task=%s", task_id)
             _remember_error(f"timeout task={task_id}")
