@@ -36,9 +36,6 @@ def test_lip_cascade_seedance_only(monkeypatch: pytest.MonkeyPatch):
 
 def test_assert_studio_providers_fail_loud(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "ARK_API_KEY", "")
-    monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
-    monkeypatch.setattr(config, "DASHSCOPE_MAAS_BASE_URL", "")
-    monkeypatch.setattr(config, "REPLICATE_API_TOKEN", "")
 
     from tools import drama_models
     from tools.drama_config import load_preset

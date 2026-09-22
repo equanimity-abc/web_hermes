@@ -11,16 +11,16 @@ from tools.providers.lip_providers import lip_source_is_real, lip_video_usable
 
 
 def test_lip_source_is_real_strips_strategy_suffix():
-    assert lip_source_is_real("pixverse+per_turn") is True
-    assert lip_source_is_real("latentsync+per_turn") is True
+    assert lip_source_is_real("seedance+per_turn") is True
     assert lip_source_is_real("fallback") is False
     assert lip_source_is_real("") is False
+    assert lip_source_is_real("pixverse+per_turn") is False  # 非 Ark 口型已移除
 
 
 def test_lip_video_usable_with_per_turn_suffix(tmp_path: Path):
     lip = tmp_path / "shot07_lip.mp4"
     lip.write_bytes(b"x" * 2048)
-    shot = {"lip_source": "pixverse+per_turn", "assets": {"lip": str(lip)}}
+    shot = {"lip_source": "seedance+per_turn", "assets": {"lip": str(lip)}}
     assert lip_video_usable(shot, lip) is True
 
 
@@ -43,7 +43,7 @@ def test_lip_video_usable_recovers_orphan_when_duration_matches_voice(tmp_path: 
 
 def test_lip_video_usable_rejects_missing_file(tmp_path: Path):
     lip = tmp_path / "missing.mp4"
-    shot = {"lip_source": "pixverse+per_turn"}
+    shot = {"lip_source": "seedance+per_turn"}
     assert lip_video_usable(shot, lip) is False
 
 

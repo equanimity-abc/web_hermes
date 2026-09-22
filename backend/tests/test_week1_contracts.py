@@ -33,19 +33,7 @@ def test_studio_tts_refuses_edge_degrade(tmp_path):
     token = set_tts_edge_degrade(False)
     try:
         assert allow_tts_edge_degrade() is False
-        with pytest.raises(RuntimeError, match="禁止静默降级"):
+        with pytest.raises(RuntimeError, match="仅支持"):
             refuse_or_edge("hi", tmp_path / "a.mp3", voice=None, reason="no key")
-    finally:
-        reset_tts_edge_degrade(token)
-
-
-def test_draft_tts_allows_edge_degrade(tmp_path, monkeypatch):
-    token = set_tts_edge_degrade(True)
-    try:
-        monkeypatch.setattr(
-            "tools.providers.tts_providers._edge_tts",
-            lambda text, dest, *, voice=None: True,
-        )
-        assert refuse_or_edge("hi", tmp_path / "a.mp3", voice=None, reason="no key") is True
     finally:
         reset_tts_edge_degrade(token)

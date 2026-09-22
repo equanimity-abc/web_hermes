@@ -14,8 +14,8 @@ from tools.providers.lip_providers import lip_source_is_real
 def test_lip_source_mock_not_real():
     assert lip_source_is_real("mock") is False
     assert lip_source_is_real("seedance") is True
-    assert lip_source_is_real("pixverse") is True
-    assert lip_source_is_real("pixverse+per_turn") is True
+    assert lip_source_is_real("pixverse") is False  # 非 Ark 口型已移除
+    assert lip_source_is_real("seedance+per_turn") is True
 
 
 def test_assert_hq_tts_rejects_edge(monkeypatch):

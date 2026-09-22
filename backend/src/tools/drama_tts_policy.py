@@ -1,11 +1,11 @@
-"""TTS degrade policy: studio forbids silent edge-tts fallback."""
+"""TTS 降级策略：仅火山方舟 Seed Audio，不再静默降级 edge-tts。"""
 
 from __future__ import annotations
 
 from contextvars import ContextVar
 from typing import Any
 
-# When False, commercial TTS adapters must raise instead of falling back to edge-tts.
+# 仅火山方舟 Seed Audio：无 edge-tts 降级（保留此开关以兼容旧调用，但不再生效）。
 _allow_edge_degrade: ContextVar[bool] = ContextVar("drama_tts_allow_edge_degrade", default=True)
 
 
@@ -23,15 +23,10 @@ def reset_tts_edge_degrade(token: Any) -> None:
 
 
 def refuse_or_edge(text: str, dest: Any, *, voice: str | None, reason: str) -> bool:
-    """Studio: raise; draft/balanced: fall back to edge-tts."""
-    if not allow_tts_edge_degrade():
-        raise RuntimeError(
-            f"专业档 TTS 禁止静默降级到 edge-tts（{reason}）。"
-            "请配置 ARK_API_KEY / DASHSCOPE_API_KEY / TTS_API_URL，或将 quality_profile 设为 draft。"
-        )
-    from tools.providers.tts_providers import _edge_tts
-
-    return _edge_tts(text, dest, voice=voice)
+    """仅火山方舟 Seed Audio；不再降级 edge-tts（draft 档也如此）。"""
+    raise RuntimeError(
+        f"TTS 失败（{reason}）。仅支持火山方舟 Seed Audio，请配置 ARK_API_KEY。"
+    )
 
 
 def resolve_tts_degrade_for_slug(slug: str) -> bool:

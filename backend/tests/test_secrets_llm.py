@@ -18,7 +18,7 @@ def secrets_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "secrets.json"
     monkeypatch.setattr("secrets_store.SECRETS_PATH", path)
     # Isolate live keys so chain tests are deterministic.
-    for key in ("DEEPSEEK_API_KEY", "KIMI_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"):
+    for key in ("DEEPSEEK_API_KEY", "KIMI_API_KEY", "ARK_API_KEY"):
         monkeypatch.setattr(config, key, "")
         monkeypatch.delenv(key, raising=False)
     return path

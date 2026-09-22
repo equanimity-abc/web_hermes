@@ -35,32 +35,6 @@ class Config:
     ARK_I2V_REFERENCE_ONLY: str = os.getenv("ARK_I2V_REFERENCE_ONLY", "0")
     ARK_AUDIO_MODEL: str = os.getenv("ARK_AUDIO_MODEL", "doubao-seed-audio-1-0")
 
-    # 阿里云百炼（DashScope）：出图 / 图生视频 / 高拟真配音
-    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
-    DASHSCOPE_BASE_URL: str = os.getenv(
-        "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com"
-    )
-    DASHSCOPE_IMAGE_MODEL: str = os.getenv("DASHSCOPE_IMAGE_MODEL", "qwen-image-plus")
-    DASHSCOPE_I2V_MODEL: str = os.getenv("DASHSCOPE_I2V_MODEL", "wanx2.1-i2v-turbo")
-    DASHSCOPE_TTS_MODEL: str = os.getenv("DASHSCOPE_TTS_MODEL", "qwen-audio-3.0-tts-plus")
-    DASHSCOPE_MAAS_BASE_URL: str = os.getenv("DASHSCOPE_MAAS_BASE_URL", "")
-    KLING_IMAGE_MODEL: str = os.getenv(
-        "KLING_IMAGE_MODEL", "kling/kling-v3-omni-image-generation"
-    )
-    KLING_VIDEO_MODEL: str = os.getenv(
-        "KLING_VIDEO_MODEL", "kling/kling-v3-video-generation"
-    )
-    KLING_OMNI_VIDEO_MODEL: str = os.getenv(
-        "KLING_OMNI_VIDEO_MODEL", "kling/kling-v3-omni-video-generation"
-    )
-    PIXVERSE_LIP_MODEL: str = os.getenv(
-        "PIXVERSE_LIP_MODEL", "pixverse/pixverse-lipsync"
-    )
-
-    REPLICATE_API_TOKEN: str = os.getenv("REPLICATE_API_TOKEN", "")
-    REPLICATE_LIP_MODEL: str = os.getenv("REPLICATE_LIP_MODEL", "bytedance/latentsync")
-    REPLICATE_LIP_VERSION: str = os.getenv("REPLICATE_LIP_VERSION", "")
-
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))
     RELOAD: bool = os.getenv("RELOAD", "0") in ("1", "true", "True", "yes")
@@ -96,16 +70,11 @@ class Config:
     DRAMA_RPM_DASHSCOPE: int = int(os.getenv("DRAMA_RPM_DASHSCOPE", "20"))
     DRAMA_RPM_LIP: int = int(os.getenv("DRAMA_RPM_LIP", "10"))
 
-    IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "pollinations")
-    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "flux")
+    IMAGE_GEN_PROVIDER: str = os.getenv("IMAGE_GEN_PROVIDER", "seedream")
     # 0=专业全幅参考生图；1=旧版「底板+bbox贴角色」（易穿帮，仅草稿预览）
     DRAMA_LAYERED_SCENE: str = os.getenv("DRAMA_LAYERED_SCENE", "0")
 
-    CONSISTENT_IMAGE_URL: str = os.getenv("CONSISTENT_IMAGE_URL", "")
-    CONSISTENT_IMAGE_KEY: str = os.getenv("CONSISTENT_IMAGE_KEY", "")
-    CONSISTENT_IMAGE_MODEL: str = os.getenv("CONSISTENT_IMAGE_MODEL", "char-consistent")
-
-    I2V_PROVIDER: str = os.getenv("I2V_PROVIDER", "none")
+    I2V_PROVIDER: str = os.getenv("I2V_PROVIDER", "seedance")
     I2V_MODEL: str = os.getenv("I2V_MODEL", "default")
     I2V_API_URL: str = os.getenv("I2V_API_URL", "")
     I2V_API_KEY: str = os.getenv("I2V_API_KEY", "")
