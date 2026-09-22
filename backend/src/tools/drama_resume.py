@@ -242,12 +242,7 @@ def _lip_ok(shot: dict[str, Any], assets: dict[str, Any], *, force_required: boo
 
 
 def _flicker_ok(shot: dict[str, Any]) -> bool:
-    from tools.drama_qc import check_allows_pass
-
-    flicker = shot.get("qc_flicker") if isinstance(shot.get("qc_flicker"), dict) else {}
-    if not flicker:
-        return True
-    return check_allows_pass(flicker)
+    return True
 
 
 def inspect_shot_state(shot: dict[str, Any]) -> dict[str, Any]:

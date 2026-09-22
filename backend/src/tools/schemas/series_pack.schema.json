@@ -339,12 +339,12 @@
           "type": "integer"
         },
         "t_in": {
-          "minimum": 0.0,
+          "minimum": 0,
           "title": "T In",
           "type": "number"
         },
         "t_out": {
-          "exclusiveMinimum": 0.0,
+          "exclusiveMinimum": 0,
           "title": "T Out",
           "type": "number"
         },

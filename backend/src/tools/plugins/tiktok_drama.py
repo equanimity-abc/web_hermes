@@ -54,12 +54,10 @@ _GUIDE = """# 抖音漫剧制作规范（竖屏短剧）
 19. generate_i2v 对已锁关键帧做 Seedance 图生视频（专业档失败 Fail Loud，禁止静图运镜顶替）
 20. mix_episode 只混 BGM（换曲/duck，不碰各镜 clip）；无 license 禁止导出
 21. 口型：默认随 Seedance 自带声内生；手动配音模式下挂 TTS reference_audio
-22. qc_shot 抽检本镜身份（锁参考图余弦；低于阈值脏画面/运动，不重配音；skipped 不得记为通过）
-23. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁
-24. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
-25. qc_episode 跑整集验收四项（身份/口型/闪烁/响度）；skipped 不能点通过
-26. apply_style 为本集切换风格包
-27. **resume_produce** 分析上次失败点，收窄脏层，从失败步骤续跑直至导出
+22. suggest_coverage 只建议导演覆盖（钩子/景别节奏/最多 2 条 reaction），不改镜、不加锁
+23. generate_keys 仅单人 action 钉 3–5 姿态关键帧并补间运动（改姿态不重配音；多角色同框不验收）
+24. apply_style 为本集切换风格包
+25. **resume_produce** 分析上次失败点，收窄脏层，从失败步骤续跑直至导出
 
 ## 火山方舟提示词要点（编剧/出图/出视频）
 - Seedream 静帧：自然语言「主体+姿态+环境+光影」；写明「视频静帧 / Seedance 首帧」；9:16
@@ -1021,65 +1019,6 @@ def _action_generate_lip(args: dict) -> str:
     )
 
 
-def _action_qc_shot(args: dict) -> str:
-    from tools.drama_studio import DramaBadRequest, DramaNotFound, qc_shot
-
-    slug = _slug(str(args.get("slug") or ""))
-    if not slug:
-        return _err("需要 slug")
-    try:
-        n = int(args.get("episode") or 1)
-        shot_n = int(args.get("shot") or 0)
-    except (TypeError, ValueError):
-        return _err("episode / shot 须为整数")
-    if shot_n < 1:
-        return _err("需要 shot")
-    try:
-        result = qc_shot(slug, n, shot_n)
-    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
-        return _err(str(e))
-    identity = result.get("identity") or {}
-    return _ok(
-        action="qc_shot",
-        slug=slug,
-        episode=n,
-        shot=shot_n,
-        passed=bool(result.get("passed")),
-        identity=identity,
-        dirty=(result.get("shot") or {}).get("dirty"),
-        hint=identity.get("hint") or ("身份通过" if result.get("passed") else "未通过或未出分，不得记为通过"),
-    )
-
-
-def _action_qc_episode(args: dict) -> str:
-    from tools.drama_studio import DramaBadRequest, DramaNotFound, qc_episode
-
-    slug = _slug(str(args.get("slug") or ""))
-    if not slug:
-        return _err("需要 slug")
-    try:
-        n = int(args.get("episode") or 1)
-    except (TypeError, ValueError):
-        return _err("episode 须为整数")
-    try:
-        result = qc_episode(slug, n)
-    except (FileNotFoundError, ValueError, RuntimeError, DramaBadRequest, DramaNotFound) as e:
-        return _err(str(e))
-    qc = result.get("qc") or {}
-    return _ok(
-        action="qc_episode",
-        slug=slug,
-        episode=n,
-        verdict=qc.get("verdict"),
-        can_pass=bool(qc.get("can_pass")),
-        skipped=(qc.get("summary") or {}).get("skipped"),
-        loudness=qc.get("loudness"),
-        block_reason=qc.get("block_reason"),
-        hint=qc.get("block_reason")
-        or "验收已跑。skipped 不得记为通过；通过请人在工作台点。响度不达标只重 mix。",
-    )
-
-
 def _action_suggest_coverage(args: dict) -> str:
     from tools.drama_studio import DramaBadRequest, DramaNotFound, suggest_coverage
 
@@ -1418,8 +1357,6 @@ def _tiktok_drama(args: dict) -> str:
         "mix_episode": _action_mix_episode,
         "generate_i2v": _action_generate_i2v,
         "generate_lip": _action_generate_lip,
-        "qc_shot": _action_qc_shot,
-        "qc_episode": _action_qc_episode,
         "suggest_coverage": _action_suggest_coverage,
         "generate_keys": _action_generate_keys,
         "classify_shots": _action_classify_shots,
@@ -1457,7 +1394,7 @@ def register_tiktok_drama() -> None:
             "rerender_shot（只重渲一镜或指定层）、lock_shot（锁定/解锁 scene/overlay/voice/clip/shot）、"
 "rerender_dirty（只重渲脏镜）、resume_produce（分析失败点并从失败步骤续跑到导出）、save_character（角色卡：外形/音色/锁参考图）、generate_character_ref（按 look 走项目出图路由生成定妆参考图，不自动锁）、"
             "generate_candidates/choose_candidate（已禁用：禁止候选项与重抽）、"
-            "export_timeline（导出整集：脏镜先重渲再拼接混音）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、qc_shot（抽检身份，失败脏画面不重配音）、qc_episode（整集验收四项，skipped 不能点通过，响度只重 mix）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
+            "export_timeline（导出整集：脏镜先重渲再拼接混音）、mix_episode（换 BGM 只混音，须有 license）、generate_i2v（对已锁关键帧试 I2V 运动）、generate_lip（仅对话特写口型）、suggest_coverage（导演覆盖建议，不改镜不加锁）、generate_keys（单人 action 稀疏关键帧，改姿态不重配音）、classify_shots（按对白推断 kind/speaker）、apply_style（本集风格包，新镜走对应出图路由）、poll_job（查后台渲染进度）。"
             "文件写在 workspace/dramas/{slug}/；成片为 videos/epNN.mp4。"
         ),
         parameters={
@@ -1465,7 +1402,7 @@ def register_tiktok_drama() -> None:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "guide | init | delete_project | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | resume_produce | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | qc_shot | qc_episode | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
+                    "description": "guide | init | delete_project | list | get | save_bible | save_outline | save_episode | refine_script | parse_shots | create_from_premise | produce_episode | render_episode | rerender_shot | lock_shot | rerender_dirty | resume_produce | save_character | generate_character_ref | generate_candidates | choose_candidate | export_timeline | mix_episode | generate_i2v | generate_lip | suggest_coverage | generate_keys | classify_shots | apply_style | poll_job",
                     "enum": [
                         "guide",
                         "init",
@@ -1492,8 +1429,6 @@ def register_tiktok_drama() -> None:
                         "mix_episode",
                         "generate_i2v",
                         "generate_lip",
-                        "qc_shot",
-                        "qc_episode",
                         "suggest_coverage",
                         "generate_keys",
                         "classify_shots",

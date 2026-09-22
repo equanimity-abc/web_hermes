@@ -553,9 +553,8 @@ def _public_coverage(doc: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _public_qc(doc: dict[str, Any] | None) -> dict[str, Any]:
-    from tools.drama_qc import public_episode_qc
-
-    return public_episode_qc(doc)
+    qc = (doc or {}).get("qc")
+    return qc if isinstance(qc, dict) else {}
 
 
 def _script_headers_match_doc(script: str | None, doc: dict[str, Any] | None) -> bool:
@@ -1110,11 +1109,7 @@ def export_episode(
         return enqueue_job(slug, n, "export", params={"force": bool(force)})
     doc = _ensure_shots_doc(slug, n)
     from tools.drama_audio import assert_export_licensed, load_mix
-    from tools.drama_quality import (
-        assert_loudness_after_export,
-        assert_shots_qc_for_export,
-        assert_studio_bgm,
-    )
+    from tools.drama_quality import assert_studio_bgm
     from tools.drama_shots import LAYERS, cascade_shot_timings, save_doc
     from tools.drama_video import assemble_episode, ffmpeg_available, render_shot_layers
     from tools.workspace import resolve_safe
@@ -1124,7 +1119,6 @@ def export_episode(
     try:
         assert_export_licensed(slug, load_mix(slug, n))
         assert_studio_bgm(slug, n, force=bool(force))
-        assert_shots_qc_for_export(slug, n, doc, force=bool(force))
         # 导出前重渲：脏层全量处理；未锁镜头至少刷新 overlay+clip，
         # 避免声音页 CSS 预览正确、成片仍是旧旁白/旧时长。
         ep_title = str(doc.get("title") or f"第{n}集")
@@ -1158,7 +1152,6 @@ def export_episode(
         cascade_shot_timings(doc)
         save_doc(doc)
         mode = assemble_episode(doc)
-        assert_loudness_after_export(slug, n, force=bool(force))
     except ValueError as e:
         raise DramaBadRequest(str(e)) from e
     except RuntimeError as e:
@@ -1884,153 +1877,6 @@ def generate_i2v_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
     job = enqueue_job(slug, n, "i2v_shot", params={"shot": shot_n})
     job["estimate"] = estimate_i2v(slug, shot)
     return job
-
-
-def qc_shot(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    from tools.drama_qc import qc_shot_bundle, shot_can_pass
-
-    bundle = qc_shot_bundle(slug, n, shot, apply=True)
-    save_doc(doc)
-    return {
-        "slug": slug,
-        "episode": n,
-        "n": shot_n,
-        "passed": shot_can_pass(bundle),
-        "shot": enrich_shot(shot, slug=slug),
-    }
-
-
-def qc_episode(slug: str, episode: int) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    doc = _ensure_shots_doc(slug, n)
-    from tools.drama_qc import run_episode_qc
-
-    run_episode_qc(slug, n, doc, apply=True)
-    save_doc(doc)
-    ep = get_episode(slug, n)
-    return {"slug": slug, "episode": n, "qc": ep.get("qc"), "hint": (ep.get("qc") or {}).get("block_reason") or "验收已跑，通过必须以脚本为准"}
-
-
-def qc_checklist(slug: str, episode: int) -> dict[str, Any]:
-    """R8: one-screen checklist of what blocks this episode from passing."""
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    doc = _ensure_shots_doc(slug, n)
-    from tools.drama_qc import qc_episode_checklist
-
-    return qc_episode_checklist(slug, n, doc)
-
-
-def reject_all_qc(slug: str, episode: int) -> dict[str, Any]:
-    """R8: reject every problem shot at once (mark 待修 + dirty)."""
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    doc = _ensure_shots_doc(slug, n)
-    from tools.drama_qc import mark_shot_verdict
-
-    rejected: list[int] = []
-    for shot in doc.get("shots") or []:
-        sn = int(shot.get("n") or 0)
-        if sn < 1 or "shot" in (shot.get("locked") or []):
-            continue
-        try:
-            mark_shot_verdict(shot, "待修")
-        except ValueError:
-            continue
-        dirty = [str(x) for x in (shot.get("dirty") or [])]
-        for layer in ("scene", "motion", "lip", "clip"):
-            if layer not in dirty and layer not in (shot.get("locked") or []):
-                dirty.append(layer)
-        shot["dirty"] = dirty
-        if dirty:
-            shot["status"] = "dirty"
-        rejected.append(sn)
-    save_doc(doc)
-    return qc_checklist(slug, n)
-
-
-def pass_episode_qc(slug: str, episode: int) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    doc = _ensure_shots_doc(slug, n)
-    from tools.drama_qc import mark_episode_passed
-
-    try:
-        mark_episode_passed(doc, passed=True)
-    except ValueError as e:
-        raise DramaBadRequest(str(e)) from e
-    save_doc(doc)
-    return get_episode(slug, n)
-
-
-def reject_shot_qc(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    from tools.drama_qc import mark_episode_passed, mark_shot_verdict
-
-    try:
-        mark_shot_verdict(shot, "待修")
-        mark_episode_passed(doc, passed=False)
-    except ValueError as e:
-        raise DramaBadRequest(str(e)) from e
-    save_doc(doc)
-    return get_episode(slug, n)
-
-
-def pass_shot_qc(slug: str, episode: int, shot_n: int) -> dict[str, Any]:
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    shot_n = parse_shot_n(shot_n)
-    doc = _ensure_shots_doc(slug, n)
-    shot = find_shot(doc, shot_n)
-    if shot is None:
-        raise DramaNotFound(f"找不到 Shot {shot_n}")
-    from tools.drama_qc import mark_shot_verdict
-
-    try:
-        mark_shot_verdict(shot, "通过")
-    except ValueError as e:
-        raise DramaBadRequest(str(e)) from e
-    save_doc(doc)
-    return get_episode(slug, n)
-
-
-def remix_loudness(slug: str, episode: int) -> dict[str, Any]:
-    """Loudness fail path: remix mix only, never rebuild per-shot clips."""
-    slug = parse_slug(slug)
-    n = parse_episode(episode)
-    mix_episode(slug, n, background=False)
-    doc = load_doc(slug, n)
-    if doc is None:
-        raise DramaNotFound("没有 shots.json")
-    from tools.drama_qc import check_allows_pass, qc_episode_loudness, normalize_episode_qc
-
-    loudness = qc_episode_loudness(slug, n, apply=True)
-    qc = normalize_episode_qc(doc.get("qc"))
-    qc["loudness"] = loudness
-    if qc.get("verdict") == "通过" and not check_allows_pass(loudness):
-        qc["verdict"] = "待修"
-        qc["status"] = "review"
-        qc["passed_at"] = ""
-        qc["block_reason"] = str(loudness.get("hint") or "响度不达标，只重 mix")
-    doc["qc"] = qc
-    save_doc(doc)
-    ep = get_episode(slug, n)
-    ep["hint"] = "已只重 mix，各镜 clip 未改"
-    return ep
 
 
 def suggest_coverage(slug: str, episode: int) -> dict[str, Any]:

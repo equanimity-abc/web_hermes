@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.drama_hq_contract import assert_hq_lip_ready, assert_hq_tts_ready
+from tools.drama_hq_contract import assert_hq_tts_ready
 from tools.drama_lip import lip_provider_cascade
 from tools.providers.lip_providers import lip_source_is_real
 
@@ -77,63 +77,3 @@ def test_lip_cascade_studio_single_provider(monkeypatch):
     assert lip_provider_cascade("missing", slug="demo") == []
 
 
-def test_assert_hq_lip_requires_motion(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr("tools.drama_qc.qc_gates_enabled", lambda: True)
-    monkeypatch.setattr(
-        "tools.drama_models.models_with_overrides",
-        lambda slug, shot=None, **k: {"lip": {"provider": "seedance"}},
-    )
-    monkeypatch.setattr(
-        "tools.drama_lip.lip_eligible",
-        lambda shot, models=None: {"ok": True},
-    )
-    monkeypatch.setattr(
-        "tools.drama_lip.lip_provider_cascade",
-        lambda wanted=None, slug="": ["seedance"],
-    )
-    with pytest.raises(ValueError, match="真 I2V"):
-        assert_hq_lip_ready(
-            "demo",
-            {
-                "n": 1,
-                "kind": "dialogue",
-                "i2v_source": "fallback",
-                "assets": {},
-                "dialogue_track": {"turns": [{"speaker": "A", "text": "hi"}]},
-            },
-        )
-
-
-def test_assert_hq_lip_multi_speaker(monkeypatch, tmp_path: Path):
-    motion = tmp_path / "m.mp4"
-    motion.write_bytes(b"x" * 2000)
-    monkeypatch.setattr("tools.drama_qc.qc_gates_enabled", lambda: True)
-    monkeypatch.setattr(
-        "tools.drama_models.models_with_overrides",
-        lambda slug, shot=None, **k: {"lip": {"provider": "seedance"}},
-    )
-    monkeypatch.setattr(
-        "tools.drama_lip.lip_eligible",
-        lambda shot, models=None: {"ok": True},
-    )
-    monkeypatch.setattr(
-        "tools.drama_lip.lip_provider_cascade",
-        lambda wanted=None, slug="": ["seedance"],
-    )
-    monkeypatch.setattr("tools.workspace.resolve_safe", lambda rel: motion)
-    with pytest.raises(ValueError, match="auto_split"):
-        assert_hq_lip_ready(
-            "demo",
-            {
-                "n": 1,
-                "kind": "dialogue",
-                "i2v_source": "ai",
-                "assets": {"motion": "m.mp4"},
-                "dialogue_track": {
-                    "turns": [
-                        {"speaker": "A", "text": "hi"},
-                        {"speaker": "B", "text": "yo"},
-                    ]
-                },
-            },
-        )

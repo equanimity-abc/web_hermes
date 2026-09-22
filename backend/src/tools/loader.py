@@ -66,10 +66,40 @@ def _load_providers() -> None:
         print(f"[providers] failed to load adapters: {e}")
 
 
-def load_skill_hints() -> list[str]:
-    """Inject backend/skills/*/SKILL.md prompt comments into the system prompt."""
+def _frontmatter_field(text: str, key: str) -> str:
+    """Extract a scalar field from YAML frontmatter (``--- ... ---``).
+
+    Supports plain / single-quoted / double-quoted values. Returns the
+    whitespace-collapsed value, or "" when the field is absent.
+    """
     import re
 
+    m = re.match(r"^---\s*\n(.*?)\n---", text, flags=re.S)
+    if not m:
+        return ""
+    fm = m.group(1)
+    for line in fm.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        if k.strip() != key:
+            continue
+        val = v.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        return " ".join(val.split())
+    return ""
+
+
+def load_skill_hints() -> list[str]:
+    """Inject skills/*/SKILL.md frontmatter ``description`` into the system prompt.
+
+    Standard SKILL.md convention: YAML frontmatter (name/description/…) followed
+    by markdown instructions. The ``description`` doubles as the standing hint.
+    """
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
     loaded: list[str] = []
     if not skills_dir.is_dir():
@@ -79,11 +109,7 @@ def load_skill_hints() -> list[str]:
             text = skill_md.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        match = re.search(r"<!--\s*prompt:\s*(.*?)\s*-->", text, flags=re.S)
-        if match:
-            hint = " ".join(match.group(1).split())
-        else:
-            hint = ""
+        hint = _frontmatter_field(text, "description")
         if hint:
             add_plugin_prompt_hint(hint)
             loaded.append(skill_md.parent.name)

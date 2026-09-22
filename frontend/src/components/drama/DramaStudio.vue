@@ -69,9 +69,6 @@ const props = defineProps({
   budgetWarn: { type: Boolean, default: false },
   budgetDraft: { type: Object, required: true },
   budgetOpen: { type: Boolean, default: false },
-  qcChecklist: { type: Object, default: null },
-  checklistOpen: { type: Boolean, default: false },
-  rejectingAll: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -111,12 +108,6 @@ const emit = defineEmits([
   'choose-key',
   'upload-key',
   'lock-key',
-  'qc-shot',
-  'qc-episode',
-  'pass-episode-qc',
-  'pass-shot-qc',
-  'reject-shot-qc',
-  'remix-loudness',
   'suggest-coverage',
   'apply-coverage',
   'dismiss-coverage',
@@ -147,9 +138,6 @@ const emit = defineEmits([
   'delete-snapshot',
   'toggle-budget',
   'save-budget',
-  'toggle-checklist',
-  'refresh-checklist',
-  'reject-all-qc',
 ])
 
 const stage = ref('script')
@@ -1144,9 +1132,8 @@ function lipStatusLabel(shot) {
       ai: 'AI 口型',
       mock: '占位波形（非真口型）',
     }
-    const score = shot?.lip_score?.lse_c ?? shot?.lip_score?.score
     const base = map[src] || src || '已生成'
-    label = score != null && score !== '' ? `${base} · LSE ${Number(score).toFixed?.(2) ?? score}` : base
+    label = base
   } else if (shot?.lip_error) {
     label = `失败：${shot.lip_error}`
   } else if (shot?.lip?.will_run || shot?.lip?.ok) {

@@ -54,14 +54,6 @@ from tools.drama_studio import (
     choose_key,
     upload_key,
     lock_key,
-    qc_shot,
-    qc_episode,
-    qc_checklist,
-    reject_all_qc,
-    pass_episode_qc,
-    pass_shot_qc,
-    reject_shot_qc,
-    remix_loudness,
     suggest_coverage,
     apply_coverage,
     dismiss_coverage,
@@ -568,70 +560,6 @@ async def drama_lock_key(slug: str, episode: int, shot: int, kid: str, body: Ref
         locked = True if body is None else bool(body.locked)
         return lock_key(slug, episode, shot, kid, locked)
     except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/qc")
-async def drama_qc_shot(slug: str, episode: int, shot: int):
-    try:
-        return qc_shot(slug, episode, shot)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/qc")
-async def drama_qc_episode(slug: str, episode: int):
-    try:
-        return qc_episode(slug, episode)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
-        raise _http(e) from e
-
-
-@router.get("/projects/{slug}/episodes/{episode}/qc/checklist")
-async def drama_qc_checklist(slug: str, episode: int):
-    try:
-        return qc_checklist(slug, episode)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/qc/reject-all")
-async def drama_reject_all_qc(slug: str, episode: int):
-    try:
-        return reject_all_qc(slug, episode)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/qc/pass")
-async def drama_pass_episode_qc(slug: str, episode: int):
-    try:
-        return pass_episode_qc(slug, episode)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/qc/remix")
-async def drama_remix_loudness(slug: str, episode: int):
-    try:
-        return remix_loudness(slug, episode)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/qc/pass")
-async def drama_pass_shot_qc(slug: str, episode: int, shot: int):
-    try:
-        return pass_shot_qc(slug, episode, shot)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
-        raise _http(e) from e
-
-
-@router.post("/projects/{slug}/episodes/{episode}/shots/{shot}/qc/reject")
-async def drama_reject_shot_qc(slug: str, episode: int, shot: int):
-    try:
-        return reject_shot_qc(slug, episode, shot)
-    except (DramaNotFound, DramaBadRequest, FileNotFoundError, ValueError, RuntimeError) as e:
         raise _http(e) from e
 
 

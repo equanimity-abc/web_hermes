@@ -72,6 +72,14 @@ def test_build_asset_ref_prompt_injects_face_anchor():
     assert "禁止另画一张脸" in prompt
 
 
+def test_character_anchor_prompt_prefers_frozen():
+    from tools.drama_characters import character_anchor_prompt
+
+    char = {"name": "玉兔", "look": "很长的外形描写" * 20, "anchor_prompt": "玉兔：兔耳髻短句"}
+    assert character_anchor_prompt(char) == "玉兔：兔耳髻短句"
+    assert "同一张脸" in character_anchor_prompt({"name": "嫦娥", "look": "白裙飞天髻"})
+
+
 def test_character_ref_prompt_single_pose():
     from tools.drama_characters import build_asset_ref_prompt, character_ref_negative_prompt
 
@@ -262,7 +270,7 @@ def test_trim_letterbox_reads_pixels_with_pillow():
 
 def test_locked_refs_for_shot_returns_workspace_relative_paths(tmp_path, monkeypatch):
     from tools.drama_characters import ref_rel, save_characters
-    from tools.drama_qc import locked_refs_for_shot
+    from tools.drama_qc import compose_shot_image_refs
     from tools.workspace import resolve_safe, workspace_root
 
     slug = "ref_path_test"
@@ -275,7 +283,7 @@ def test_locked_refs_for_shot_returns_workspace_relative_paths(tmp_path, monkeyp
     dest.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
     save_characters(slug, [{"id": cid, "name": "Hero", "ref": rel, "ref_locked": True, "category": "character"}])
     shot = {"n": 1, "角色": ["Hero"]}
-    refs = locked_refs_for_shot(slug, shot)
+    refs = compose_shot_image_refs(slug, shot)
     assert refs == [rel]
     assert not refs[0].startswith(str(root))
 

@@ -584,7 +584,6 @@ def test_generate_shot_lip_soft_skips_when_seedance_lip(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(dl, "lip_rel", lambda slug, ep, n: str(lip_dest))
     monkeypatch.setattr(dl, "resolve_safe", lambda p: __import__("pathlib").Path(p))
-    monkeypatch.setattr(dl, "score_lip", lambda *a, **k: {"status": "ok", "method": "proxy"})
     monkeypatch.setattr(
         "tools.drama_video._probe_duration",
         lambda path: 3.5,

@@ -96,11 +96,6 @@ const {
   chooseShotKey,
   uploadShotKey,
   lockShotKey,
-  qcSelectedShot,
-  runEpisodeQc,
-  passEpisodeQcGate,
-  rejectSelectedShotQc,
-  remixEpisodeLoudness,
   suggestEpisodeCoverage,
   applyCoverageSuggestion,
   dismissCoverageSuggestion,
@@ -150,12 +145,6 @@ const {
   budgetOpen: dramaBudgetOpen,
   toggleBudgetPanel,
   saveBudget,
-  qcChecklist: dramaQcChecklist,
-  checklistOpen: dramaChecklistOpen,
-  rejectingAll: dramaRejectingAll,
-  toggleChecklistPanel,
-  refreshQcChecklist,
-  rejectAllProblems,
   saveTimelineAll,
   saveTimelineOrder,
   moveTimelineShot,
@@ -602,9 +591,6 @@ async function onResumeDramaJob(payload) {
       :budget-warn="dramaBudgetWarn"
       :budget-draft="dramaBudgetDraft"
       :budget-open="dramaBudgetOpen"
-      :qc-checklist="dramaQcChecklist"
-      :checklist-open="dramaChecklistOpen"
-      :rejecting-all="dramaRejectingAll"
       @open-episode="openEpisode"
       @apply-preset="applyProjectPreset"
       @apply-stage-model="({ node, key }) => applyStageModel(node, key)"
@@ -619,9 +605,6 @@ async function onResumeDramaJob(payload) {
       @delete-snapshot="deleteSnapshotVersion"
       @toggle-budget="toggleBudgetPanel"
       @save-budget="saveBudget"
-      @toggle-checklist="toggleChecklistPanel"
-      @refresh-checklist="refreshQcChecklist"
-      @reject-all-qc="rejectAllProblems"
       @select-shot="selectShot"
       @save="saveShot"
       @rerender="rerenderSelected"
@@ -656,11 +639,6 @@ async function onResumeDramaJob(payload) {
       @choose-key="chooseShotKey"
       @upload-key="uploadShotKey"
       @lock-key="lockShotKey"
-      @qc-shot="qcSelectedShot"
-      @qc-episode="runEpisodeQc"
-      @pass-episode-qc="passEpisodeQcGate"
-      @reject-shot-qc="rejectSelectedShotQc"
-      @remix-loudness="remixEpisodeLoudness"
       @suggest-coverage="suggestEpisodeCoverage"
       @apply-coverage="applyCoverageSuggestion"
       @dismiss-coverage="dismissCoverageSuggestion"

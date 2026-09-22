@@ -52,16 +52,12 @@ export function useDramaStudio() {
     { id: 'subtitle', label: '字幕' },
     { id: 'bgm', label: 'BGM' },
     { id: 'sfx', label: '音效' },
-    { id: 'qc', label: 'QC 阈值' },
   ]
   const selectedShotIds = ref([])
   const snapshots = ref([])
   const snapshotsOpen = ref(false)
   const budgetDraft = ref({ enabled: false, per_episode: 0, warn_at: 0.8 })
   const budgetOpen = ref(false)
-  const qcChecklist = ref(null)
-  const checklistOpen = ref(false)
-  const rejectingAll = ref(false)
   const batchField = ref('camera')
   const batchValue = ref('')
   const batchFields = [
@@ -2060,132 +2056,6 @@ export function useDramaStudio() {
     }
   }
 
-  async function qcSelectedShot() {
-    if (!slug.value || !episodeN.value || !selectedN.value) return
-    error.value = ''
-    notice.value = ''
-    try {
-      const result = await dramaApi.qcShot(slug.value, episodeN.value, selectedN.value)
-      bust.value = Date.now()
-      await openEpisode(episodeN.value)
-      notice.value = result.passed ? '抽检通过' : '抽检未通过'
-    } catch (e) {
-      error.value = e.message || String(e)
-    }
-  }
-
-  async function refreshQcChecklist() {
-    if (!slug.value || !episodeN.value) return
-    try {
-      const data = await dramaApi.getQcChecklist(slug.value, episodeN.value)
-      qcChecklist.value = data
-    } catch (e) {
-      error.value = e.message || String(e)
-    }
-    return qcChecklist.value
-  }
-
-  function toggleChecklistPanel() {
-    checklistOpen.value = !checklistOpen.value
-    if (checklistOpen.value) void refreshQcChecklist()
-  }
-
-  async function rejectAllProblems() {
-    if (!slug.value || !episodeN.value) return
-    rejectingAll.value = true
-    error.value = ''
-    notice.value = ''
-    try {
-      const data = await dramaApi.rejectAllQc(slug.value, episodeN.value)
-      qcChecklist.value = data
-      bust.value = Date.now()
-      await openEpisode(episodeN.value)
-      notice.value = `已一键退回 ${data.summary?.total || 0} 镜（标脏待重渲）`
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      rejectingAll.value = false
-    }
-  }
-
-  async function runEpisodeQc() {
-    if (!slug.value || !episodeN.value) return
-    error.value = ''
-    notice.value = ''
-    rendering.value = true
-    try {
-      const result = await dramaApi.qcEpisode(slug.value, episodeN.value)
-      bust.value = Date.now()
-      await openEpisode(episodeN.value)
-      const qc = result.qc || {}
-      if (qc.can_pass) {
-        notice.value = '脚本可点通过（仍须在验收页确认）'
-      } else {
-        notice.value = qc.block_reason || result.hint || '待修：skipped 或未通过，不能点通过'
-      }
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      rendering.value = false
-    }
-  }
-
-  async function passEpisodeQcGate() {
-    if (!slug.value || !episodeN.value) return
-    error.value = ''
-    notice.value = ''
-    try {
-      const data = await dramaApi.passEpisodeQc(slug.value, episodeN.value)
-      episode.value = data
-      notice.value = '本集已通过'
-    } catch (e) {
-      error.value = e.message || String(e)
-    }
-  }
-
-  async function rejectSelectedShotQc() {
-    if (!slug.value || !episodeN.value || !selectedN.value) return
-    error.value = ''
-    notice.value = ''
-    try {
-      const data = await dramaApi.rejectShotQc(slug.value, episodeN.value, selectedN.value)
-      episode.value = data
-      notice.value = `Shot ${selectedN.value} 已退回待修`
-    } catch (e) {
-      error.value = e.message || String(e)
-    }
-  }
-
-  async function passSelectedShotQc() {
-    if (!slug.value || !episodeN.value || !selectedN.value) return
-    error.value = ''
-    notice.value = ''
-    try {
-      const data = await dramaApi.passShotQc(slug.value, episodeN.value, selectedN.value)
-      episode.value = data
-      notice.value = `Shot ${selectedN.value} 已通过`
-    } catch (e) {
-      error.value = e.message || String(e)
-    }
-  }
-
-  async function remixEpisodeLoudness() {
-    if (!slug.value || !episodeN.value) return
-    error.value = ''
-    notice.value = ''
-    rendering.value = true
-    try {
-      const data = await dramaApi.remixLoudness(slug.value, episodeN.value)
-      episode.value = data
-      bust.value = Date.now()
-      notice.value = data.hint || '已只重 mix，各镜 clip 未改'
-    } catch (e) {
-      error.value = e.message || String(e)
-    } finally {
-      rendering.value = false
-    }
-  }
-
   async function suggestEpisodeCoverage() {
     if (!slug.value || !episodeN.value) return
     saving.value = true
@@ -2284,25 +2154,6 @@ export function useDramaStudio() {
       setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
     } catch (e) {
       const msg = e.message || String(e)
-      const qcBlocked = /QC 硬闸|响度验收|身份/.test(msg)
-      if (qcBlocked && window.confirm(`${msg}\n\n工作台可强制导出带瑕疵成片，是否强制导出？`)) {
-        try {
-          const forced = await dramaApi.exportEpisode(slug.value, episodeN.value, true, true)
-          if (forced.job_id) {
-            await awaitStudioBackgroundJob(forced, { label: '强制导出' })
-            return
-          }
-          bust.value = Date.now()
-          await openEpisode(episodeN.value)
-          notice.value = '已强制导出（QC 未全部通过）'
-          setBatchProgress({ status: 'done', current: 1, total: 1, message: notice.value })
-          return
-        } catch (e2) {
-          error.value = e2.message || String(e2)
-          setBatchProgress({ status: 'error', message: error.value })
-          return
-        }
-      }
       error.value = msg
       setBatchProgress({ status: 'error', message: error.value })
     } finally {
@@ -2918,12 +2769,6 @@ export function useDramaStudio() {
     budgetOpen,
     toggleBudgetPanel,
     saveBudget,
-    qcChecklist,
-    checklistOpen,
-    rejectingAll,
-    toggleChecklistPanel,
-    refreshQcChecklist,
-    rejectAllProblems,
     toggleShotSelected,
     clearShotSelection,
     selectAllShots,
@@ -3009,12 +2854,6 @@ export function useDramaStudio() {
     chooseShotKey,
     uploadShotKey,
     lockShotKey,
-    qcSelectedShot,
-    runEpisodeQc,
-    passEpisodeQcGate,
-    rejectSelectedShotQc,
-    passSelectedShotQc,
-    remixEpisodeLoudness,
     suggestEpisodeCoverage,
     applyCoverageSuggestion,
     dismissCoverageSuggestion,

@@ -1158,14 +1158,6 @@ def generate_character_face_portrait(
         seed = int(seed) & 0x7FFFFFFF
     else:
         seed = (int(seed) + 97) & 0x7FFFFFFF
-    bak_bytes: bytes | None = None
-    if dest.is_file() and dest.stat().st_size > 0:
-        bak = dest.with_name(dest.stem + ".prev.png")
-        try:
-            bak_bytes = dest.read_bytes()
-            bak.write_bytes(bak_bytes)
-        except OSError:
-            bak_bytes = None
     body_rel = str(char.get("ref") or ref_rel(slug, cid)).replace("\\", "/")
     refs: tuple[str, ...] = (body_rel,) if has_body else ()
     prompt = build_face_ref_prompt(char, from_body_ref=bool(refs))
@@ -1188,50 +1180,8 @@ def generate_character_face_portrait(
         generate_character_face_portrait.last_error = err  # type: ignore[attr-defined]
         return None
 
-    if has_body:
-        mismatch = _face_body_identity_mismatch(body_rel, out_rel)
-        if mismatch:
-            # 回滚坏脸，避免脏身份进库
-            try:
-                if bak_bytes is not None:
-                    dest.write_bytes(bak_bytes)
-                elif dest.is_file():
-                    dest.unlink(missing_ok=True)
-            except OSError:
-                pass
-            generate_character_face_portrait.last_error = mismatch  # type: ignore[attr-defined]
-            return None
-
     generate_character_face_portrait.last_error = ""  # type: ignore[attr-defined]
     return out_rel
-
-
-# 全身↔正脸：全身脸小，阈值略低于镜内身份闸；低于此分视为换脸失败
-_BODY_FACE_MIN_COSINE = 0.52
-
-
-def _face_body_identity_mismatch(body_rel: str, face_rel: str) -> str:
-    """若 ArcFace 可用且余弦过低，返回错误文案；否则空串（跳过）。"""
-    try:
-        from tools.drama_qc import score_pair
-        from tools.workspace import resolve_safe as _rs
-
-        body_p = _rs(body_rel)
-        face_p = _rs(face_rel)
-        scored = score_pair(body_p, face_p)
-        if scored.get("status") != "ok" or scored.get("method") != "arcface":
-            return ""
-        cos = scored.get("cosine")
-        if cos is None:
-            return ""
-        if float(cos) < _BODY_FACE_MIN_COSINE:
-            return (
-                f"正脸与全身定妆不是同一人（ArcFace cosine={float(cos):.3f}"
-                f"<{_BODY_FACE_MIN_COSINE}），已拒绝入库；请重试生成或先修正全身定妆"
-            )
-    except Exception:
-        return ""
-    return ""
 
 
 def _write_scene_png(data: bytes, dest: Path) -> None:

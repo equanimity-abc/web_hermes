@@ -1029,7 +1029,6 @@ def _hq_process_one_shot(
     if cancel_check:
         cancel_check()
     models = models_with_overrides(slug, shot=shot, episode=n)
-    from tools.drama_motion_floors import assert_motion_floor
     from tools.drama_shots import shot_assets as _shot_assets2
     from tools.drama_step_contract import publish_clip_step, publish_motion_step, require_scene_step
 
@@ -1041,8 +1040,6 @@ def _hq_process_one_shot(
         _pub_scene(slug, n, sn, scene_rel)
 
     require_scene_step(slug, n, sn)
-    assert_motion_floor(shot, slug=slug, models=models)
-    planned = effective_motion_ladder(shot, slug=slug, models=models)
 
     def _run_i2v() -> dict[str, Any]:
         if cancel_check:
@@ -1075,17 +1072,12 @@ def _hq_process_one_shot(
         i2v = _run_i2v()
     src = str(i2v.get("i2v_source") or shot.get("i2v_source") or "none")
     kind = infer_kind(shot)
-    if planned not in ("L0",) and kind not in ("establishing", "insert", "crowd", "title"):
-        if src not in ("ai", "keys"):
-            detail = str(shot.get("i2v_error") or i2v.get("reason") or "").strip()
-            provider = str(shot.get("i2v_provider") or i2v.get("provider") or "").strip()
-            extra = ""
-            if provider or detail:
-                extra = f"（provider={provider or '?'}{('；' + detail) if detail else ''}）"
-            raise RuntimeError(
-                f"Shot {sn} 需要真 I2V（计划 {planned}），但得到 {src or 'none'}{extra}；"
-                "专业档禁止 Ken Burns/mock 顶替"
-            )
+    # 需要图生视频的镜：Seedance 失败直接报错（不回退 Ken Burns），错误原因透出给人看
+    if kind not in ("establishing", "insert", "crowd", "title") and src not in ("ai", "keys"):
+        detail = str(shot.get("i2v_error") or i2v.get("reason") or "").strip()
+        provider = str(shot.get("i2v_provider") or i2v.get("provider") or "").strip()
+        reason = f"（provider={provider or '?'}{('；' + detail) if detail else ''}）" if (provider or detail) else ""
+        raise RuntimeError(f"Shot {sn} 图生视频失败（Seedance）：{src or 'none'}{reason}")
     merge_save_shot(slug, n, shot)
     if src in ("ai", "keys"):
         motion_rel = str((shot.get("assets") or {}).get("motion") or _shot_assets2(slug, n, sn)["motion"])

@@ -154,15 +154,13 @@ def utc_now() -> str:
 
 
 def _normalize_episode_qc(raw: dict[str, Any]) -> dict[str, Any]:
-    from tools.drama_qc import normalize_episode_qc
-
-    return normalize_episode_qc(raw.get("qc"))
+    qc = raw.get("qc")
+    return qc if isinstance(qc, dict) else {}
 
 
 def _normalize_shot_qc(raw: dict[str, Any]) -> dict[str, Any] | None:
-    from tools.drama_qc import normalize_shot_qc
-
-    return normalize_shot_qc(raw.get("qc"))
+    qc = raw.get("qc")
+    return qc if isinstance(qc, dict) else None
 
 
 def _normalize_shot_keys(slug: str, episode: int, raw: dict[str, Any]) -> list[dict[str, Any]]:

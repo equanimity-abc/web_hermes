@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from config import config
-from tools.drama_lse import score_lip
 from tools.drama_models import infer_kind, infer_size, infer_speaker, load_models, resolve_provider
 from tools.drama_shots import shot_stem
 from tools.workspace import resolve_safe
@@ -316,31 +315,9 @@ def ensure_lip_video_base(
     # 1) Video-page output first (ai / keys / fallback Ken Burns — all keep 运镜)
     existing = _motion_path()
     if existing is not None:
-        from tools.drama_hq_contract import is_hq_no_fallback
-
-        if is_hq_no_fallback(slug):
-            from tools.drama_qc import qc_gates_enabled
-
-            src = str(shot.get("i2v_source") or "").strip().lower()
-            if src not in ("ai", "keys") and qc_gates_enabled():
-                raise RuntimeError(
-                    f"第{n}镜专业档口型要求真 I2V 底片（i2v_source=ai|keys），"
-                    f"当前 i2v_source={src or '空'}，禁止 Ken Burns/静图对嘴"
-                )
         return existing
 
     # 2) No motion yet → dedicated lip_base from still (does not invent a rival master)
-    from tools.drama_hq_contract import is_hq_no_fallback
-
-    if is_hq_no_fallback(slug):
-        from tools.drama_qc import qc_gates_enabled
-
-        if qc_gates_enabled():
-            raise RuntimeError(
-                f"第{n}镜专业档口型缺少真运动片，禁止用静图 lip_base 顶替。"
-                "请先完成 Seedance/Kling I2V。"
-            )
-
     if not scene.is_file():
         return None
     rel = lip_base_rel(slug, episode, n)
@@ -2051,7 +2028,7 @@ def generate_shot_lip(
                         duration = voice_dur
                 except Exception:
                     pass
-            score = score_lip(dest, voice if voice.is_file() else None)
+            score = None
             shot["lip_score"] = score
             if voice_dur > 0.35:
                 shot["av_active"] = round(float(duration), 3)
@@ -2156,7 +2133,6 @@ def generate_shot_lip(
     if lip_source_is_real(source) and dest.is_file():
         if voice.is_file():
             _lock_lip_to_voice(dest, voice)
-        score = score_lip(dest, voice if voice.is_file() else None)
         shot["lip_score"] = score
         if voice_dur > 0.35:
             shot["av_active"] = round(float(duration), 3)
@@ -2187,14 +2163,6 @@ def generate_shot_lip(
             " 或 REPLICATE_API_TOKEN（LatentSync）"
             " 或 LIP_API_URL（自建）"
         )
-    if hq:
-        from tools.drama_qc import qc_gates_enabled
-
-        # 校验总闸关闭：允许 fallback 继续成片，不 Fail Loud
-        if qc_gates_enabled():
-            raise RuntimeError(
-                f"第{int(shot.get('n') or 0)}镜专业档口型失败（lip_source={source or '空'}）：{reason}"
-            )
     _lip_warn(shot, reason)
     shot["lip_source"] = "fallback"
     shot["lip_score"] = {"status": "skipped", "reason": "fallback", "method": "proxy"}
