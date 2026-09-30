@@ -37,6 +37,8 @@ export function useSessions() {
     }
   }
 
+  //需要传入一个对象，如果没有传入对象，则默认为{}；
+  //否则，解析传入对象的retries值；如果传入对象没有retries，则默认为3
   async function refreshSessionList({ retries = 3 } = {}) {
     let lastErr = null
     for (let i = 0; i < retries; i++) {
@@ -46,6 +48,9 @@ export function useSessions() {
       } catch (e) {
         lastErr = e
         if (i < retries - 1) {
+          // Promise需要传入excutor函数，即：(r) => setTimeout(r, 250 * (i + 1))；
+          // r是excutor入参，由Promise构造resolve构造传入，用于通知Promise状态变为fulfilled；
+          // setTimeout这里的自作用相当于sleep函数，等待一段时间后再执行resolve，通知Promise状态变为fulfilled；
           await new Promise((r) => setTimeout(r, 250 * (i + 1)))
         }
       }

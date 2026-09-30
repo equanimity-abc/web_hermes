@@ -6,6 +6,7 @@
   margin-bottom: 10px;
 }
 
+/* 匹配sidebar-views类下的所有button */
 .sidebar-views button {
   border: none;
   background: var(--color-border-soft);
@@ -17,6 +18,7 @@
   font-size: 13px;
 }
 
+/* 匹配sidebar-views类下的带active类的button */
 .sidebar-views button.active {
   background: var(--color-primary-soft);
   color: var(--color-primary);
