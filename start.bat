@@ -63,7 +63,9 @@ if %errorlevel% equ 0 (
         wt -w 0 new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python script/run_server.py"
         wt -w 0 new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
     ) else (
-        wt -M --title "Agent Chat" new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python script/run_server.py" ; new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
+        REM --title/-d 是 new-tab 的子命令参数，必须写在 new-tab 之后；-M/-w 才是全局选项。
+        REM 写成 "wt -M --title X new-tab ..." 会让 wt 把 "new-tab ..." 当成要执行的命令行 => 0x80070002
+        wt -M -w "Agent Chat" new-tab --title "后端 :8000" -d "%ROOT%backend" powershell -NoExit -Command "python script/run_server.py" ; new-tab --title "前端 :5173" -d "%ROOT%frontend" powershell -NoExit -Command "npm run dev"
     )
     echo [✓] 已在 Windows Terminal 同一窗口的标签页中启动
 ) else (
